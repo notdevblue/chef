@@ -8,6 +8,8 @@ Claude는 `han:verifier`의 Sonnet 5.5 / high, Codex는 `han_verifier`의 GPT-6 
 공유 Unity는 코디네이터가 Refresh·컴파일·EditMode·Play 순서를 정하고, 관련 구현자와 그 하위 작업이 모두 반환하거나 정지되어 미완료임을 확인한 뒤 verifier 한 명만 실행한다. 검증 준비에서 필요한 `.meta` 생성·생성물 생성·CL 정리를 마친다.
 Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, 불명확하면 미확인으로 반환한다.
 구현 에이전트가 만든 같은 형식의 결과도 실행기가 유효성을 확인한다. 검증 범위를 줄여 통과시키지 않는다.
+코디네이터가 고정한 프로젝트 규칙·검증 절차의 실제 경로와 해당 절을 그대로 받는다. 참조 누락·충돌은
+임의로 해석하지 않고 코디네이터에게 반환한다. 같은 실패를 다시 실행하기 전에 기존 receipt의 원인·입력·환경과 이전 조치를 확인한다.
 미션 폴더의 `verification/`은 실행기 기록이며 사람이 덮어쓰지 않는다.
 
 ## 구현 단위 병렬화
@@ -33,7 +35,7 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
   "inputs": ["src", "tests", "pyproject.toml"],
   "environment": {"python": "3.12", "target": "local-test", "revision": "검증 기준 리비전"},
   "commands": [
-    {"argv": ["python", "-m", "pytest", "tests/test_feature.py", "-q"], "cwd": ".", "timeoutSeconds": 600}
+    {"id": "feature-tests", "argv": ["python", "-m", "pytest", "tests/test_feature.py", "-q"], "cwd": ".", "timeoutSeconds": 600, "reusable": true, "outputs": []}
   ],
   "results": []
 }
@@ -48,11 +50,15 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
   실패 때 `pause`·키 입력을 기다리는 대화형 래퍼 스크립트는 부르지 않고 실제 실행 파일을 직접 부른다. 실행기는 표준 입력을 닫고(DEVNULL) 실행한다. 입력 대기는 백그라운드 실행을 오래 멈춘다.
   검증 스크립트가 직접 부르는 명령도 같다. 판정 스크립트는 대상을 찾지 못했거나 출력을 해석하지 못하면 통과(0)가 아니라 별도 종료 코드의 판정 불가로 끝내고, 기록에도 판정 불가로 남긴다(예: 상세 출력 없이 돌린 lint의 대상 파일 지적 0건을 통과로 읽지 않는다).
   기존 미션 가드가 막는 submit·sync 등은 검증 실행기에서도 거부한다.
+- 명령의 `reusable: true`는 해당 단계가 같은 입력·계획·환경에서 재사용 가능함을 명시한다. 이때 `outputs` 배열은 필수이며
+  순수 검사라 산출물이 없으면 `[]`로 쓴다. 파일을 생성하면 실제 출력 경로를 빠짐없이 지정한다. 생략한 명령은 단계 재사용을 하지 않는다.
+  연속된 유효 단계만 앞에서부터 재사용하며 앞 단계가 다시 실행되면 뒤 단계도 모두 실행한다. 선언 출력이 달라지면 그 단계와 뒤 단계를 다시 실행한다. 외부 상태·부작용을 고정할 수 없으면 재사용 가능으로 선언하지 않는다.
 - `results`: 실행 명령이 이번 런에 쓴 JSON 결과를 추가 검사한다. 예:
 
 ```json
 {
   "path": "Unity/Game/Temp/mission-verify.json",
+  "command": 0,
   "equals": {"status": "passed"},
   "positive": ["tests.0.startedCount"],
   "projectField": "projectPath",
@@ -65,13 +71,22 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 Unity 연결·준비 대기·검증·로그 수집·직접 연 에디터 정리는 어댑터의 한 실행 명령으로 묶는다.
 기존 인스턴스는 종료하지 않고 프로젝트 불일치·시간 초과는 실패로 반환한다.
 `verify` receipt는 입력 변경을 사후에 감지해 재사용을 무효화할 뿐, 입력 변경을 막는 잠금이 아니다. 같은 단위의 통과 receipt는 최신 입력·계획·환경이 모두 일치할 때만 재사용한다. 외부 상태 변경은 기존 규칙대로 `--force`로 재검증한다.
+`results[].command`는 결과를 만든 명령의 0부터 시작하는 인덱스 또는 `commands[].id`다. 계획에 `reusable: true`가 하나라도 있으면 모든 결과에 이 연결을 지정한다.
+연결한 결과 경로는 생산 명령의 `outputs` 안에 있어야 한다. 결과 파일과 선언 출력도 유효해야 단계를 재사용하며, 결과 검사는 생략하지 않는다.
+`--force`는 모든 단계를 다시 실행한다. 입력 동결·최종 완료 조건·독립 clean 리뷰는 단계 재사용과 별개로 유지한다.
+
+receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 실행 시각이다.
+`steps[].status`는 `passed|failed|reused|not_run`, `executionCounts`는 `executed`·`reused` 수를 담는다.
+실패는 `failure`의 `category`·`step`·`signature`·`repeatCount`·`previousReceipt`로 원인과 반복을 연결한다.
+이전 기록에 구조화 값이 없으면 알 수 없음으로 남기고 문자열이나 현재 파일 시각에서 실행 원인을 추측하지 않는다.
 
 ## 한 단위의 흐름
 
 1. `verify M1 --plan <계획.json>`: 입력·계획·환경·로그·결과가 그대로면 통과 기록 재사용, 아니면 실제 실행.
    실패는 종료 코드 1과 로그·기록 경로를 반환한다. 상태를 알아내려고 같은 검증을 재요청하지 않는다.
 2. 독립 리뷰: 첫 라운드는 단위 전체. 후속은 `review-scope M1 --plan <계획.json>`의 변경 목록,
-   직전 finding, 그 수정이 영향을 주는 계약과 호출자를 본다. clean 근거는 실제 파일로 받는다.
+   직전 finding, 그 수정이 영향을 주는 계약과 호출자를 본다. 같은 고정 참조 묶음으로 결함과 명시적 규칙 위반을 함께 수집한다.
+   미변경 부분은 실제 결함·규칙·원문 근거가 있을 때만 다시 열고, 이전 해소 근거와 미해결·새 지적·회귀를 구분한다. clean 근거는 실제 파일로 받는다.
 3. `review M1 --receipt <검증.json> --evidence <리뷰.md> --reviewer <독립 에이전트> --kind unit --status clean`.
    finding이 남으면 `--status findings`로 기록한다. 구현자를 독립 리뷰어라고 기록하지 않는다.
 4. 완료 조건 확인·체크포인트 후 `complete M1 --receipt <검증.json> --review <리뷰.json> --done-evidence <완료 조건 확인 근거>`.
@@ -82,3 +97,26 @@ Unity 연결·준비 대기·검증·로그 수집·직접 연 에디터 정리�
 기록과 로그는 런마다 별도 파일로 남긴다. `*.latest.json`은 다음 실행·범위 조회용 포인터다.
 기존 문자열 ledger는 이력으로 계속 읽되 재사용 가능한 기계 검증 기록으로 취급하지 않는다.
 원본 이력을 지우지 않고 `context`가 최신 단위·결정과 원본 위치만 반환한다.
+
+## 리뷰 지적의 연결
+
+`review`의 선택 인자 `--findings-input <JSON>`은 아래처럼 열린 지적·제안·해소 확인을 함께 기록한다.
+
+```json
+{
+  "schema": 1,
+  "findings": [
+    {"id": "F1", "kind": "defect", "origin": "new", "reason": "발생 조건과 영향, 원인, 파일 및 근거"}
+  ],
+  "suggestions": [],
+  "resolvedIds": []
+}
+```
+
+`kind`는 `defect|rule_violation`, `origin`은 `new|unresolved|regression`이다. `reason`은 항상 필요하다.
+`new`는 이전에 없던 id를 쓰고 `relatedId`를 두지 않는다. `unresolved`는 이전 열린 id를 유지한다.
+`regression`은 새 id를 쓰며 이미 해소된 이전 id를 `relatedId`로 연결한다. 이전 해소 근거와 재발 이유를 대조한다.
+`findings`에는 열린 지적만, `resolvedIds`에는 이번에 해소를 확인한 이전 id만 둔다. 제안은 `suggestions`로 분리한다.
+정확한 파일·규칙·원문 근거 없이 제안을 필수 결함으로 올리지 않는다. 원인·소유·참조가 같은 수정은 담당 작성자에게 묶어 맡긴다.
+리뷰 기록은 입력 파일 해시와 이전 리뷰 연결을 함께 보존한다. 기존 수치 전용 기록의 지적 정체성은 알 수 없음으로 취급한다.
+3라운드·timebox 상한의 질문에는 미해결 원인·참조 누락·회귀·남은 판단·수정 및 검증 범위를 담고 품질 기준은 유지한다.

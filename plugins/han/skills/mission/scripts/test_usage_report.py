@@ -130,3 +130,184 @@ def test_invalid_adapter_state_path_keeps_usage_available(tmp_path, monkeypatch)
     monkeypatch.setattr(report.slots, 'read_adapter', lambda *args: {'schema': 1})
     quality = report.quality_report([('main', tmp_path)], {}, START, END, Counter())
     assert quality == [{'project': 'main', 'available': False, 'reason': 'GuardOff'}]
+
+
+def activity_file(tmp_path, activities):
+    path = tmp_path / 'activities.json'
+    path.write_text(json.dumps({'schema': 1, 'activities': activities}), encoding='utf-8')
+    return report.load_activity_map(path)
+
+
+def test_explicit_activity_differs_from_role_and_preserves_all_totals(tmp_path):
+    project = tmp_path / 'game'
+    record = row('one')
+    record['sessionId'] = 'session-one'
+    record['agentId'] = 'a'
+    path = transcript(tmp_path, project, [record, row('two')], True)
+    path.with_suffix('.meta.json').write_text('{"agentType":"reviewer"}', encoding='utf-8')
+    records, _ = report.collect_usage([('main', project)], tmp_path, START, END, Counter())
+    before = report.aggregate(records)
+    activities = activity_file(tmp_path, [{'sessionId': 'session-one', 'agentId': 'a',
+        'taskKind': 'document', 'mission': 'sample-mission', 'unit': 'U1', 'phase': 'draft', 'attempt': 2}])
+    report.assign_activities(records, activities)
+    known = next(item for item in records if item['taskKind'] == 'document')
+    assert known['role'] == 'reviewer'
+    assert known['activitySource'] == 'activity-map'
+    assert known['attempt'] == '2'
+    assert sum(item['taskKind'] == 'unknown' for item in records) == 1
+    assert before == report.aggregate(records)
+    groups = report.grouped(records, report.ACTIVITY_FIELDS)
+    assert sum(item['responses'] for item in groups) == before['responses']
+    for field in report.TOKEN_FIELDS:
+        assert sum(item['usage'][field] for item in groups) == before['usage'][field]
+        assert sum(item['advisor_usage'][field] for item in groups) == before['advisor_usage'][field]
+
+
+def test_concurrent_sessions_and_agents_never_deduplicate_one_another(tmp_path):
+    project = tmp_path / 'game'
+    records = [dict(row('same'), sessionId=session) for session in ('first', 'second')]
+    transcript(tmp_path, project, records)
+    child = dict(row('same'), sessionId='first', agentId='a')
+    transcript(tmp_path, project, [child], True)
+    usage, _ = report.collect_usage([('main', project)], tmp_path, START, END, Counter())
+    assert len(usage) == 3
+    report.assign_activities(usage, activity_file(tmp_path, [
+        {'sessionId': 'first', 'taskKind': 'coordination'},
+        {'sessionId': 'first', 'agentId': 'a', 'taskKind': 'verification'}]))
+    assert {(item['sessionId'], item['agentId'], item['taskKind']) for item in usage} == {
+        ('first', '', 'coordination'), ('second', '', 'unknown'), ('first', 'a', 'verification')}
+
+
+@pytest.mark.parametrize(('maps', 'metadata', 'status'), [
+    ([], '', 'unknown'),
+    ([{'taskKind': 'review'}, {'taskKind': 'review'}], '', 'ambiguous'),
+    ([{'taskKind': 'review'}, {'taskKind': 'document'}], '', 'conflict'),
+    ([{'taskKind': 'review'}], 'implementation', 'conflict'),
+    ([], 'research', 'assigned'),
+])
+def test_activity_missing_ambiguous_conflicting_and_actual_metadata(tmp_path, maps, metadata, status):
+    project = tmp_path / 'game'
+    record = dict(row('one'), sessionId='session-one')
+    if metadata:
+        record['taskKind'] = metadata
+    record['message']['content'] = [{'text': 'implementation review document'}]
+    transcript(tmp_path, project, [record])
+    records, _ = report.collect_usage([('main', project)], tmp_path, START, END, Counter())
+    activities = activity_file(tmp_path, [dict(item, sessionId='session-one') for item in maps])
+    report.assign_activities(records, activities)
+    assert records[0]['activityStatus'] == status
+    if status != 'assigned':
+        assert records[0]['taskKind'] == 'unknown'
+    else:
+        assert records[0]['taskKind'] == 'research'
+        assert records[0]['mission'] == 'unknown'
+
+
+def test_activity_intervals_are_half_open_and_streaming_boundary_is_unknown(tmp_path):
+    project = tmp_path / 'game'
+    transcript(tmp_path, project, [dict(row('one'), sessionId='session-one'),
+        dict(row('two', at='2026-10-23T00:20:00+09:00'), sessionId='session-one')])
+    records, _ = report.collect_usage([('main', project)], tmp_path, START, END, Counter())
+    activities = activity_file(tmp_path, [{'sessionId': 'session-one', 'taskKind': 'review',
+        'startedAt': '2026-10-23T00:10:00+09:00', 'endedAt': '2026-10-23T00:20:00+09:00'}])
+    report.assign_activities(records, activities)
+    assert [item['taskKind'] for item in records] == ['review', 'unknown']
+    repeated = dict(row('one', at='2026-10-23T00:20:00+09:00'), sessionId='session-one')
+    transcript(tmp_path, project, [dict(row('one'), sessionId='session-one'), repeated])
+    records, _ = report.collect_usage([('main', project)], tmp_path, START, END, Counter())
+    report.assign_activities(records, activities)
+    assert len(records) == 1 and records[0]['activityStatus'] == 'ambiguous'
+
+
+@pytest.mark.parametrize('activity', [
+    {'sessionId': 's'}, {'sessionId': 's', 'taskKind': 'invented'},
+    {'sessionId': 's', 'taskKind': 'review', 'attempt': True},
+    {'sessionId': 's', 'taskKind': 'review', 'startedAt': '2026-10-23T00:00:00'},
+    {'sessionId': 's', 'taskKind': 'review', 'startedAt': END.isoformat(), 'endedAt': START.isoformat()},
+])
+def test_invalid_activity_maps_do_not_invent_classifications(tmp_path, activity):
+    with pytest.raises(ValueError):
+        activity_file(tmp_path, [activity])
+
+
+def test_quality_typed_attempts_reuse_failures_legacy_and_period_boundaries(tmp_path):
+    root = tmp_path / 'state'
+    directory = root / 'mission-one' / 'verification'
+    directory.mkdir(parents=True)
+    def write(name, value):
+        path = directory / name
+        path.write_text(json.dumps(value), encoding='utf-8')
+        os.utime(path, (START.timestamp(), START.timestamp()))
+    base = {'schema': 1, 'unit': 'U1', 'recordedAt': START.isoformat(), 'status': 'fail',
+        'startedAt': START.isoformat(), 'finishedAt': '2026-10-23T00:00:02+09:00', 'seconds': 2,
+        'error': 'raw-failure-sentinel', 'plan': {'commands': [{'argv': ['prompt-sentinel']}]},
+        'executionCounts': {'executed': 1, 'reused': 1},
+        'steps': [{'index': 0, 'status': 'reused', 'seconds': 0},
+                  {'index': 1, 'status': 'failed', 'seconds': 2, 'exitCode': 1}],
+        'failure': {'category': 'command_exit', 'step': 1, 'signature': 'a' * 64, 'repeatCount': 2}}
+    write('U1-first.json', base)
+    write('U1-old.json', {'schema': 1, 'unit': 'U1', 'status': 'pass', 'seconds': 1})
+    write('U1-end.json', dict(base, recordedAt=END.isoformat()))
+    write('U1-invalid.json', dict(base, recordedAt=''))
+    write('U1.latest.json', {'receipt': 'U1-first.json'})
+    (root / 'mission-one' / 'ledger.tsv').write_text('\t'.join(report.LEDGER_HEADER) +
+        '\n' + START.isoformat() + '\tU1\tretry\tpytest-pass\tsame failure\tsource.py\n', encoding='utf-8')
+    diagnostics = Counter()
+    quality = report.quality_report([('main', tmp_path)], {'main': root}, START, END, diagnostics)[0]
+    assert diagnostics['invalid_verification_records'] == 1
+    assert quality['verificationSummary'] == {'attempts': 2, 'failed': 1, 'executedSteps': 1,
+        'reusedSteps': 1, 'unknownExecutionCounts': 1,
+        'retryCounting': 'typed receipt attempts and legacy ledger retries are separate; do not add'}
+    assert len(quality['recordedRetries']) == 1
+    typed = next(item for item in quality['verificationAttempts'] if item['status'] == 'fail')
+    assert typed['failure']['repeatCount'] == 2
+    assert typed['failure']['category'] == 'command_exit'
+    assert [step['status'] for step in typed['steps']] == ['reused', 'failed']
+    assert typed['startedAt'] and typed['finishedAt'] and typed['seconds'] == 2
+    legacy = next(item for item in quality['verificationAttempts'] if item['status'] == 'pass')
+    assert legacy['timeSource'] == 'file_mtime' and legacy['failure']['category'] == 'unknown'
+    assert 'raw-failure-sentinel' not in json.dumps(quality)
+    assert 'prompt-sentinel' not in json.dumps(quality)
+
+
+def test_structured_review_counts_only_recorded_identities_and_kinds():
+    structured = {'findings': [
+        {'id': 'd1', 'kind': 'defect', 'origin': 'new'},
+        {'id': 'd2', 'kind': 'defect', 'origin': 'unresolved', 'reason': 'raw-reason-sentinel'},
+        {'id': 'd3', 'kind': 'defect', 'origin': 'regression', 'relatedId': 'prior'},
+        {'id': 'r1', 'kind': 'rule_violation', 'origin': 'new'}],
+        'suggestions': [{'text': 'raw-suggestion-sentinel'}], 'resolvedIds': ['prior'],
+        'findingsCount': 400, 'fixedCount': 300}
+    result = report.review_findings(structured)
+    assert result == {'identitySource': 'structured', 'byKind': {
+        'defect': {'new': 1, 'unresolved': 1, 'regression': 1},
+        'rule_violation': {'new': 1, 'unresolved': 0, 'regression': 0}}, 'suggestions': 1, 'resolved': 1}
+    assert 'sentinel' not in json.dumps(result)
+    legacy = report.review_findings({'findingsCount': 4, 'fixedCount': 3})
+    assert legacy['identitySource'] == 'unknown'
+    assert legacy['byKind']['defect']['new'] == -1
+    structured['findings'].append(structured['findings'][0])
+    assert report.review_findings(structured)['identitySource'] == 'unknown'
+
+
+def test_cli_activity_map_serializes_groups_without_exporting_transcript_content(tmp_path):
+    project = tmp_path / 'game'
+    record = dict(row('one'), sessionId='session-one')
+    record['message']['content'] = [{'text': 'transcript-body-sentinel'}]
+    record['toolInput'] = {'text': 'tool-input-sentinel'}
+    transcript(tmp_path, project, [record])
+    path = tmp_path / 'activities.json'
+    path.write_text(json.dumps({'schema': 1, 'activities': [
+        {'sessionId': 'session-one', 'taskKind': 'document', 'phase': 'draft'}]}), encoding='utf-8')
+    output = tmp_path / 'usage.json'
+    report.main(['--project', f'main={project}', '--mission-root', f'main={tmp_path / "absent"}',
+        '--claude-home', str(tmp_path), '--start', START.isoformat(), '--end', END.isoformat(),
+        '--activity-map', str(path), '--output', str(output)])
+    serialized = output.read_text(encoding='utf-8')
+    result = json.loads(serialized)
+    assert 'sentinel' not in serialized
+    assert result['byActivity'][0]['taskKind'] == 'document'
+    assert result['byActivity'][0]['phase'] == 'draft'
+    assert result['byActivity'][0]['mission'] == 'unknown'
+    assert result['byActivity'][0]['usage'] == result['total']['usage']
+    assert result['activityCoverage'][0]['activitySource'] == 'activity-map'

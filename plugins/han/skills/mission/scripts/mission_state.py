@@ -813,7 +813,16 @@ def verification_plan(ctx, args):
 
 
 def cmd_verify(ctx, args):
-    plan = verification_plan(ctx, args)
+    require_folder(ctx)
+    require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    try:
+        plan = verification_plan(ctx, args)
+    except verification.VerificationError as error:
+        category = error.category
+        if category == "result_invalid":
+            category = "plan_invalid"
+        verification.record_failure(ctx.project, ctx.folder, args.id, error, category)
+        raise
 
     def guard(command):
         problems = []
@@ -834,9 +843,10 @@ def cmd_review(ctx, args):
     require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
     path = verification.record_review(
         ctx.project, ctx.folder, args.id, args.receipt, args.evidence, args.reviewer, args.kind, args.status,
-        args.findings_count, args.fixed_count,
+        args.findings_count, args.fixed_count, args.findings_input,
     )
-    return [f"리뷰 {args.id} {args.status} {args.kind} | {path}"]
+    review = verification.read_json(path)
+    return [f"리뷰 {args.id} {args.status} {args.kind} | {path}", *review.get("diagnostics", [])]
 
 
 def cmd_review_scope(ctx, args):
@@ -1085,6 +1095,7 @@ def build_parser():
     review.add_argument("--status", required=True, choices=("clean", "findings"))
     review.add_argument("--findings-count", type=int, default=-1, help="남은 지적 수. 생략하면 미기록")
     review.add_argument("--fixed-count", type=int, default=-1, help="직전 지적 중 이번에 해소를 확인한 수")
+    review.add_argument("--findings-input", default="", help="지적 id·kind·origin·resolvedIds 를 담은 JSON")
     scope = leaf(sub, "review-scope", cmd_review_scope)
     scope.add_argument("id")
     scope.add_argument("--plan", required=True)

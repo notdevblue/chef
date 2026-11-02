@@ -275,3 +275,408 @@ def test_later_failed_run_cannot_be_hidden_by_an_older_pass(mission):
     assert mission_state.main([
         "complete", "M1", "--receipt", str(receipt), "--review", str(checked), "--done-evidence", "old pass",
     ]) == 1
+
+
+def reusable_plan(mission):
+    root, _, plan = mission
+    script = root / "build.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "counter=Path('build_runs')\n"
+        "counter.write_text(counter.read_text()+'x' if counter.exists() else 'x')\n"
+        "Path('artifact').mkdir(exist_ok=True)\n"
+        "Path('artifact/result.json').write_text('{\"status\":\"passed\"}')\n",
+        encoding="utf-8",
+    )
+    plan.update(inputs=["src.py"], commands=[
+        {"id": "build", "argv": [sys.executable, "build.py"], "reusable": True, "outputs": ["artifact"]},
+        {"id": "check", "argv": [sys.executable, "-c", "raise SystemExit(7)"]},
+    ], results=[{"path": "artifact/result.json", "command": "build", "equals": {"status": "passed"}}])
+    save_plan(mission)
+    return plan
+
+
+def save_plan(mission):
+    root, _, plan = mission
+    (root / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+
+def receipt_data(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_later_argv_fix_reuses_only_valid_prefix_and_original_result(mission):
+    root, folder, _ = mission
+    plan = reusable_plan(mission)
+    code, first = verify(mission)
+    assert code == 1
+    second = verify(mission)[1]
+    record = receipt_data(second)
+    assert [step["status"] for step in record["steps"]] == ["reused", "failed"]
+    assert record["steps"][0]["sourceReceipt"] == str(first)
+    assert record["failure"]["repeatCount"] == 2
+    assert record["priorReceipt"] == str(first)
+    plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
+    save_plan(mission)
+    code, final = verify(mission)
+    record = receipt_data(final)
+    assert code == 0 and (root / "build_runs").read_text() == "x"
+    assert record["executionCounts"] == {"executed": 1, "reused": 1}
+    assert record["steps"][0]["sourceReceipt"] == str(first)
+    verification.validate_receipt(root, folder, "M1", record)
+    assert verify(mission) == (0, final)
+
+
+@pytest.mark.parametrize("change", ["output-add", "output-delete", "output-edit", "input", "environment",
+                                         "inherited-environment", "script", "brief", "original-log", "original-receipt"])
+def test_reuse_invalidates_changed_evidence_and_dependencies(mission, monkeypatch, change):
+    root, _, _ = mission
+    plan = reusable_plan(mission)
+    _, first = verify(mission)
+    if change == "output-add":
+        (root / "artifact/extra").write_text("extra")
+    elif change == "output-delete":
+        (root / "artifact/result.json").unlink()
+    elif change == "output-edit":
+        (root / "artifact/result.json").write_text('{"status":"failed"}')
+    elif change == "input":
+        (root / "src.py").write_text("changed")
+    elif change == "environment":
+        plan["environment"]["target"] = "changed"
+    elif change == "inherited-environment":
+        monkeypatch.setenv("FICTIONAL_CHECK_MODE", "changed")
+    elif change == "script":
+        script = root / "build.py"
+        script.write_text(script.read_text(encoding="utf-8") + "\nvalue=2\n", encoding="utf-8")
+    elif change == "brief":
+        assert mission_state.main(["unit", "set", "M1", "--done", "new completion condition"]) == 0
+    elif change == "original-log":
+        Path(receipt_data(first)["log"]).write_text("tampered")
+    else:
+        verify(mission)
+        first.write_text(first.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
+    save_plan(mission)
+    assert verify(mission)[0] == 0
+    assert (root / "build_runs").read_text() == "xx"
+
+
+def test_force_and_default_nonreusable_steps_execute_again(mission):
+    root, _, _ = mission
+    plan = reusable_plan(mission)
+    plan["commands"][0].pop("reusable")
+    save_plan(mission)
+    verify(mission)
+    verify(mission)
+    assert (root / "build_runs").read_text() == "xx"
+    plan["commands"][0]["reusable"] = True
+    plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
+    save_plan(mission)
+    assert verify(mission)[0] == 0
+    assert mission_state.main(["verify", "M1", "--plan", str(root / "plan.json"), "--force"]) == 0
+    assert (root / "build_runs").read_text() == "xxxx"
+
+
+def test_reexecuted_earlier_step_forces_later_reusable_step_to_execute(mission):
+    root, _, plan = mission
+    plan["commands"] = [
+        {"argv": [sys.executable, "check.py"]},
+        {"argv": [sys.executable, "check.py"], "reusable": True, "outputs": []},
+        {"argv": [sys.executable, "-c", "raise SystemExit(7)"]},
+    ]
+    save_plan(mission)
+    verify(mission)
+    verify(mission)
+    assert (root / "runs").read_text() == "xxxx"
+
+
+def test_script_after_interpreter_flags_is_part_of_reuse_identity(mission):
+    root, _, _ = mission
+    plan = reusable_plan(mission)
+    plan["commands"][0]["argv"] = [sys.executable, "-B", "build.py"]
+    save_plan(mission)
+    verify(mission)
+    script = root / "build.py"
+    script.write_text(script.read_text(encoding="utf-8") + "\nvalue=3\n", encoding="utf-8")
+    verify(mission)
+    assert (root / "build_runs").read_text() == "xx"
+
+
+@pytest.mark.parametrize("later_exit", [False, True])
+def test_failed_run_with_mutated_input_cannot_reuse_steps_after_source_restoration(mission, later_exit):
+    root, folder, plan = mission
+    (root / "src.py").write_text("original", encoding="utf-8")
+    script = root / "mutating.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "Path('src.py').write_text('changed')\n"
+        "Path('artifact').write_text(Path('src.py').read_text())\n", encoding="utf-8",
+    )
+    plan.update(inputs=["src.py", "mutating.py"], commands=[
+        {"argv": [sys.executable, "mutating.py"], "reusable": True, "outputs": ["artifact"]},
+    ])
+    if later_exit:
+        plan["commands"].append({"argv": [sys.executable, "-c", "raise SystemExit(7)"]})
+    save_plan(mission)
+    code, first = verify(mission)
+    assert code == 1 and receipt_data(first)["cacheIntegrity"]["status"] == "invalid"
+    assert receipt_data(first)["failure"]["category"] == "input_changed"
+    (root / "src.py").write_text("original", encoding="utf-8")
+    if later_exit:
+        plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
+    save_plan(mission)
+    code, second = verify(mission)
+    record = receipt_data(second)
+    assert code == 1 and record["executionCounts"]["reused"] == 0
+    assert record["failure"]["category"] == "input_changed"
+    assert (root / "artifact").read_text() == "changed"
+    with pytest.raises(verification.VerificationError):
+        verification.validate_receipt(root, folder, "M1", record)
+
+
+def test_later_failing_command_mutation_invalidates_earlier_valid_prefix(mission):
+    root, _, _ = mission
+    plan = reusable_plan(mission)
+    plan["commands"][1]["argv"] = [sys.executable, "-c",
+        "from pathlib import Path; Path('src.py').write_text('changed'); raise SystemExit(7)"]
+    save_plan(mission)
+    code, first = verify(mission)
+    record = receipt_data(first)
+    assert code == 1 and record["failure"]["category"] == "input_changed"
+    assert record["steps"][1]["exitCode"] == 7 and record["cacheIntegrity"]["status"] == "invalid"
+    (root / "src.py").write_text("value = 1\n", encoding="utf-8")
+    plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
+    save_plan(mission)
+    assert verify(mission)[0] == 0
+    assert (root / "build_runs").read_text() == "xx"
+
+
+def test_failed_receipt_without_global_integrity_proof_cannot_supply_prefix(mission):
+    root, _, _ = mission
+    reusable_plan(mission)
+    _, first = verify(mission)
+    record = receipt_data(first)
+    record.pop("cacheIntegrity")
+    verification.write_json(first, record)
+    verify(mission)
+    assert (root / "build_runs").read_text() == "xx"
+
+
+@pytest.mark.parametrize("flags", [[], ["-B"], ["-X", "utf8", "-W", "ignore"]])
+@pytest.mark.parametrize("declared_result", [False, True])
+def test_legacy_script_output_arguments_do_not_change_runtime_identity(mission, flags, declared_result):
+    root, _, plan = mission
+    (root / "writer.py").write_text(
+        "import sys\nfrom pathlib import Path\nPath(sys.argv[1]).write_text('{\"status\":\"passed\"}')\n",
+        encoding="utf-8",
+    )
+    plan["inputs"] = ["src.py", "writer.py"]
+    plan["commands"] = [{"argv": [sys.executable, *flags, "writer.py", "output.json"]}]
+    if declared_result:
+        plan["results"] = [{"path": "output.json", "equals": {"status": "passed"}}]
+    save_plan(mission)
+    assert verify(mission)[0] == 0
+    assert mission_state.main(["verify", "M1", "--plan", str(root / "plan.json"), "--force"]) == 0
+
+
+@pytest.mark.parametrize("arguments", [["-c", "program", "output.py"], ["-m", "module", "output.py"],
+                                        ["-cprogram", "output.py"], ["-mmodule", "output.py"], ["-", "output.py"]])
+def test_python_inline_and_module_arguments_are_not_scripts(mission, arguments):
+    root, _, _ = mission
+    (root / "output.py").write_text("first", encoding="utf-8")
+    command = {"argv": [sys.executable, *arguments]}
+    first = verification.command_runtime(root, command)
+    (root / "output.py").write_text("changed", encoding="utf-8")
+    assert verification.command_runtime(root, command) == first
+
+
+@pytest.mark.parametrize("change", ["missing-outputs", "missing-producer", "wrong-producer", "unowned-result"])
+def test_reusable_result_requires_explicit_producer_and_owned_outputs(mission, change):
+    root, _, _ = mission
+    plan = reusable_plan(mission)
+    if change == "missing-outputs":
+        plan["commands"][0].pop("outputs")
+    elif change == "missing-producer":
+        plan["results"][0].pop("command")
+    elif change == "wrong-producer":
+        plan["results"][0]["command"] = "absent"
+    else:
+        plan["results"][0]["command"] = 1
+    save_plan(mission)
+    code, path = verify(mission)
+    assert code == 1 and receipt_data(path)["failure"]["category"] == "plan_invalid"
+    assert not (root / "build_runs").exists()
+
+
+def test_result_freshness_is_checked_at_its_producer_not_later_command(mission):
+    root, _, plan = mission
+    (root / "result.json").write_text('{"status":"passed"}')
+    plan["commands"] = [
+        {"id": "producer", "argv": [sys.executable, "-c", "pass"], "outputs": ["result.json"]},
+        {"argv": [sys.executable, "-c", "from pathlib import Path; Path('result.json').write_text('{}')"]},
+    ]
+    plan["results"] = [{"path": "result.json", "command": "producer", "equals": {"status": "passed"}}]
+    save_plan(mission)
+    code, path = verify(mission)
+    record = receipt_data(path)
+    assert code == 1 and record["failure"]["category"] == "result_invalid"
+    assert record["steps"][1]["status"] == "not_run"
+    assert json.loads((root / "result.json").read_text())["status"] == "passed"
+
+
+@pytest.mark.parametrize("change,category", [("control", "preflight"), ("cwd-missing", "preflight"),
+                                                ("cwd-outside", "preflight"), ("executable", "preflight"),
+                                                ("plan", "plan_invalid"), ("guard", "guard_rejected")])
+def test_prelaunch_failures_supersede_old_pass_and_never_execute(mission, change, category):
+    root, folder, plan = mission
+    _, old = verify(mission)
+    checked = review(mission, old)
+    if change == "control":
+        plan["commands"][0]["argv"].append("bad\nargument")
+    elif change == "cwd-missing":
+        plan["commands"][0]["cwd"] = "missing"
+    elif change == "cwd-outside":
+        plan["commands"][0]["cwd"] = ".."
+    elif change == "executable":
+        plan["commands"][0]["argv"][0] = "fictional-missing-check-program"
+    elif change == "plan":
+        plan["commands"] = []
+    else:
+        plan["commands"][0]["argv"].append("submit")
+    save_plan(mission)
+    code, path = verify(mission)
+    record = receipt_data(path)
+    assert code == 1 and path != old and record["failure"]["category"] == category
+    assert record["startedAt"] and record["finishedAt"] and record["recordedAt"]
+    assert (root / "runs").read_text() == "x"
+    assert mission_state.main(["complete", "M1", "--receipt", str(old), "--review", str(checked),
+                               "--done-evidence", "old proof"]) == 1
+    assert receipt_data(folder / "verification/M1.latest.json")["receipt"] == str(path)
+
+
+def test_resolved_executable_is_executed_relative_to_command_cwd(mission, monkeypatch):
+    root, _, plan = mission
+    work = root / "work"
+    work.mkdir()
+    local = work / Path(sys.executable).name
+    local.write_bytes(b"fictional executable identity")
+    plan["commands"] = [{"cwd": "work", "argv": [local.name, "-c", "pass"]}]
+    seen = []
+
+    def launch(argv, **kwargs):
+        seen.append((argv, kwargs))
+        return verification.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(verification.subprocess, "run", launch)
+    save_plan(mission)
+    assert verify(mission)[0] == 0
+    assert seen[0][0][0] == str(local.resolve())
+    assert seen[0][1]["cwd"] == work.resolve() and seen[0][1]["shell"] is False
+
+
+@pytest.mark.parametrize("failure,category", [("timeout", "timeout"), ("launch", "launch_error"),
+                                               ("input", "input_changed"), ("runtime", "runtime_changed")])
+def test_typed_execution_failures(mission, monkeypatch, failure, category):
+    root, _, plan = mission
+    if failure in ("timeout", "launch"):
+        def launch(argv, **kwargs):
+            if failure == "timeout":
+                raise verification.subprocess.TimeoutExpired(argv, 1)
+            raise OSError("fictional launch failure")
+        monkeypatch.setattr(verification.subprocess, "run", launch)
+    elif failure == "input":
+        plan["commands"][0]["argv"] = [sys.executable, "-c", "from pathlib import Path; Path('src.py').write_text('changed')"]
+    else:
+        real = verification.subprocess.run
+        def launch(*args, **kwargs):
+            result = real(*args, **kwargs)
+            monkeypatch.setenv("FICTIONAL_RUNTIME_MODE", "changed")
+            return result
+        monkeypatch.setattr(verification.subprocess, "run", launch)
+    save_plan(mission)
+    code, path = verify(mission)
+    assert code == 1 and receipt_data(path)["failure"]["category"] == category
+
+
+def structured_review(mission, receipt, number, findings, resolved=(), status="findings", **counts):
+    root, folder, _ = mission
+    source = root / f"findings-{number}.json"
+    source.write_text(json.dumps({"schema": 1, "findings": findings, "resolvedIds": list(resolved),
+                                  "suggestions": [{"text": "optional fictional improvement"}]}), encoding="utf-8")
+    evidence = root / f"review-{number}.md"
+    evidence.write_text(f"Fictional independent review {number}\n", encoding="utf-8")
+    path = verification.record_review(root, folder, "M1", receipt, evidence, "reviewer", "unit", status,
+                                      findings_input=source, **counts)
+    return Path(path)
+
+
+def finding(identity="F1", kind="defect", origin="new", **fields):
+    return {"id": identity, "kind": kind, "origin": origin, "reason": "Fictional source contract mismatch", **fields}
+
+
+def test_structured_reviews_preserve_identity_resolution_regression_and_counts(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    first = structured_review(mission, receipt, 1, [finding(), finding("F2", "rule_violation")])
+    second = structured_review(mission, receipt, 2, [finding(origin="unresolved", relatedId="F1")], ["F2"])
+    clean = structured_review(mission, receipt, 3, [], ["F1"], "clean")
+    record = receipt_data(clean)
+    assert record["findingsCount"] == 0 and record["fixedCount"] == 1 and record["round"] == 3
+    assert record["previousReview"] == str(second) and record["previousReviewHash"] == verification.file_hash(second)
+    assert record["diagnostics"] and receipt_data(first)["newFindingsCount"] == 2
+    verification.validate_review(folder, "M1", receipt, clean)
+    regression = structured_review(mission, receipt, 4, [finding("F3", origin="regression", relatedId="F1")])
+    assert receipt_data(regression)["newFindingsCount"] == 0 and receipt_data(regression)["diagnostics"]
+    with pytest.raises(verification.VerificationError, match="마지막 리뷰"):
+        verification.validate_review(folder, "M1", receipt, clean)
+
+
+@pytest.mark.parametrize("invalid", ["new-existing", "unresolved-new", "regression-open", "regression-no-link",
+                                       "duplicate", "kind", "missing-reason", "count", "drop", "legacy-drop"])
+def test_structured_reviews_reject_unfounded_identity_and_clean_claims(mission, invalid):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    previous = structured_review(mission, receipt, 1, [finding()])
+    data = [finding(origin="unresolved", relatedId="F1")]
+    status, resolved, counts = "findings", [], {}
+    if invalid == "new-existing":
+        data = [finding()]
+    elif invalid == "unresolved-new":
+        data.append(finding("F2", origin="unresolved"))
+    elif invalid == "regression-open":
+        data.append(finding("F2", origin="regression", relatedId="F1"))
+    elif invalid == "regression-no-link":
+        data.append(finding("F2", origin="regression"))
+    elif invalid == "duplicate":
+        data *= 2
+    elif invalid == "kind":
+        data[0]["kind"] = "suggestion"
+    elif invalid == "missing-reason":
+        data.append(finding("F2", reason=""))
+    elif invalid == "count":
+        counts["findings_count"] = 2
+    elif invalid == "drop":
+        data, status = [], "clean"
+    else:
+        with pytest.raises(verification.VerificationError, match="findings-input"):
+            verification.record_review(root, folder, "M1", receipt, root / "review-1.md", "reviewer", "unit", "clean")
+        return
+    with pytest.raises(verification.VerificationError):
+        structured_review(mission, receipt, 2, data, resolved, status, **counts)
+    assert receipt_data(folder / "verification/M1.review.latest.json")["review"] == str(previous)
+
+
+def test_review_cli_accepts_structured_findings_and_rejects_changed_source(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    source = root / "findings.json"
+    source.write_text('{"findings":[],"resolvedIds":[]}', encoding="utf-8")
+    report = root / "report.md"
+    report.write_text("Fictional review evidence", encoding="utf-8")
+    assert mission_state.main(["review", "M1", "--receipt", str(receipt), "--evidence", str(report),
+                               "--reviewer", "reviewer", "--kind", "unit", "--status", "clean",
+                               "--findings-input", str(source)]) == 0
+    path = Path(receipt_data(folder / "verification/M1.review.latest.json")["review"])
+    source.write_text('{"findings":[{}]}', encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="원본"):
+        verification.validate_review(folder, "M1", receipt, path)
