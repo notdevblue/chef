@@ -11,8 +11,10 @@ SHELL_TOKEN = re.compile(r'''(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s<>]+)|(?:\d*>>?|\*>>
 HEREDOC = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\r\n]*\r?\n(.*?)\r?\n\1(?=\s|$)", re.DOTALL)
 HERESTRING = re.compile(r"@['\"]\r?\n(.*?)\r?\n['\"]@", re.DOTALL)
 PYTHON_NAME = re.compile(r"(?:python(?:\d+(?:\.\d+)*)?|py)(?:\.exe)?$", re.IGNORECASE)
+COMMAND_SUBSTITUTION = re.compile(r"\$\(")
 WRITE_MODES = frozenset("wax+")
 PATH_METHODS = frozenset(("write_text", "write_bytes", "touch", "unlink", "rmdir", "mkdir"))
+PATH_CONSTRUCTORS = frozenset("pathlib." + name for name in ("Path", "PurePath", "PureWindowsPath", "PurePosixPath"))
 SHELL_WRITERS = frozenset(("set-content", "add-content", "out-file", "tee-object", "sc", "ac"))
 SHELL_COPY = frozenset(("cp", "copy", "copy-item", "move", "mv", "move-item", "ren", "rename-item"))
 SHELL_REMOVE = frozenset(("rm", "del", "erase", "remove-item", "rmdir", "rd", "touch", "mkdir"))
@@ -42,6 +44,7 @@ def resolved_payload(payload):
         return payload
     return {
         **payload,
+        "han_origin_cwd": payload.get("cwd") or os.getcwd(),
         "cwd": absolute_path(tool_cwd, payload.get("cwd") or os.getcwd()),
         "tool_input": {key: value for key, value in tool_input.items() if key != "cwd"},
     }
@@ -52,6 +55,8 @@ def adapter_contexts(payload, targets, guard):
     runtime = payload.get("han_runtime", "claude")
     cwd = payload.get("cwd") or os.getcwd()
     starts = [cwd]
+    if payload.get("han_origin_cwd"):
+        starts.append(payload["han_origin_cwd"])
     if runtime == "claude" and os.environ.get("CLAUDE_PROJECT_DIR"):
         starts.append(os.environ["CLAUDE_PROJECT_DIR"])
     for target in targets:
@@ -115,6 +120,22 @@ def generated_history(folder, name):
                 if entry.name.casefold() == filename.casefold() and entry.is_file() and canonical_path(entry.path) == expected + "/" + filename.casefold():
                     return True
     return False
+
+
+def mission_contexts(payload, targets, guard):
+    try:
+        contexts = adapter_contexts(payload, targets, guard)
+    except guard.GuardOff:
+        return []
+    participating = []
+    for located, adapter in contexts:
+        try:
+            active = guard.read_active(guard.state_dir_of(located.project, adapter))
+        except Exception:
+            continue
+        if guard.participates_in_mission(active, payload):
+            participating.append((located, adapter))
+    return participating
 
 
 def protected_path(target, cwd, contexts, guard):
@@ -192,32 +213,66 @@ def tool_targets(payload):
     return []
 
 
-def constant_path(node, aliases):
+def python_symbol(node, symbols):
+    if isinstance(node, ast.Name):
+        if node.id == "open":
+            return symbols.get(node.id, "builtins.open")
+        else:
+            return symbols.get(node.id, "")
+    if isinstance(node, ast.Attribute):
+        base = python_symbol(node.value, symbols)
+        if base:
+            return base + "." + node.attr
+    return ""
+
+
+def path_receiver(node, path_names, symbols):
+    if isinstance(node, ast.Name):
+        return node.id in path_names
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return path_receiver(node.left, path_names, symbols)
+    if isinstance(node, ast.Call):
+        if python_symbol(node.func, symbols) in PATH_CONSTRUCTORS:
+            return True
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ("resolve", "absolute", "expanduser", "joinpath"):
+            return path_receiver(node.func.value, path_names, symbols)
+    return False
+
+
+def constant_path(node, aliases, symbols):
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.Name):
         return aliases.get(node.id, "")
     if isinstance(node, ast.BinOp):
-        left, right = constant_path(node.left, aliases), constant_path(node.right, aliases)
+        left, right = constant_path(node.left, aliases, symbols), constant_path(node.right, aliases, symbols)
         if left and right and isinstance(node.op, ast.Div):
             return os.path.join(left, right)
         if left and right and isinstance(node.op, ast.Add):
             return left + right
     if isinstance(node, ast.Call):
-        name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
-        if name in ("Path", "PurePath", "PureWindowsPath", "PurePosixPath"):
-            values = [constant_path(arg, aliases) for arg in node.args]
-            return os.path.join(*values) if values and all(values) else ""
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        else:
+            name = ""
+        if python_symbol(node.func, symbols) in PATH_CONSTRUCTORS or python_symbol(node.func, symbols) == "os.path.join":
+            values = [constant_path(arg, aliases, symbols) for arg in node.args]
+            if values and all(values):
+                return os.path.join(*values)
+            else:
+                return ""
         if isinstance(node.func, ast.Attribute):
-            base = constant_path(node.func.value, aliases)
+            base = constant_path(node.func.value, aliases, symbols)
             if base and name in ("resolve", "absolute", "expanduser"):
                 return base
             if base and name == "joinpath":
-                values = [constant_path(arg, aliases) for arg in node.args]
-                return os.path.join(base, *values) if all(values) else ""
-            if name == "join" and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "path":
-                values = [constant_path(arg, aliases) for arg in node.args]
-                return os.path.join(*values) if values and all(values) else ""
+                values = [constant_path(arg, aliases, symbols) for arg in node.args]
+                if all(values):
+                    return os.path.join(base, *values)
+                else:
+                    return ""
     return ""
 
 
@@ -227,37 +282,83 @@ def python_targets(source):
     except (SyntaxError, ValueError):
         return [], []
     aliases = {}
+    symbols = {}
+    path_names = set()
     targets = []
     subtrees = []
     for node in ordered_nodes(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                if item.asname:
+                    symbols[item.asname] = item.name
+                else:
+                    symbols[item.name.split(".")[0]] = item.name.split(".")[0]
+        if isinstance(node, ast.ImportFrom):
+            for item in node.names:
+                symbols[item.asname or item.name] = (node.module or "") + "." + item.name
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            names = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if isinstance(node, ast.Assign):
+                names = node.targets
+            else:
+                names = [node.target]
+            value = constant_path(node.value, aliases, symbols)
+            typed_path = path_receiver(node.value, path_names, symbols)
+            symbol = python_symbol(node.value, symbols)
             for name in names:
                 if isinstance(name, ast.Name):
-                    aliases[name.id] = constant_path(node.value, aliases)
+                    aliases[name.id] = value
+                    symbols[name.id] = symbol
+                    path_names.discard(name.id)
+                    if typed_path:
+                        path_names.add(name.id)
         if not isinstance(node, ast.Call):
             continue
-        name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
-        receiver = constant_path(node.func.value, aliases) if isinstance(node.func, ast.Attribute) else ""
-        args = [constant_path(arg, aliases) for arg in node.args]
-        keywords = {item.arg: constant_path(item.value, aliases) for item in node.keywords}
+        if isinstance(node.func, ast.Name):
+            name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        else:
+            name = ""
+        receiver = ""
+        if isinstance(node.func, ast.Attribute) and path_receiver(node.func.value, path_names, symbols):
+            receiver = constant_path(node.func.value, aliases, symbols)
+        callable_name = python_symbol(node.func, symbols)
+        args = [constant_path(arg, aliases, symbols) for arg in node.args]
+        keywords = {item.arg: constant_path(item.value, aliases, symbols) for item in node.keywords}
+        owner, _, method = callable_name.rpartition(".")
+        if owner in PATH_CONSTRUCTORS and node.args and path_receiver(node.args[0], path_names, symbols):
+            receiver = args.pop(0)
+            name = method
         if name in PATH_METHODS and receiver:
             targets.append(receiver)
             if name in ("unlink", "rmdir"):
                 subtrees.append(receiver)
-        elif name == "open":
-            path = receiver or (args[0] if args else keywords.get("file", ""))
-            offset = 0 if receiver else 1
-            mode = args[offset] if len(args) > offset else keywords.get("mode", "r")
+        elif (name == "open" and receiver) or callable_name in ("builtins.open", "io.open"):
+            if receiver:
+                path = receiver
+                offset = 0
+            else:
+                if args:
+                    path = args[0]
+                else:
+                    path = keywords.get("file", "")
+                offset = 1
+            if len(args) > offset:
+                mode = args[offset]
+            else:
+                mode = keywords.get("mode", "r")
             if any(char in mode for char in WRITE_MODES):
                 targets.append(path)
-        elif name in ("rename", "replace", "move"):
-            paths = ([receiver] + args[:1]) if receiver else args[:2]
+        elif (name in ("rename", "replace") and receiver) or callable_name in ("os.rename", "os.replace", "shutil.move"):
+            if receiver:
+                paths = [receiver] + args[:1]
+            else:
+                paths = args[:2]
             targets.extend(paths)
             subtrees.extend(paths)
-        elif name in ("copy", "copy2", "copyfile", "copytree"):
+        elif callable_name in ("shutil.copy", "shutil.copy2", "shutil.copyfile", "shutil.copytree"):
             targets.extend(args[1:2])
-        elif name in ("remove", "unlink", "rmdir", "rmtree", "mkdir", "makedirs"):
+        elif callable_name in ("os.remove", "os.unlink", "os.rmdir", "shutil.rmtree", "os.mkdir", "os.makedirs"):
             targets.extend(args[:1])
             if name not in ("mkdir", "makedirs"):
                 subtrees.extend(args[:1])
@@ -312,21 +413,41 @@ def python_consumer(fragment, guard):
 def shell_targets(command, tool_name, cwd, guard):
     targets = []
     subtrees = []
+    embedded = []
 
     def add_python(source, source_cwd):
         paths, trees = python_targets(source)
         targets.extend(absolute_path(path, source_cwd) for path in paths)
         subtrees.extend(absolute_path(path, source_cwd) for path in trees)
 
+    def add_substitutions(source, source_cwd):
+        bodies = guard.group_bodies(source, source, COMMAND_SUBSTITUTION)
+        if tool_name != "PowerShell":
+            bodies.extend(guard.BACKTICK_BODY.findall(source))
+        for body in bodies:
+            paths, trees = shell_targets(body, tool_name, source_cwd, guard)
+            targets.extend(paths)
+            subtrees.extend(trees)
+
     for match in HEREDOC.finditer(command):
         prefix = command[:match.start()]
         fragments = ordered_fragments(prefix, tool_name, guard)
+        source_cwd = preceding_directory(prefix, tool_name, cwd, guard)
         if fragments and python_consumer(fragments[-1], guard):
-            add_python(match.group(2), preceding_directory(prefix, tool_name, cwd, guard))
+            add_python(match.group(2), source_cwd)
+        if not re.match(r"<<-?\s*['\"]", match.group(0)):
+            add_substitutions(match.group(2), source_cwd)
+        embedded.append(match.span(2))
     for match in HERESTRING.finditer(command):
         suffix = command[match.end():].splitlines()[0] if command[match.end():].splitlines() else ""
+        source_cwd = preceding_directory(command[:match.start()], tool_name, cwd, guard)
         if suffix.lstrip().startswith("|") and python_consumer(suffix.lstrip()[1:].lstrip(), guard):
-            add_python(match.group(1), preceding_directory(command[:match.start()], tool_name, cwd, guard))
+            add_python(match.group(1), source_cwd)
+        if command[match.start() + 1] == '"':
+            add_substitutions(match.group(1), source_cwd)
+        embedded.append(match.span(1))
+    for start, end in sorted(embedded, reverse=True):
+        command = command[:start] + re.sub(r"[^\r\n]", " ", command[start:end]) + command[end:]
     for fragment in ordered_fragments(command, tool_name, guard):
         raw_tokens = SHELL_TOKEN.findall(fragment)
         tokens = [guard.unquote(token) for token in raw_tokens]
@@ -409,8 +530,13 @@ def unbundled_question_commands(command, tool_name, cwd, guard):
 
 def question_write_reason(payload, guard):
     payload = resolved_payload(payload)
+    if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
+        return ""
     tool_name = payload.get("tool_name")
     targets = tool_targets(payload)
+    contexts = mission_contexts(payload, targets, guard)
+    if not contexts:
+        return ""
     cwd = payload.get("cwd") or os.getcwd()
     unbundled = []
     subtrees = []
@@ -422,7 +548,7 @@ def question_write_reason(payload, guard):
             unbundled = unbundled_question_commands(command, tool_name, cwd, guard)
     if not targets and not unbundled:
         return ""
-    contexts = adapter_contexts(payload, targets + unbundled, guard)
+    contexts = mission_contexts(payload, targets + unbundled, guard)
     if unbundled and contexts:
         return "질문 쓰기는 현재 번들의 mission_state.py question publish/answer/restore/render 를 사용할 것"
     for target in targets:

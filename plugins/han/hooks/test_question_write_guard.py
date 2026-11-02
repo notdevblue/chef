@@ -20,11 +20,14 @@ def project(tmp_path, monkeypatch):
     (adapter_folder / "adapter.json").write_text(json.dumps(adapter), encoding="utf-8")
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     monkeypatch.setenv("HAN_ADAPTERS_DIR", str(tmp_path / "no-registry"))
+    state = root / "state"
+    state.mkdir()
+    (state / "ACTIVE").write_text('{"id":"mission","session":"owner"}', encoding="utf-8")
     return root
 
 
 def outcome(project, tool="Write", **tool_input):
-    return mission_guard.decide({"cwd": str(project), "tool_name": tool, "tool_input": tool_input})
+    return mission_guard.decide({"cwd": str(project), "session_id": "owner", "tool_name": tool, "tool_input": tool_input})
 
 
 @pytest.mark.parametrize("tool,key", [("Write", "file_path"), ("Edit", "path"), ("MultiEdit", "file_path"), ("NotebookEdit", "notebook_path")])
@@ -37,21 +40,24 @@ def test_structured_new_and_existing_question_files(project, tool, key, target):
     assert outcome(project, tool, **{key: target}).deny
 
 
-@pytest.mark.parametrize("extra", [{}, {"agent_id": "child"}, {"session_id": "different"}])
-def test_protection_precedes_all_active_and_role_exceptions(project, extra):
-    for active in ("", '{"id":"mission","session":"owner"}', "{broken"):
-        state = project / "state"
-        state.mkdir(exist_ok=True)
-        if active:
-            (state / "ACTIVE").write_text(active, encoding="utf-8")
-        elif (state / "ACTIVE").exists():
-            (state / "ACTIVE").unlink()
-        payload = {"cwd": str(project), "tool_name": "Write", "tool_input": {"path": "state/mission/ask-1.md"}, **extra}
-        assert mission_guard.decide(payload).deny
+@pytest.mark.parametrize("active", ["", '{"id":"mission","session":"owner"}', "{broken", '{"id":"mission"}'])
+@pytest.mark.parametrize("session", ["owner", "different", ""])
+def test_question_scan_requires_valid_participating_session(project, monkeypatch, active, session):
+    state = project / "state"
+    (state / "ACTIVE").unlink()
+    if active:
+        (state / "ACTIVE").write_text(active, encoding="utf-8")
+    scans = []
+    monkeypatch.setattr(question_write_guard, "shell_targets", lambda *args: (scans.append(args) or (["state/mission/ask-1.md"], [])))
+    payload = {"cwd": str(project), "session_id": session, "tool_name": "Bash", "tool_input": {"command": "opaque-writer"}}
+    participating = active == '{"id":"mission","session":"owner"}' and session == "owner"
+    assert bool(mission_guard.decide(payload).deny) == participating
+    assert bool(scans) == participating
 
 
 @pytest.mark.parametrize("target", ["state/mission/details/ask-1.md", "state/mission/details/history/notes.md", "state/mission/details/history/ask-1-original.md.txt", "state/mission/draft.json", "state/mission/reply.json", "state/mission/report.md", "src/app.py"])
 def test_other_project_writes_allowed_without_active(project, target):
+    (project / "state/ACTIVE").unlink()
     assert not outcome(project, path=target).deny
 
 
@@ -160,7 +166,7 @@ def test_orphan_history_cannot_grant_automatic_document_sharing(project, monkeyp
 
 
 def test_raw_patch_string_and_malformed_input(project):
-    payload = {"cwd": str(project), "tool_name": "apply_patch", "tool_input": "*** Begin Patch\n*** Delete File: state/mission/ask-1.md\n*** End Patch"}
+    payload = {"cwd": str(project), "session_id": "owner", "tool_name": "apply_patch", "tool_input": "*** Begin Patch\n*** Delete File: state/mission/ask-1.md\n*** End Patch"}
     assert mission_guard.decide(payload).deny
     payload["tool_input"] = []
     assert not mission_guard.decide(payload).deny
@@ -186,17 +192,20 @@ def test_registry_adapter_and_runtime_local_state_override(project, tmp_path, mo
     (registry / "sample" / "adapter.json").write_text(json.dumps(original), encoding="utf-8")
     (registry / "sample" / "local.json").write_text(json.dumps({"runtimes": {"codex": {"paths": {"stateDir": "records"}}}}), encoding="utf-8")
     monkeypatch.setenv("HAN_ADAPTERS_DIR", str(registry))
-    payload = {"han_runtime": "codex", "cwd": str(tmp_path), "tool_name": "Write", "tool_input": {"path": str(project / "records" / "mission" / "ask-1.md")}}
+    payload = {"session_id": "owner", "han_runtime": "codex", "cwd": str(tmp_path), "tool_name": "Write", "tool_input": {"path": str(project / "records" / "mission" / "ask-1.md")}}
+    records = project / "records"
+    records.mkdir()
+    (records / "ACTIVE").write_text('{"id":"mission","session":"owner"}', encoding="utf-8")
     assert mission_guard.decide(payload).deny
 
 
 def test_tool_cwd_resolved_once(project, tmp_path):
-    payload = {"cwd": str(tmp_path), "tool_name": "Write", "tool_input": {"cwd": "sample-project", "path": "state/mission/ask-1.md"}}
+    payload = {"session_id": "owner", "cwd": str(tmp_path), "tool_name": "Write", "tool_input": {"cwd": "sample-project", "path": "state/mission/ask-1.md"}}
     assert mission_guard.decide(payload).deny
 
 
 def test_codex_main_resolves_relative_tool_cwd_once(project):
-    payload = {"cwd": str(project), "tool_name": "Bash", "tool_input": {"cwd": "state/mission", "command": "echo answer > ask-1.md"}}
+    payload = {"session_id": "owner", "cwd": str(project), "tool_name": "Bash", "tool_input": {"cwd": "state/mission", "command": "echo answer > ask-1.md"}}
     source = "import sys; sys.path.insert(0,sys.argv[1]); import mission_guard; mission_guard.main('codex')"
     result = subprocess.run([sys.executable, "-B", "-c", source, str(Path(__file__).parent)], input=json.dumps(payload).encode("utf-8"), capture_output=True, cwd=project)
     assert result.returncode == 0
@@ -343,7 +352,7 @@ def test_allow_once_does_not_override_question_protection(project):
 
 
 def test_coordinator_guard_still_runs(project):
-    (project / "state").mkdir()
+    (project / "state").mkdir(exist_ok=True)
     (project / "state" / "ACTIVE").write_text('{"id":"mission","session":"owner"}', encoding="utf-8")
     payload = {"cwd": str(project), "session_id": "owner", "tool_name": "Write", "tool_input": {"file_path": "src/app.py"}}
     assert "roles.implement" in mission_guard.decide(payload).deny
@@ -356,7 +365,7 @@ def test_unavailable_target_registry_does_not_skip_existing_shell_deny(project, 
     adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
     adapter["guard"]["deny"] = [{"pattern": "^p4 submit", "reason": "blocked submit"}]
     adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
-    (project / "state").mkdir()
+    (project / "state").mkdir(exist_ok=True)
     (project / "state" / "ACTIVE").write_text('{"id":"mission","session":"owner"}', encoding="utf-8")
     registry = tmp_path / "broken-registry"
     registry.mkdir()
@@ -375,3 +384,90 @@ def test_bad_registry_cannot_discard_valid_local_question_context(project, tmp_p
     assert outcome(project, "Bash", command=command).deny
     patch = f"*** Begin Patch\n*** Add File: {tmp_path / 'external.md'}\n+draft\n*** Delete File: state/mission/ask-1.md\n*** End Patch"
     assert outcome(project, "apply_patch", command=patch).deny
+
+
+@pytest.mark.parametrize("source", [
+    "print('state/mission/ask-1.md'.replace('old.md', 'new.md'))",
+    "value='state/mission/ask-1.md'; print(value.replace('ask', 'confirm'))",
+    "value='state/mission/ask-1.md'; alias=value; alias.replace('x', 'state/mission/confirm-A.md')",
+    "from pathlib import Path\np=Path('state/mission/ask-1.md'); p='state/mission/ask-1.md'; p.replace('ask', 'confirm')",
+    "def replace(a, b): return a\nreplace('state/mission/ask-1.md', 'state/mission/confirm-A.md')",
+    "value = 2 > 'state/mission/ask-1.md'",
+    "value = 2 >= 'state/mission/questions/ask-1.json'",
+])
+@pytest.mark.parametrize("shell", ["Bash", "PowerShell"])
+def test_python_strings_and_comparisons_are_not_file_operations(project, source, shell):
+    if shell == "Bash":
+        command = f"python - <<'PY'\n{source}\nPY"
+    else:
+        command = f"@'\n{source}\n'@ | python -"
+    assert not outcome(project, shell, command=command).deny
+
+
+@pytest.mark.parametrize("source", [
+    "from pathlib import Path as P\np=P('state/mission/ask-1.md'); p.replace('draft.md')",
+    "import pathlib as paths\np=paths.Path('state/mission/ask-1.md'); q=p; q.rename('draft.md')",
+    "import os as files\nfiles.replace('state/mission/ask-1.md', 'draft.md')",
+    "from os import replace as relocate\nrelocate('draft.md', 'state/mission/ask-1.md')",
+    "import os\nrelocate=os.replace; relocate('state/mission/ask-1.md', 'draft.md')",
+    "import shutil as files\nfiles.move('state/mission/ask-1.md', 'draft.md')",
+    "from shutil import rmtree as remove_tree\nremove_tree('state/mission/questions')",
+    "from os.path import join as path_join\nopen(path_join('state', 'mission', 'ask-1.md'), 'w')",
+    "from pathlib import Path\nPath.replace(Path('state/mission/ask-1.md'), 'draft.md')",
+    "from pathlib import Path as P\nP.rename(P('state/mission/ask-1.md'), 'draft.md')",
+    "import pathlib as paths\npaths.Path.open(paths.Path('state/mission/ask-1.md'), 'w')",
+    "from pathlib import Path\nPath.unlink(Path('state/mission/ask-1.md'))",
+    "from pathlib import Path\nPath.write_text(Path('state/mission/ask-1.md'), 'answer')",
+    "from pathlib import Path\nrelocate=Path.replace; relocate(Path('state/mission/ask-1.md'), 'draft.md')",
+])
+def test_python_filesystem_receiver_and_callable_aliases_stay_protected(project, source):
+    assert outcome(project, "Bash", command=f"python - <<'PY'\n{source}\nPY").deny
+
+
+@pytest.mark.parametrize("command", [
+    "python - <<'PY' > state/mission/ask-1.md\nprint(2 > 1)\nPY",
+    "python - <<'PY'\nprint(2 > 1)\nPY\necho answer > state/mission/ask-1.md",
+    "@'\nprint(2 > 1)\n'@ | python - > state/mission/ask-1.md",
+    "@'\nprint(2 > 1)\n'@ | python -; Set-Content state/mission/ask-1.md answer",
+    'python - <<PY\nvalue="$(echo answer > state/mission/ask-1.md)"\nPY',
+    '@"\nvalue="$(Set-Content state/mission/ask-1.md answer)"\n"@ | python -',
+])
+def test_embedded_python_preserves_external_redirection_and_shell_substitutions(project, command):
+    assert outcome(project, "PowerShell" if command.startswith("@") else "Bash", command=command).deny
+
+
+@pytest.mark.parametrize("command", [
+    "python - <<'PY'\nvalue='$(echo answer > state/mission/ask-1.md)'\nPY",
+    "@'\nvalue='$(Set-Content state/mission/ask-1.md answer)'\n'@ | python -",
+])
+def test_literal_embedded_shell_syntax_is_data(project, command):
+    assert not outcome(project, "PowerShell" if command.startswith("@") else "Bash", command=command).deny
+
+
+@pytest.mark.parametrize("command", [
+    '@"\nx=2\nprint(x>15)\n"@ | python -',
+    '@"\nx=2\nprint(x > "state/mission/ask-1.md")\n"@ | python -',
+    'python - <<PY\nx="<(echo answer > state/mission/ask-1.md)"\nPY',
+])
+def test_interpolating_python_bodies_do_not_execute_bare_groups(project, command):
+    shell = "PowerShell" if command.startswith("@") else "Bash"
+    targets, trees = question_write_guard.shell_targets(command, shell, str(project), mission_guard)
+    assert targets == [] and trees == []
+    assert not outcome(project, shell, command=command).deny
+
+
+def test_tool_cwd_outside_owner_project_retains_original_mission_context(project, tmp_path):
+    target = project / "state/mission/ask-1.md"
+    fields = {"han_runtime": "codex", "session_id": "owner", "cwd": str(project), "tool_name": "Bash",
+              "tool_input": {"cwd": str(tmp_path), "command": f'echo answer > "{target}"'}}
+    assert mission_guard.decide(fields).deny
+    fields["session_id"] = "unrelated"
+    assert not mission_guard.decide(fields).deny
+
+
+def test_grok_child_question_writes_require_valid_owner_and_nonempty_session(project):
+    fields = {"han_runtime": "grok", "subagentType": "han:dev-medium", "sessionId": "child", "cwd": str(project),
+              "toolName": "write", "toolInput": {"path": "state/mission/ask-1.md"}}
+    assert mission_guard.decide(fields).deny
+    fields["sessionId"] = ""
+    assert not mission_guard.decide(fields).deny

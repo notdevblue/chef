@@ -114,15 +114,22 @@ def test_grok_event_cwd_already_includes_tool_cwd(project):
     assert mission_guard.decide(value).deny
 
 
-@pytest.mark.parametrize("event", ["post_tool_use", "stop"])
-def test_native_integrity_checks_current_and_child_session(project, event):
+def test_native_integrity_checks_current_and_child_session_at_stop(project):
     open_mission(project)
     question = project / "state/garden/ask-colors.md"
     question.write_text("Untracked answer", encoding="utf-8")
-    value = payload(project, tool="write", hookEventName=event)
+    value = payload(project, tool="write", hookEventName="stop")
     assert question_integrity.decide(value)["decision"] == "block"
     assert question_integrity.decide({**value, "sessionId": "child", "subagentType": "developer"})["decision"] == "block"
     assert question_integrity.decide({**value, "sessionId": "unrelated"}) == {}
+
+
+def test_native_post_tool_integrity_is_ignored(project):
+    open_mission(project)
+    (project / "state/garden/ask-colors.md").write_text("Untracked fictional answer", encoding="utf-8")
+    value = payload(project, tool="write", hookEventName="post_tool_use")
+    assert question_integrity.decide(value) == {}
+    assert question_integrity.decide({**value, "sessionId": "child", "subagentType": "developer"}) == {}
 
 
 def test_native_session_context_does_not_inherit_claude_rule_opt_in(project, monkeypatch):
@@ -147,7 +154,8 @@ def test_explicit_other_runtime_is_preserved(project, runtime, monkeypatch):
 def test_native_matchers_cover_current_grok_contract():
     hooks = json.loads((Path(__file__).parent / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     assert set(("new", "load")).issubset(hooks["SessionStart"][0]["matcher"].split("|"))
-    for event in ("PreToolUse", "PostToolUse"):
+    assert "PostToolUse" not in hooks
+    for event in ("PreToolUse",):
         assert set(("run_terminal_command", "Shell", "search_replace", "write")).issubset(hooks[event][0]["matcher"].split("|"))
 
 

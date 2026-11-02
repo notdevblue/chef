@@ -1086,6 +1086,12 @@ def runs_in_other_session(active, payload):
     return active.session != session_id
 
 
+def participates_in_mission(active, payload):
+    session = payload.get("session_id")
+    return (not active.corrupt and valid_mission_id(active.id) and bool(active.session)
+            and isinstance(session, str) and bool(session) and not runs_in_other_session(active, payload))
+
+
 def judge_denied_command(payload, command, active, state_dir, reason, outcome, stale_hours=STALE_HOURS_DEFAULT):
     try:
         if runs_in_other_session(active, payload):
@@ -1233,20 +1239,34 @@ def decide(payload):
     command = (payload.get("tool_input") or {}).get("command")
     if not isinstance(command, str):
         return outcome
-    try:
-        located = find_adapter(payload)
-    except AdapterNotFound as e:
-        if contains_marker(command, tool_name):
-            outcome.messages.append(f"미션 가드 꺼짐: 어댑터 못 찾음 — {e}")
-        return outcome
+    marker_command = contains_marker(command, tool_name)
+    if not marker_command and payload.get("han_origin_cwd"):
+        contexts = question_write_guard.mission_contexts(payload, [], sys.modules[__name__])
+        if not contexts:
+            return outcome
+        located, adapter = contexts[0]
+    else:
+        try:
+            located = find_adapter(payload)
+        except AdapterNotFound as e:
+            if marker_command:
+                outcome.messages.append(f"미션 가드 꺼짐: 어댑터 못 찾음 — {e}")
+            return outcome
     problems = []
     adapter = load_adapter(located.adapter_path, problems, runtime=payload.get("han_runtime", "claude"))
     state_dir = state_dir_of(located.project, adapter)
     stale_hours = stale_hours_of(adapter)
+    try:
+        active = read_active(state_dir)
+    except Exception:
+        if marker_command:
+            raise
+        return outcome
+    if not marker_command and not participates_in_mission(active, payload):
+        return outcome
 
     if payload.get("han_runtime") == "grok" and payload.get("toolInputTruncated"):
-        active = read_active(state_dir)
-        if active.id and not runs_in_other_session(active, payload):
+        if marker_command or participates_in_mission(active, payload):
             outcome.deny = "Grok 명령 입력이 잘려 미션 가드를 확인할 수 없음; 짧은 명령으로 나눌 것"
             return outcome
     verdict = judge_command(adapter, command, tool_name, problems, located.project)
@@ -1261,8 +1281,8 @@ def decide(payload):
         if is_grok_subagent(payload):
             outcome.deny = "Grok 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
             return outcome
-        if payload.get("han_runtime") == "grok" and not payload.get("session_id"):
-            outcome.deny = "Grok 미션 마커에 소유 session_id가 없음"
+        if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
+            outcome.deny = "미션 마커에 소유 session_id가 없음"
             return outcome
         handle_marker(
             verdict.marker,

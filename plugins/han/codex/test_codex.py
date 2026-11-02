@@ -434,16 +434,16 @@ def test_codex_status_reads_unshared_questions_without_a_valid_manifest(project)
 def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
     path = PLUGIN / ("hooks/hooks.json" if runtime == "claude" else "codex/hooks.json")
     hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
-    for event in ("PreToolUse", "PostToolUse"):
+    for event in ("PreToolUse",):
         matchers = {entry.get("matcher", "") for entry in hooks[event]}
         for tool in ("Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "ApplyPatch"):
             assert any(tool in matcher.split("|") for matcher in matchers)
-    for event in ("PostToolUse", "Stop"):
+    for event in ("Stop",):
         commands = [json.dumps(hook) for entry in hooks[event] for hook in entry["hooks"]]
         assert any("question_integrity.py" in command for command in commands)
         assert all(not hook.get("async", False) for entry in hooks[event] for hook in entry["hooks"])
-    assert set(hooks) == {"SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "Stop"}
-    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 5
+    assert set(hooks) == {"SessionStart", "SubagentStart", "PreToolUse", "Stop"}
+    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 4
     for removed in ("korean_reply.py", "memory_notice.py", "session_title.py"):
         assert removed not in json.dumps(hooks)
         assert not (PLUGIN / "hooks" / removed).exists()
@@ -453,7 +453,7 @@ def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
     assert "session_rules.py" in json.dumps(hooks["SubagentStart"])
 
 
-@pytest.mark.parametrize("event,tool_name", [("Stop", ""), ("PostToolUse", "Bash"), ("PostToolUse", "apply_patch")])
+@pytest.mark.parametrize("event,tool_name", [("Stop", ""), ("Stop", "Bash"), ("Stop", "apply_patch")])
 def test_installed_codex_integrity_uses_config_registry_read_only(project, tmp_path, event, tool_name):
     (project / ".codex/orchestrator/adapter.json").unlink()
     installed = tmp_path / "installed/plugins/han"

@@ -396,20 +396,17 @@ def test_same_session_denies_with_mission_id(project):
     assert "m-042" in denial(output)
 
 
-def test_other_session_is_warned_not_denied(project):
+def test_other_session_is_quiet_and_not_denied(project):
     make_adapter(project)
     make_active(project, "m-042", session="s1")
-    output = run_guard(project, "p4 submit -c 123", session="s2")
-    assert not is_denied(output)
-    assert "m-042" in output["systemMessage"]
-    assert "submit 금지" in output["systemMessage"]
+    assert run_guard(project, "p4 submit -c 123", session="s2") == {}
 
 
-def test_legacy_active_denies_every_session(project):
+def test_legacy_active_does_not_claim_any_session(project):
     make_adapter(project)
     make_active(project, "m-042", session=None)
-    assert "m-042" in denial(run_guard(project, "p4 submit -c 1", session="s1"))
-    assert is_denied(run_guard(project, "p4 submit -c 1", session="other"))
+    assert run_guard(project, "p4 submit -c 1", session="s1") == {}
+    assert run_guard(project, "p4 submit -c 1", session="other") == {}
 
 
 def test_subagent_follows_its_parent_session_id(project):
@@ -419,10 +416,33 @@ def test_subagent_follows_its_parent_session_id(project):
     assert not is_denied(run_guard(project, "p4 submit -c 1", session="s2", agent_id="agent-1"))
 
 
-def test_missing_session_id_denies(project):
+def test_missing_session_id_does_not_claim_mission(project):
     make_adapter(project)
     make_active(project, session="s1")
-    assert is_denied(run_guard(project, "p4 submit -c 1", session=None))
+    assert run_guard(project, "p4 submit -c 1", session=None) == {}
+
+
+@pytest.mark.parametrize("session", ["different", "", None])
+def test_nonparticipating_sessions_skip_command_policy_analysis(project, monkeypatch, session):
+    make_adapter(project)
+    make_active(project, session="owner")
+
+    def unexpected_analysis(*args):
+        raise AssertionError("Ordinary commands must skip mission policy analysis")
+
+    monkeypatch.setattr(mission_guard, "judge_command", unexpected_analysis)
+    fields = {"cwd": str(project), "session_id": session, "tool_name": "Bash", "tool_input": {"command": "p4 submit"}}
+    assert not mission_guard.decide(fields).deny
+
+
+@pytest.mark.parametrize("action", ["open", "resume", "close"])
+def test_marker_requires_nonempty_session_before_changing_active(project, action):
+    make_adapter(project)
+    make_active(project, session="owner")
+    before = (project / STATE / "ACTIVE").read_bytes()
+    output = run_guard(project, f"echo han-mission {action} m-1", session=None)
+    assert is_denied(output)
+    assert (project / STATE / "ACTIVE").read_bytes() == before
 
 
 def test_deny_output_shape(project):
@@ -609,11 +629,7 @@ def test_output_is_ascii_json_that_round_trips_korean(project):
 def test_messages_are_also_additional_context(project):
     make_adapter(project)
     make_active(project, "m-042", session="s1")
-    output = run_guard(project, "p4 submit -c 123", session="s2")
-    specific = output["hookSpecificOutput"]
-    assert specific["hookEventName"] == "PreToolUse"
-    assert "m-042" in specific["additionalContext"]
-    assert "permissionDecision" not in specific
+    assert run_guard(project, "p4 submit -c 123", session="s2") == {}
     opened = run_guard(project, "echo han-mission resume m-042", session="s2")
     assert "가드 세션 갱신" in context_of(opened)
 
@@ -796,22 +812,21 @@ def test_guard_applies_right_after_open_in_same_session(project):
     assert not is_denied(run_guard(project, "p4 submit -c 1", session="s2"))
 
 
-def test_corrupt_active_denies_rule_hits_in_every_session_with_path(project):
+def test_corrupt_active_does_not_classify_ordinary_sessions_as_mission(project):
     make_adapter(project)
-    path = make_corrupt_active(project)
-    for session in ("s1", "s2"):
-        reason = denial(run_guard(project, "p4 submit -c 1", session=session))
-        assert "ACTIVE 손상" in reason
-        assert str(path) in reason
-        assert "지우거나 close" in reason
+    make_corrupt_active(project)
+    for session in ("s1", "s2", None):
+        assert run_guard(project, "p4 submit -c 1", session=session) == {}
     assert run_guard(project, "p4 opened") == {}
 
 
-def test_corrupt_active_ignores_allow_once(project):
+def test_corrupt_active_does_not_consume_allow_once(project):
     make_adapter(project)
     make_corrupt_active(project)
-    write_allow_once(project, "m-1", ["p4 submit -c 1"])
-    assert is_denied(run_guard(project, "p4 submit -c 1"))
+    permit = write_allow_once(project, "m-1", ["p4 submit -c 1"])
+    before = permit.read_bytes()
+    assert run_guard(project, "p4 submit -c 1") == {}
+    assert permit.read_bytes() == before
 
 
 def test_corrupt_active_is_removed_by_close_of_any_id(project):
@@ -933,7 +948,7 @@ def test_exception_inside_judge_denies_instead_of_passing(project, monkeypatch):
     assert not outcome.messages
 
 
-def test_exception_reading_state_after_rule_hit_denies(project, monkeypatch):
+def test_unreadable_active_does_not_claim_ordinary_session(project, monkeypatch):
     make_adapter(project)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
     monkeypatch.setenv("HAN_ADAPTERS_DIR", str(NO_REGISTRY))
@@ -943,7 +958,7 @@ def test_exception_reading_state_after_rule_hit_denies(project, monkeypatch):
 
     monkeypatch.setattr(mission_guard, "read_active", boom)
     payload = {"tool_name": "Bash", "tool_input": {"command": "p4 submit -c 1"}, "cwd": str(project)}
-    assert "허용 안 함" in mission_guard.decide(payload).deny
+    assert not mission_guard.decide(payload).deny
     payload["tool_input"]["command"] = "p4 opened"
     assert not mission_guard.decide(payload).deny
 

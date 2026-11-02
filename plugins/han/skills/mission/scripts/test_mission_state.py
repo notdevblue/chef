@@ -188,6 +188,65 @@ def test_mission_set_rejects_bad_values(opened):
     assert opened.read("mission.md") == before
 
 
+@pytest.mark.parametrize("mutation,operation", [
+    ("markdown", "stage"), ("markdown", "confirm"), ("markdown", "resume"), ("markdown", "close"),
+    ("markdown", "doing"), ("markdown", "complete"), ("markdown", "share"),
+    ("corrupt-json", "stage"), ("missing-json", "stage"), ("missing-markdown", "stage"), ("missing-history", "stage"),
+])
+def test_question_integrity_precedes_progress_completion_and_sharing(opened, mutation, operation):
+    opened.add_unit()
+    if operation == "complete":
+        opened.ok("unit", "set", "M1", "--status", "doing")
+    opened.publish_question()
+    if mutation == "markdown":
+        path = opened.folder / "ask-1.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\nUnrecorded fictional answer\n", encoding="utf-8")
+    elif mutation == "corrupt-json":
+        (opened.folder / "questions/ask-1.json").write_text("{broken", encoding="utf-8")
+    else:
+        name = {"missing-json": "questions/ask-1.json", "missing-markdown": "ask-1.md",
+                "missing-history": "details/history/ask-1.md"}[mutation]
+        (opened.folder / name).unlink()
+    commands = {
+        "stage": ("mission", "set", "--stage", "impl"),
+        "confirm": ("mission", "set", "--confirm", "A=approved"),
+        "resume": ("mission", "set", "--state", "진행"),
+        "close": ("mission", "set", "--state", "닫힘"),
+        "doing": ("unit", "set", "M1", "--status", "doing"),
+        "complete": ("complete", "M1", "--receipt", "missing-receipt.json", "--review", "missing-review.json", "--done-evidence", "verified"),
+        "share": ("document", "share", "report.md"),
+    }
+    before = {str(path.relative_to(opened.folder)): path.read_bytes() for path in opened.folder.rglob("*") if path.is_file()}
+    error = opened.fail(*commands[operation])
+    assert "질문 기록 확인 필요" in error and "ask-1.md" in error
+    after = {str(path.relative_to(opened.folder)): path.read_bytes() for path in opened.folder.rglob("*") if path.is_file()}
+    assert after == before
+
+
+def test_pending_questions_allow_existing_progress_and_sharing_semantics(opened):
+    opened.add_unit()
+    opened.publish_question()
+    opened.ok("mission", "set", "--stage", "impl", "--confirm", "A=approved")
+    opened.ok("unit", "set", "M1", "--status", "doing")
+    opened.ok("document", "share", "report.md")
+    assert "ask-1.md 답 없음" in opened.ok("status")
+
+
+def test_bad_question_integrity_keeps_pause_reads_and_repair_available(opened):
+    opened.add_unit()
+    opened.publish_question()
+    path = opened.folder / "ask-1.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nUnrecorded fictional answer\n", encoding="utf-8")
+    assert "기록 확인 필요" in opened.ok("status")
+    assert "기록 확인 필요" in opened.ok("context")
+    opened.ok("unit", "list")
+    opened.ok("mission", "set", "--state", "중단")
+    opened.ok("question", "render", "ask-1.md")
+    opened.ok("question", "check")
+    opened.ok("mission", "set", "--state", "진행")
+    opened.ok("unit", "set", "M1", "--status", "doing")
+
+
 def make_poc(mission, name="x"):
     poc = mission.root / "Wiki" / "design" / "prototypes" / name / "index.html"
     poc.parent.mkdir(parents=True)
@@ -597,14 +656,14 @@ def test_auto_questions_include_only_root_documents_and_matching_details(opened)
 
 
 def test_hiding_question_details_uses_canonical_names_and_preserves_visibility(opened):
-    (opened.folder / "ask-1.md").write_text("# 질문\n", encoding="utf-8")
+    opened.publish_question()
     details = opened.folder / "details" / "ask-1.md"
-    details.parent.mkdir()
+    details.parent.mkdir(exist_ok=True)
     details.write_text("# 근거\n", encoding="utf-8")
     opened.ok("document", "share", "details/ask-1.md")
     assert opened.ok("document", "hide", "details\\ask-1.md") == "숨김: 변경 없음\n자동 표시 유지: details/ask-1.md"
     assert mission_state.shared_documents(str(opened.folder)) == set()
-    assert mission_state.auto_question_documents(str(opened.folder)) == {"ask-1.md", "details/ask-1.md"}
+    assert mission_state.auto_question_documents(str(opened.folder)) == {"ask-1.md", "details/ask-1.md", "details/history/ask-1.md"}
 
 
 def test_auto_questions_reject_private_symlink_aliases_and_escapes(opened):

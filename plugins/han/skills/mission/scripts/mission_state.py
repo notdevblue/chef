@@ -234,6 +234,7 @@ def auto_question_documents(folder):
 
 
 def share_documents(folder, names, expected_hashes=()):
+    require_question_integrity(folder)
     requested = list(dict.fromkeys(canonical_document_path(folder, name)[0] for name in names))
     contents = {}
     for name in requested:
@@ -460,6 +461,8 @@ def poc_relative_path(project, value):
 
 def cmd_mission_set(ctx, args):
     require_folder(ctx)
+    if args.stage is not None or args.confirm or args.state in ("진행", "닫힘"):
+        require_question_integrity(ctx.folder)
     path = ctx.path("mission.md")
     lines = read_text(path).split("\n")
     changes = []
@@ -527,6 +530,8 @@ def cmd_unit_add(ctx, args):
 
 def cmd_unit_set(ctx, args):
     require_folder(ctx)
+    if args.status == "doing":
+        require_question_integrity(ctx.folder)
     path = ctx.path(UNITS_FILE)
     rows = read_table(path, UNIT_HEADER)
     row = require_unit(rows, clean(args.id))
@@ -676,6 +681,12 @@ def question_inspections(folder):
 
 def unanswered_questions(folder, fields):
     return [name for name, summary, issue in question_inspections(folder) if not issue and summary.pending]
+
+
+def require_question_integrity(folder):
+    issues = [f"{name}: {issue}" for name, _, issue in question_inspections(folder) if issue]
+    if issues:
+        raise StateError("질문 기록 확인 필요: " + "; ".join(issues) + "; question check 후 answer/restore/render/publish 로 복구할 것")
 
 
 def active_lines(ctx, active, state):
@@ -836,6 +847,7 @@ def cmd_review_scope(ctx, args):
 
 def cmd_complete(ctx, args):
     require_folder(ctx)
+    require_question_integrity(ctx.folder)
     rows = read_table(ctx.path(UNITS_FILE), UNIT_HEADER)
     row = require_unit(rows, args.id)
     if row["status"] not in ("doing", "done"):

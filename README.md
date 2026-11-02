@@ -20,7 +20,7 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 | Grok 바깥 층 | `grok/` | 등록하지 않는 초안. 읽기 전용 셸 호출 목록. 실행 절차는 `plugins/han/grok/` |
 | Grok | `plugins/han/grok/` | 등록 스킬 여덟 개와 native 역할 다섯 개. 메인·슬롯 CLI가 역할별 하위 에이전트를 조율한다. SessionStart `new`·`load`와 미션 가드는 공유 훅 규칙을 따른다. `han-watch`·`han-handoff`는 등록하지 않는 안내 |
 | 미션 가드 | `plugins/han/hooks/mission_guard.py` | 미션 중 submit 등 금지 명령 차단(걸림줄) |
-| 질문 무결성 | `plugins/han/hooks/question_integrity.py` | 도구 실행 후 변경 없는 질문 입력은 성공한 검사 결과 재사용. 답변 종료 전에는 전체 검사 |
+| 질문 무결성 | `plugins/han/hooks/question_integrity.py` | 미션 진행·완료·공유 전에 질문 정본·생성본 검사. 참여 세션의 답변 종료 전에도 전체 검사 |
 | 어댑터 | `adapters/<이름>/` | 프로젝트별 값(`adapter.json`)과 절차(`adapter.md`) |
 
 Claude·Codex 훅은 규칙 주입·미션 가드·질문 무결성 3종이다. Grok은 SessionStart `new`·`load` 규칙 전달과 미션 가드를 지원한다. 세션 제목·메모리 안내·한국어 답변 차단 훅은 제공하지 않는다.
