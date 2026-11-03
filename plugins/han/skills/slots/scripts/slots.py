@@ -53,7 +53,6 @@ STATE_REFRESH_FAILED = "failed:refresh:"
 PREVIEW_LIMIT = 20
 ROWS_LOCK_TIMEOUT = 30
 EXCLUSIVE_LOCK_TIMEOUT = 30 * 60
-LOCK_STALE_SECONDS = 2 * 60 * 60
 LOCK_UNREADABLE_SECONDS = 10
 LOCK_POLL_SECONDS = 0.2
 
@@ -233,9 +232,10 @@ class FileLock:
         except OSError:
             return False
         self.holder = f"pid {pid}, {started or '시각 없음'}"
+        # Age alone cannot revoke a live process's critical section.
+        # Keep recovery of dead/self leftovers and old unreadable files.
         stale = (
-            age > LOCK_STALE_SECONDS
-            or pid == os.getpid()
+            pid == os.getpid()
             or (pid and not process_alive(pid))
             or (not pid and age > LOCK_UNREADABLE_SECONDS)
         )

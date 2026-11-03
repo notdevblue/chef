@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -1465,6 +1466,20 @@ def test_lock_left_behind_is_reclaimed(project, holder):
     hold_lock(project.lock_path("a"), dead_pid() if holder == "dead" else os.getpid())
     assert project.run("refresh", "a")[0] == slots.OK
     assert not project.lock_path("a").exists()
+
+
+@pytest.mark.parametrize("age", [1, 2 * 60 * 60 + 1])
+def test_live_holder_lock_is_never_reclaimed_by_age(project, live_pid, age):
+    path = project.lock_path("a")
+    hold_lock(path, live_pid)
+    original = path.read_bytes()
+    old = time.time() - age
+    os.utime(path, (old, old))
+    with pytest.raises(slots.LockBusy):
+        with slots.FileLock(str(path), "live holder"):
+            pass
+    assert path.read_bytes() == original
+    assert slots.process_alive(live_pid)
 
 
 def test_exclusive_step_fails_when_other_process_holds_the_lock(project, live_pid, monkeypatch):
