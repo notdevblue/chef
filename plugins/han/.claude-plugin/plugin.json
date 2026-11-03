@@ -4,7 +4,7 @@
   "author": {
     "name": "han"
   },
-  "version": "0.2.66",
+  "version": "0.2.67",
   "userConfig": {
     "adapters_dir": {
       "type": "string",

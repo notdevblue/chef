@@ -18,7 +18,8 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 1. `<plugin-root>/skills/mission/SKILL.md` 전체: 컨텐츠 확인 → PoC → 구현 계획 → 구현·검증·독립 리뷰 → 통합 검토·기록 감사 → 확인 C·종료·중단·이어서 하기.
 2. `<plugin-root>/grok/skills/han-mission/references/grok-roles.md`: 실제 역할·도구·모델·effort 계약.
 3. 공통 `references/verification-workflow.md`와 `references/usage-policy.md`: 검증 계획·입력 동결·receipt 재사용·리뷰 범위·완료 판정·작은 브리프.
-4. 작업 시점에 공통 절차가 가리키는 나머지 참고 자료. 양식·질문 기록·사람용 문서는 `<repo>/plugins/han/skills/mission/references/`에 있다.
+4. 모델 검사 대상이면 공통 `references/model-checking-workflow.md`: 조사부터 구현·검증·리뷰·환류까지 같은 TLA+/PlusCal 모델과 대응 근거를 재사용한다. PoC 생략과 모델 검사 생략은 별개다. 고정 모델 실행은 기존 verifier, 작성·수정은 구현 역할, 독립 대응 검토는 reviewer가 맡는다.
+5. 작업 시점에 공통 절차가 가리키는 나머지 참고 자료. 양식·질문 기록·사람용 문서는 `<repo>/plugins/han/skills/mission/references/`에 있다.
 
 공통 절차와 모든 하위 참조의 **런타임 전용 규칙**은 아래 Grok 계약으로 대체한다. 공통 단계·승인 범위·독립성·증거 요구는 그대로 따른다.
 Claude·Codex 모델 고정, fallback 에이전트, 도구 이름과 호출 예시는 Grok에 적용하지 않는다.
