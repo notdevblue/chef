@@ -42,11 +42,6 @@ Claude·Codex 훅은 규칙 주입·미션 가드·질문 무결성 3종이다. 
 한두 파일짜리 수정이나 하나로 끝나는 작업(티어 S)은 미션 없이 직접 하거나 한 번 파견하고, 통과할 때까지 반복은 루프로 돌린다.
 `init --tier S`는 `--force-tier` 없이 거부된다. 슬롯은 새 어댑터 기준 2~3개로 시작하고 필요할 때 늘린다.
 
-## 동작 모델 검사
-
-상태 전이·동시 요청·재시도·취소·복구처럼 실행 순서가 정확성에 영향을 주는 미션은 TLA+/PlusCal 모델을 조사부터 설계·계획·구현·검증·리뷰·환류까지 재사용한다. PoC 생략과 모델 검사 생략은 별개다. 별도 승인 단계는 추가하지 않으며 단순 UI·문서·계산은 기존 검사를 우선한다.
-[적용·실행·대응·재사용 절차](plugins/han/skills/mission/references/model-checking-workflow.md)를 따른다. 실제 검사에는 Java와 승인된 TLA+ tools, 결과 판독기가 필요하다. 이 플러그인이 도구를 자동 설치하거나 TLC 판독기를 내장한 것은 아니다. 모델 통과는 코드 정확성·커버리지의 증명이 아니며 실제 테스트와 독립 리뷰는 유지한다.
-
 ## Codex CLI에 설치
 
 Claude용과 같은 저장소에서 설치하며, Codex용 진입점은 `plugins/han/.codex-plugin/plugin.json`이다.
@@ -236,7 +231,6 @@ Grok은 native `~/.grok/plugins/han`의 대상과 `grok inspect`가 선택한 �
 - 로컬 디렉터리 마켓플레이스라도 설치본은 캐시 복사본이다. 고친 뒤 `claude plugin marketplace update han-orchestrator`와
   플러그인 업데이트(또는 `/reload-plugins`)로 반영한다. 버전을 올리면 확실히 갱신된다(`plugin.json`·`marketplace.json`).
   Grok은 native `~/.grok/plugins/han`의 대상과 `grok inspect` 결과로 반영을 확인한다.
-- 모델 검사 지침·패키징: `python -m pytest plugins/han/skills/mission/scripts/test_model_checking_docs.py -q -p no:cacheprovider` (TLC 실행이나 프로젝트 모델의 정확성을 검증하는 테스트는 아님)
 - 가드 테스트: `python -m pytest plugins/han/hooks -q -p no:cacheprovider`
 - 어댑터 회귀: `python plugins/han/skills/adapter-init/scripts/check_guard.py <어댑터 이름>`
 - 슬롯 테스트: `python -m pytest plugins/han/skills/slots/scripts -q -p no:cacheprovider`
