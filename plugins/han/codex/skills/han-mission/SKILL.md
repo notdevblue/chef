@@ -28,6 +28,10 @@ PoC가 필요 없는 작업이면 A를 건너뛴다. 확인과 멈춤 질문은 
 - `references/codex-roles.md`를 읽고 사용 가능한 서브에이전트 도구로 역할별 생성·결과 수집·후속 지시를 한다.
   등록되지 않은 역할 이름을 도구에 넘기지 않는다. research와 review는 부모 설정을 상속한다.
   implement는 GPT-6.1 Sol / high, implementSmall과 verify는 GPT-6 Luna / high로 고정하며 미등록 파견 세부는 `codex-roles.md`를 따른다.
+- 어댑터 `rolePolicy`(`runtimes.codex.rolePolicy`가 최상위 값을 덮는다)는 이 스킬이 역할을 파견할 때만 적용한다. 없으면 `model: "definition"`, `subagents: true`다.
+  `model: "inherit"`면 미등록 파견에서 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며 위의 고정보다 우선한다(등록된 역할은 정의의 모델이 적용되므로 그 경우를 보고한다). `definition`이면 위 고정을 따른다.
+  `subagents: false`면 `han_developer_medium`(과 `roles`가 가리키는 같은 계열 역할)의 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다.
+  도구로 막는 강제 차단이 아니라 역할 정의가 브리프를 따르게 하는 것이며, 코디네이터가 반환된 분할안으로 새 단위를 파견한다.
 - 어댑터의 `runtimes.codex` 덮어쓰기를 적용한다. 병합 순서는 adapter → adapter.runtimes.codex → local → local.runtimes.codex다.
 - CLI에서 hooks 기능이 켜져 있고 `/hooks`에서 현재 플러그인 훅을 신뢰한 상태여야 한다.
   단독 마커 뒤 ACTIVE와 훅 안내가 모두 확인되기 전에는 미션 파일·프로젝트 파일을 쓰지 않는다.
@@ -298,7 +302,7 @@ PoC 명세와의 일치로 쓴다.
    승인 범위 안의 수정과 남은 범위를 새 브리프로 파견한다. 리뷰 3라운드·timebox 상한과 실제 멈춤 조건은 유지한다.
 3. **검증 파견** — 브리프의 타깃 명령·입력·환경으로 검증 계획 JSON을 한 번 만들고 `roles.verify` 하나에
    `verify <id> --plan …` 실행과 결과 수집을 맡긴다. 역할이 없으면 `codex-roles.md`의 verify 지시를 쓴다.
-   - GPT-6 Luna / high로 고정한다. 모델·추론 수준을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
+   - GPT-6 Luna / high로 고정한다(`rolePolicy.model`이 `inherit`면 역할 정책이 우선). 모델·추론 수준을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
    - Unity Refresh·컴파일·EditMode·Play 순서와 입력 동결은 `../../../skills/mission/references/verification-workflow.md`를 따른다.
    - Play 브리프에는 대상 프로젝트·조작 순서·기대 결과·증거 경로를 넣는다. 실패·예상 밖 상태는 증거와 미완료 이유를 메인에 반환한다.
    - 검증자는 코드·테스트·설정·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 원인 분석·수정·독립 리뷰·완료 판정은 분리한다.

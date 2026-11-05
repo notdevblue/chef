@@ -88,6 +88,41 @@ def test_inject_option_values_enable_injection(tmp_path, value):
     assert output["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
 
 
+@pytest.mark.parametrize("value", ["shared", "SHARED", " Shared "])
+def test_shared_value_drops_only_personal_rules(tmp_path, value):
+    root = make_root(tmp_path, {"a.md": "공통", "personal-rules.md": "개인", "main-session.md": "메인 전용"})
+    assert context_of(run_hook(root, inject=value)) == session_rules.HEADER + "\n\n공통\n\n메인 전용"
+    assert context_of(run_hook(root, payload=SUBAGENT_START, inject=value)) == session_rules.HEADER + "\n\n공통"
+
+
+def test_on_value_keeps_personal_rules(tmp_path):
+    root = make_root(tmp_path, {"a.md": "공통", "personal-rules.md": "개인", "main-session.md": "메인 전용"})
+    assert context_of(run_hook(root, inject="on")) == session_rules.HEADER + "\n\n공통\n\n개인\n\n메인 전용"
+    assert context_of(run_hook(root, payload=SUBAGENT_START, inject="on")) == session_rules.HEADER + "\n\n공통\n\n개인"
+
+
+def test_disable_env_wins_over_shared_value(tmp_path):
+    root = make_root(tmp_path, {"a.md": "규칙"})
+    assert run_hook(root, {"HAN_RULES_DISABLE": "1"}, inject="shared") == {}
+    assert run_hook(root, {"HAN_RULES_DISABLE": "1"}, payload=SUBAGENT_START, inject="shared") == {}
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("event", session_rules.EVENTS)
+def test_real_shared_value_drops_personal_rules_and_keeps_document_materials(runtime, event):
+    root = HOOKS_DIR.parent / "codex" if runtime == "codex" else HOOKS_DIR.parent
+    payload = {"hook_event_name": event}
+    shared = context_of(run_hook(HOOKS_DIR.parent, payload=payload, inject="shared", runtime=runtime))
+    full = context_of(run_hook(HOOKS_DIR.parent, payload=payload, inject="on", runtime=runtime))
+    personal = (root / "rules" / "personal-rules.md").read_text(encoding="utf-8-sig").strip()
+    documents = (root / "rules" / "human-documents.md").read_text(encoding="utf-8-sig").strip()
+    assert personal in full
+    assert personal not in shared
+    assert documents in shared
+    assert "## 사람용 문서 자료" in shared
+    assert ("## Answering" in shared) == (event == "SessionStart")
+
+
 def test_disable_env_wins_over_inject_option(tmp_path):
     root = make_root(tmp_path, {"a.md": "규칙"})
     assert run_hook(root, {"HAN_RULES_DISABLE": "1"}, inject="on") == {}

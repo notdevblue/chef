@@ -125,6 +125,7 @@
     "reviewLoopSkill": "review-loop",
     "implementSmall": "han:dev-small"
   },
+  "rolePolicy": { "model": "definition", "subagents": true },
   "verify": {
     "backend": "mcp",
     "grades": [

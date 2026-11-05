@@ -17,3 +17,4 @@ python "${CLAUDE_PLUGIN_ROOT}/skills/doctor/scripts/doctor.py"
   닫기(`--force-close-stale`)는 사용자가 그 미션을 지정해 승인했을 때만 `/han:mission` 절차로 한다.
 - `version` WARN은 설치본이 저장소보다 오래됐다는 뜻이다. 업데이트는 저장소 AGENTS.md의 배포 절차를 따른다.
 - `guard-cases` FAIL은 `python "${CLAUDE_PLUGIN_ROOT}/skills/adapter-init/scripts/check_guard.py" <어댑터>`로 어긋난 표본을 본다.
+- `role-policy` FAIL·WARN은 `adapter.json`·`local.json`의 `rolePolicy`(및 `runtimes.codex|grok.rolePolicy`)를 고친다. `model`은 `definition`/`inherit`, `subagents`는 true/false, 다른 키는 무시된다.

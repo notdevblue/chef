@@ -91,6 +91,57 @@ def check_active(report, adapter, root, runtime):
         report.add("OK", "active", f"{root}: {active.id} 진행 중")
 
 
+ROLE_POLICY_MODELS = ("definition", "inherit")
+ROLE_POLICY_KEYS = ("model", "subagents")
+ROLE_POLICY_OVERLAYS = ("codex", "grok")
+
+
+def role_policy_sources(adapter_path):
+    sources = []
+    try:
+        sources.append(("adapter.json", mission_guard.read_json_file(adapter_path)))
+    except (OSError, ValueError):
+        return sources
+    sources.append(("local.json", mission_guard.read_local(adapter_path, [])))
+    return sources
+
+
+def check_role_policy(report, name, adapter_path):
+    for label, source in role_policy_sources(adapter_path):
+        if not isinstance(source, dict):
+            continue
+        entries = [("rolePolicy", source.get("rolePolicy"), "rolePolicy" in source)]
+        runtimes = source.get("runtimes")
+        if not isinstance(runtimes, dict):
+            runtimes = {}
+        claude_overlay = runtimes.get("claude")
+        if isinstance(claude_overlay, dict) and "rolePolicy" in claude_overlay:
+            report.add("WARN", "role-policy", f"{name}: {label} runtimes.claude.rolePolicy 는 병합되지 않아 무시됨. Claude 정책은 최상위 rolePolicy 에 둔다")
+        for runtime in ROLE_POLICY_OVERLAYS:
+            overlay = runtimes.get(runtime)
+            if isinstance(overlay, dict):
+                entries.append((f"runtimes.{runtime}.rolePolicy", overlay.get("rolePolicy"), "rolePolicy" in overlay))
+        for key, policy, present in entries:
+            if not present:
+                continue
+            where = f"{name}: {label} {key}"
+            if not isinstance(policy, dict):
+                report.add("FAIL", "role-policy", f"{where} 는 객체여야 함")
+                continue
+            valid = True
+            if "model" in policy and policy["model"] not in ROLE_POLICY_MODELS:
+                report.add("FAIL", "role-policy", f"{where}.model 은 {'/'.join(ROLE_POLICY_MODELS)} 중 하나여야 함 ({policy['model']!r})")
+                valid = False
+            if "subagents" in policy and not isinstance(policy["subagents"], bool):
+                report.add("FAIL", "role-policy", f"{where}.subagents 는 true/false 여야 함 ({policy['subagents']!r})")
+                valid = False
+            for unknown in sorted(k for k in policy if k not in ROLE_POLICY_KEYS):
+                report.add("WARN", "role-policy", f"{where}: 알 수 없는 키 {unknown!r} 무시")
+                valid = False
+            if valid:
+                report.add("OK", "role-policy", f"{where}: {json.dumps(policy, ensure_ascii=False, sort_keys=True)}")
+
+
 def check_adapter(report, name, adapter_path, roots, runtime):
     if not os.path.isfile(adapter_path):
         report.add("FAIL", "adapter", f"{name}: adapter.json 없음 ({adapter_path})")
@@ -105,6 +156,7 @@ def check_adapter(report, name, adapter_path, roots, runtime):
         report.add("WARN", "adapter", f"{name}: {problem}")
     if not problems:
         report.add("OK", "adapter", f"{name}: {adapter_path}")
+    check_role_policy(report, name, adapter_path)
     cases = os.path.join(os.path.dirname(adapter_path), "guard-cases.json")
     if os.path.isfile(cases):
         try:

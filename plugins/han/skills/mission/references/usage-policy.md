@@ -7,6 +7,7 @@ Claude의 정해진 단순 수정은 `han:dev-small`, 좁은 재리뷰는 `han:r
 모델·effort를 지정할 수 없으면 실제 설정을 미확인으로 보고하고 역할 이름만으로 적용됐다고 말하지 않는다.
 Codex의 역할·모델 배정은 `../../../codex/skills/han-mission/references/codex-roles.md`를 유지한다.
 Sonnet 설정을 Codex 역할에 복사하지 않는다.
+어댑터 `rolePolicy.model`이 `inherit`면 이 배정보다 그 정책이 우선한다(Claude는 코디네이터 모델 별칭, Codex는 부모 상속).
 공통 계약·구조 변경·원인 불명·판단 충돌이면 근거와 남은 범위를 메인에 반환하고 더 깊은 검토로 확대한다.
 테스트 실행자는 원인 분석이나 모델 전환을 직접 하지 않는다.
 

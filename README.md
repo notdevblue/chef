@@ -10,7 +10,7 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 
 | 구성 | 위치 | 하는 일 |
 | --- | --- | --- |
-| 개인 규칙 | `plugins/han/rules/` | 플러그인 설정 `inject_rules`가 on 일 때만, 세션 시작·재개·압축 때 `SessionStart` 훅이, 서브에이전트 시작 때 `SubagentStart` 훅이 컨텍스트에 넣는다(예전 `~/.claude/CLAUDE.md`) |
+| 개인 규칙 | `plugins/han/rules/` | 플러그인 설정 `inject_rules`가 `on`이거나 `shared`일 때만(`shared`는 `personal-rules.md`를 뺀 나머지), 세션 시작·재개·압축 때 `SessionStart` 훅이, 서브에이전트 시작 때 `SubagentStart` 훅이 컨텍스트에 넣는다(예전 `~/.claude/CLAUDE.md`) |
 | 에이전트 | `plugins/han/agents/` | `han:researcher`, `han:dev-small`, `han:dev-medium`, `han:verifier` |
 | `/han:mission` | `plugins/han/skills/mission/` | 컨텐츠 확인 → PoC → 구현 → 검토, 사람 확인 A·B·C. 상태 파일은 `scripts/mission_state.py`로만 쓰고, 끝에 기록 감사 |
 | `/han:distill` | `plugins/han/skills/distill/` | 대화 기록에서 사용자 피드백을 뽑아 가이드·메모리·개인 규칙·플러그인 반영 후보로 분류, 고른 것만 반영. 미션은 확인 C 직전에 자동 |
@@ -60,6 +60,8 @@ codex -C <project>
 ```
 
 `HAN_CODEX_INJECT_RULES`는 개인 규칙을 쓸 때만 설정한다. 기본값은 꺼짐이고 `HAN_RULES_DISABLE=1`이 우선한다.
+값 `on`(`true`·`1`·`yes`)은 `codex/rules/`의 규칙을 모두 넣고, `shared`는 `personal-rules.md`만 빼고 문서 규칙·메인 세션 규칙·사람용 문서 자료 안내를 넣는다.
+Grok의 `HAN_GROK_INJECT_RULES`도 같은 값을 쓴다.
 셸에서 지정한 환경변수 값은 Codex를 시작할 때 전달되어야 한다. SessionStart 훅이 부모 셸 환경을 바꾸지는 않는다.
 `HAN_ADAPTERS_DIR`은 이 셸 값이 우선한다. 지속 설정은 새 config key 없이 기존 Codex 설정의
 `[shell_environment_policy.set]`에 둘 수 있다. Codex가 `CODEX_HOME`을 설정했으면 `<CODEX_HOME>/config.toml`, 아니면 `~/.codex/config.toml`이다.
@@ -170,7 +172,7 @@ python -m pytest plugins/han/grok/test_han_state.py -q -p no:cacheprovider
 필요 조건: Windows, Windows Terminal(`wt.exe`), Python 3, Perforce CLI(`p4`), Unity(슬롯 임포트용),
 어댑터가 부르는 프로젝트 도구. 예시의 `Tool/VcsWrapper` 등은 가상의 이름이며 이 플러그인에 포함되지 않는다.
 `<repo>`는 이 저장소를 받은 폴더이고 `<project>`는 작업할 프로젝트 폴더다.
-개인 규칙(`inject_rules`)은 작성자 취향이라 보통 켜지 않는다.
+개인 규칙(`inject_rules`)은 작성자 취향이라 보통 켜지 않는다. 취향 규칙 없이 문서 규칙·메인 세션 규칙·사람용 문서 자료 안내만 받으려면 `shared`를 쓴다.
 
 1. 이 저장소를 받는다(예: `D:/Work/han`).
 2. Python 3이 PATH에 있는지 본다: `python <repo>/plugins/han/skills/adapter-init/scripts/check_guard.py --doctor`.
@@ -179,7 +181,7 @@ python -m pytest plugins/han/grok/test_han_state.py -q -p no:cacheprovider
    claude plugin marketplace add <repo>
    claude plugin install han@han-orchestrator --scope user --config adapters_dir=<repo>/adapters
    ```
-   개인 규칙을 쓰려면 `--config inject_rules=on`을 더한다.
+   개인 규칙을 쓰려면 `--config inject_rules=on`을, `personal-rules.md`만 빼려면 `--config inject_rules=shared`를 더한다.
    설치본은 플러그인 캐시에서 돌아서 플러그인 설정 `adapters_dir`(이 저장소의 `adapters` 폴더 경로)이 없으면
    가드가 어댑터를 못 찾는다. `install`이 이 값을 묻지 않을 수 있으니 설치할 때 같이 주거나 설치 뒤에 확인·저장한다.
    ```
@@ -221,6 +223,7 @@ Grok은 native `~/.grok/plugins/han`의 대상과 `grok inspect`가 선택한 �
   Codex는 `han_verifier`(GPT-6 Luna / high)로 고정한다. 구현자는 공유 Unity 검증을 직접 실행하지 않는다.
   검증자는 코드·검증 범위·모델을 바꾸지 않고 실패·예상 밖 상태·미확인 증거를 메인에 반환한다.
   공유 Unity 순서와 에디터 수명, 최종 완료 판정은 코디네이터가 맡고 독립 리뷰는 별도로 받는다.
+- 어댑터 `rolePolicy`(`{"model": "definition"|"inherit", "subagents": true|false}`)는 mission 스킬이 역할을 파견할 때만 적용한다. 없으면 `definition`·`true`로 위 고정을 따른다. `inherit`면 Claude는 코디네이터 모델 별칭을 Agent `model` 인자로 넘기고 Codex는 미등록 파견의 `model`·`reasoning_effort`를 생략해 부모를 상속하며, 이때 위 고정보다 정책이 우선한다. `subagents: false`면 `dev-medium`류 브리프에 하위 파견 금지·분할안 반환을 넣는다(도구 차단 아님). Grok은 이미 충족된다. Claude는 최상위, Codex·Grok은 `runtimes.<런타임>.rolePolicy`에 둔다.
 - 승인된 계약과 파일 소유가 독립적인 구현은 병렬로 진행한다. 관련 하위 작업까지 반환을 모으고 필요한
   `.meta`·생성물·CL 정리를 마친 뒤 검증 입력을 고정한다. Unity 검증은 하나씩 실행하고, 검증 중 입력을 바꾸지 않는다.
   브리프에는 해당 작업의 파일·CL 소유, 기능 완료 범위와 반례를 넣는다. 같은 CL에 속해도 마일스톤별 검증 기록은 따로 유지한다.

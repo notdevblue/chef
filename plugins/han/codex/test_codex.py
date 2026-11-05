@@ -329,6 +329,25 @@ def test_codex_rules_are_opt_in_and_do_not_export_claude_env(tmp_path, monkeypat
     assert not session_rules.decide(payload, "codex")
 
 
+def test_codex_shared_value_drops_personal_rules_only(monkeypatch):
+    monkeypatch.delenv("HAN_RULES_DISABLE", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_INJECT_RULES", raising=False)
+    rules = PLUGIN / "codex/rules"
+    personal = (rules / "personal-rules.md").read_text(encoding="utf-8-sig").strip()
+    documents = (rules / "human-documents.md").read_text(encoding="utf-8-sig").strip()
+    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", "on")
+    full = session_rules.decide({"hook_event_name": "SessionStart"}, "codex")["hookSpecificOutput"]["additionalContext"]
+    assert personal in full
+    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", " Shared ")
+    for event, has_main in (("SessionStart", True), ("SubagentStart", False)):
+        context = session_rules.decide({"hook_event_name": event}, "codex")["hookSpecificOutput"]["additionalContext"]
+        assert personal not in context
+        assert documents in context and "## 사람용 문서 자료" in context
+        assert ("## Answering" in context) == has_main
+    monkeypatch.setenv("HAN_RULES_DISABLE", "1")
+    assert not session_rules.decide({"hook_event_name": "SessionStart"}, "codex")
+
+
 @pytest.mark.parametrize("disable", [False, True])
 def test_codex_transcript_context_is_available_without_personal_rules(tmp_path, monkeypatch, disable):
     env_file = tmp_path / "claude-env"

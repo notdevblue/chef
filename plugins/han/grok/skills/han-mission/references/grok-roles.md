@@ -31,6 +31,11 @@ native manifest는 `<plugin-root>/grok/agents` 폴더를 등록한다. 각 `.md`
 지원되지 않는 명시적 역할을 표의 기본값이나 `general-purpose`로 조용히 바꾸지 않는다. 필요한 역할을 사용할 수 없으면 그 단계를 미확인으로 반환한다.
 프로젝트의 reviewLoopSkill은 실제 설치 파일을 읽되, 그 안의 Claude 모델·에이전트·파견·중첩 실행 지시는 이 Grok 매핑과 깊이 제한으로 대체한다.
 
+## 역할 정책
+
+어댑터 `rolePolicy`(`runtimes.grok.rolePolicy`가 최상위 값을 덮는다)는 mission 스킬이 역할을 파견할 때만 적용한다. Grok 역할은 정의가 이미 `model: inherit`이고 깊이 1이라 `model: "inherit"`와 `subagents: false`는 추가 동작 없이 이미 충족된다.
+`model: "definition"`이나 `subagents: true`여도 이 문서의 Grok 정의대로 실행한다. 정의의 모델·effort를 정책으로 바꾸지 않고 자식 파견을 열지도 않는다. 실제 자식의 모델은 위 방법으로 확인해 보고한다.
+
 ## 실제 도구로 실행
 
 도구의 현재 스키마가 기준이다. native Grok의 모델 노출 이름은 다음과 같다.

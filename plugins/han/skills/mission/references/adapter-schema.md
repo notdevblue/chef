@@ -102,6 +102,7 @@ Grok 전용 값은 `runtimes.grok` 객체에 둔다. 병합 순서는 `adapter.j
     "review": "code-reviewer",
     "reviewLoopSkill": "review-loop"
   },
+  "rolePolicy": { "model": "inherit", "subagents": false },
   "verify": {
     "backend": "mcp",
     "grades": ["editmode-pass", "pytest-pass", "compile-only", "doc-only"]
@@ -162,8 +163,11 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `mission.staleHours` | 선택. ACTIVE 끊김 의심 기준 시간(기본 24, 0이면 끔). 환경변수 `HAN_STALE_HOURS`가 우선. 표시만 하고 자동으로 닫지 않는다(`close-stale --force-close-stale`) |
 | `roles.*` | 역할별 실제 에이전트·스킬 이름. 없는 역할은 `general-purpose` |
 | `roles.implementSmall` | 승인된 문서·정해진 소규모 수정 담당. 없으면 implement. 구현과 독립 리뷰 분리는 유지 |
-| `roles.verify` | 테스트·Unity Play 실행 전담. 없으면 `han:verifier`. Sonnet 5.5 / high 고정, 코드 수정·모델 전환·완료 판정 금지 |
+| `roles.verify` | 테스트·Unity Play 실행 전담. 없으면 `han:verifier`. Sonnet 5.5 / high 고정(`rolePolicy.model`이 `inherit`면 정책 우선), 코드 수정·모델 전환·완료 판정 금지 |
 | `roles.audit` | 미션 끝 기록 감사(SKILL §6의 4)를 맡을 읽기 전용 에이전트. 없으면 `roles.review`. 구현 역할과 다른 모델이면 더 좋다 |
+| `rolePolicy` | 선택. 이 플러그인 스킬이 역할을 파견할 때의 정책 `{"model": "definition" 또는 "inherit", "subagents": true 또는 false}`. 없거나 키가 없으면 `model: "definition"`, `subagents: true`(기존 동작). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.rolePolicy`·`runtimes.grok.rolePolicy`가 기존 깊은 병합으로 최상위 값을 덮는다. `roles`의 이름 매핑은 바꾸지 않는다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다 |
+| `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex에서 미등록 파견의 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
+| `rolePolicy.subagents` | `false`면 하위 파견을 허용하던 역할(Claude `han:dev-medium`, Codex `han_developer_medium`)의 파견 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다. 해당 역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막는 강제 차단은 아니다. Grok 역할은 어차피 자식을 띄우지 않는다 |
 | `verify.backend` | `mcp` / `cli` / `dotnet` — 엔진 검증 수단. 명령 자체는 `adapter.md` |
 | `verify.grades` | 이 프로젝트에서 낼 수 있는 검증 등급 |
 | `report.push` | 마일스톤마다 푸시 알림을 보낼지 |

@@ -3,6 +3,7 @@
 코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
 Claude는 `han:verifier`의 Sonnet 5.5 / high, Codex는 `han_verifier`의 GPT-6 Luna / high로 고정한다.
 등록되지 않은 Codex 역할은 `codex-roles.md`의 명시적 모델·추론 수준과 지시로 파견한다.
+어댑터 `rolePolicy.model`이 `inherit`면 두 런타임 모두 이 고정보다 그 정책이 우선한다(각 mission 스킬의 역할 정책).
 검증자는 코드·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 실패·예상 밖 상태는 증거와 미완료 이유를 반환한다.
 검증 입력을 스냅샷으로 확정한 시점부터 결과 수집이 끝날 때까지 해당 입력을 바꾸는 작업을 동결한다.
 공유 Unity는 코디네이터가 Refresh·컴파일·EditMode·Play 순서를 정하고, 관련 구현자와 그 하위 작업이 모두 반환하거나 정지되어 미완료임을 확인한 뒤 verifier 한 명만 실행한다. 검증 준비에서 필요한 `.meta` 생성·생성물 생성·CL 정리를 마친다.

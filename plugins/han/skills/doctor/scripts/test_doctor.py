@@ -47,6 +47,93 @@ def test_doctor_reports_registry_adapter_cases_and_stale_active(tmp_path, monkey
     assert active.exists()  # 읽기 전용
 
 
+def write_role_policy(adapters, adapter_extra=None, local=None):
+    path = adapters / "t" / "adapter.json"
+    adapter = json.loads(path.read_text(encoding="utf-8"))
+    adapter.update(adapter_extra or {})
+    path.write_text(json.dumps(adapter), encoding="utf-8")
+    if local is not None:
+        (adapters / "t" / "local.json").write_text(json.dumps(local), encoding="utf-8")
+
+
+def role_policy_rows(report):
+    return [(row["level"], row["text"]) for row in report.rows if row["area"] == "role-policy"]
+
+
+def test_doctor_role_policy_absent_adds_no_rows(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    assert role_policy_rows(doctor.run("claude")) == []
+
+
+def test_doctor_role_policy_valid_values_are_ok(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"rolePolicy": {"model": "inherit", "subagents": False},
+                                 "runtimes": {"codex": {"rolePolicy": {"model": "definition"}}, "grok": {"rolePolicy": {"subagents": True}}}},
+                      local={"rolePolicy": {"model": "definition"}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    report = doctor.run("claude")
+    rows = role_policy_rows(report)
+    assert [level for level, _ in rows] == ["OK"] * 4
+    assert not report.failed
+
+
+@pytest.mark.parametrize("policy,needle", [
+    ({"model": "same"}, "model"),
+    ({"model": True}, "model"),
+    ({"subagents": "no"}, "subagents"),
+    ({"subagents": 0}, "subagents"),
+    ("inherit", "객체"),
+])
+def test_doctor_role_policy_bad_values_fail(tmp_path, monkeypatch, policy, needle):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"rolePolicy": policy})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    report = doctor.run("claude")
+    rows = role_policy_rows(report)
+    assert [level for level, _ in rows] == ["FAIL"] and needle in rows[0][1]
+    assert report.failed
+
+
+def test_doctor_role_policy_unknown_key_warns(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"rolePolicy": {"model": "inherit", "effort": "high"}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = role_policy_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["WARN"] and "effort" in rows[0][1]
+
+
+@pytest.mark.parametrize("source", ["adapter", "local"])
+@pytest.mark.parametrize("runtime", ["codex", "grok"])
+def test_doctor_role_policy_runtime_overlay_values_are_checked(tmp_path, monkeypatch, source, runtime):
+    adapters, _ = make_registry(tmp_path)
+    overlay = {"runtimes": {runtime: {"rolePolicy": {"model": "other", "subagents": "x"}}}}
+    if source == "adapter":
+        write_role_policy(adapters, overlay)
+    else:
+        write_role_policy(adapters, local=overlay)
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = role_policy_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["FAIL", "FAIL"]
+    assert all(f"runtimes.{runtime}.rolePolicy" in text and f"{source}.json" in text for _, text in rows)
+
+
+@pytest.mark.parametrize("source", ["adapter", "local"])
+def test_doctor_role_policy_claude_overlay_warns_ignored(tmp_path, monkeypatch, source):
+    adapters, _ = make_registry(tmp_path)
+    overlay = {"runtimes": {"claude": {"rolePolicy": {"model": "inherit"}}}}
+    if source == "adapter":
+        write_role_policy(adapters, overlay)
+    else:
+        write_role_policy(adapters, local=overlay)
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    report = doctor.run("claude")
+    rows = role_policy_rows(report)
+    assert [level for level, _ in rows] == ["WARN"]
+    assert "runtimes.claude.rolePolicy" in rows[0][1] and f"{source}.json" in rows[0][1]
+    assert not report.failed
+
+
 def test_doctor_without_registry_fails(tmp_path, monkeypatch):
     monkeypatch.setenv("HAN_ADAPTERS_DIR", str(tmp_path / "none"))
     report = doctor.run("codex")
