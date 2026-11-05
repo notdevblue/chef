@@ -1,6 +1,6 @@
 # Game 미션 어댑터 (예시)
 
-`/han:mission`이 Unity + Perforce 프로젝트에서 쓰는 절차의 예시임. 기계가 읽는 값은 같은 폴더의 `adapter.json`,
+`/chef:mission`이 Unity + Perforce 프로젝트에서 쓰는 절차의 예시임. 기계가 읽는 값은 같은 폴더의 `adapter.json`,
 계약은 플러그인의 `skills/mission/references/adapter-schema.md`. 이 폴더를 `adapters/<내 프로젝트>/`로 복사해
 이름·경로·명령을 내 프로젝트에 맞게 고쳐 씀. 여기 적힌 절차가 프로젝트 문서와 어긋나면 문서와 코드가 맞고, 이 파일을 고침.
 
@@ -93,7 +93,7 @@ Codex 슬롯은 `runtimes.codex.slots.prepare`를 쓰고 Claude 설정·메모�
 
 ## 슬롯 준비
 
-슬롯 워크스페이스(`/han:slots`)를 쓰는 프로젝트만 적음. 새 워크스페이스가 빌드·검증 가능해지기까지의 단계와 실측 시간.
+슬롯 워크스페이스(`/chef:slots`)를 쓰는 프로젝트만 적음. 새 워크스페이스가 빌드·검증 가능해지기까지의 단계와 실측 시간.
 
 | 단계 | 명령 | 비고 |
 | --- | --- | --- |

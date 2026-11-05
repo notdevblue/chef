@@ -1,6 +1,6 @@
 # 저장소 작업 지침
 
-개발·설치·업데이트의 기준 저장소는 `https://github.com/notdevblue/han-orchestrator`다. 다른 저장소의 과거 이력을 이 저장소로 가져오지 않는다.
+개발·설치·업데이트의 기준 저장소는 `https://github.com/notdevblue/chef`다. 다른 저장소의 과거 이력을 이 저장소로 가져오지 않는다.
 
 ## 공개 저장소 경계
 
@@ -23,10 +23,10 @@
 - 검증은 `README.md`의 관련 절차를 따른다. 변경 없는 입력의 유효한 검증 결과는 재사용한다.
 - 플러그인 배포 내용이 바뀌면 해당 버전을 올리고 Claude의 plugin·marketplace 버전을 맞춘다. 공통 코드 변경이면 양쪽 버전을 올린다. 저장소 지침처럼 배포 내용이 그대로인 변경에는 불필요하게 버전을 올리지 않는다.
 - 커밋을 push하고 원격 브랜치의 SHA가 일치하는지 확인한다. force push는 하지 않는다.
-- Claude는 `claude plugin marketplace update han-orchestrator`와 `claude plugin update han@han-orchestrator`를 실행한다.
-- Codex는 `codex plugin add han-codex@han-orchestrator-codex`로 설치본을 갱신한다.
-- Grok은 `~/.grok/plugins/han`이 이번 push 체크아웃의 `plugins/han`을 가리키도록 등록한다. 기존 대상이 있으면 실제 대상을 확인하고 덮어쓰지 않는다. 전환 전 `~/.grok/config.toml`과 `~/.grok/skills/han-*` 링크 정보를 저장하고, 기존 han 전용 `[skills].paths` 항목과 `han-*` 링크만 등록 해제한다. 다른 스킬 설정은 보존한다.
-- `grok inspect`에서 native `han`이 이번 체크아웃을 선택하고 스킬 8개·훅 1개와 native 역할 5개(`han:researcher`, `han:dev-small`, `han:dev-medium`, `han:verifier`, `han:reviewer`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `provides.agents`는 등록 경로 수이므로 역할 수로 판단하지 않는다. `han-watch`·`han-handoff`가 없어야 한다. `grok plugin install` 성공만으로 선택된 플러그인을 판단하지 않는다. compat `han`이 native 경로보다 우선할 수 있다.
+- Claude는 `claude plugin marketplace update chef`와 `claude plugin update chef@chef`를 실행한다.
+- Codex는 `codex plugin add chef@chef-codex`로 설치본을 갱신한다.
+- Grok은 `~/.grok/plugins/chef`가 이번 push 체크아웃의 `plugins/chef`를 가리키도록 등록한다. 기존 대상이 있으면 실제 대상을 확인하고 덮어쓰지 않는다. 전환 전 `~/.grok/config.toml`과 `~/.grok/skills/han-*`·`chef-*` 링크 정보를 저장하고, 이전 이름(`han`)의 `~/.grok/plugins/han` 등록과 이 플러그인 전용 `[skills].paths` 항목, `han-*`·`chef-*` 링크만 등록 해제한다. 다른 스킬 설정은 보존한다.
+- `grok inspect`에서 native `chef`가 이번 체크아웃을 선택하고 스킬 8개·훅 1개와 native 역할 5개(`chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:reviewer`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `provides.agents`는 등록 경로 수이므로 역할 수로 판단하지 않는다. `chef-watch`·`chef-handoff`가 없어야 한다. `grok plugin install` 성공만으로 선택된 플러그인을 판단하지 않는다. compat `chef`가 native 경로보다 우선할 수 있다.
 - 선택된 native 경로의 manifest·스킬 파일과 그 파일이 부르는 공유 스크립트를 push한 커밋과 대조한다. 다른 작업의 미커밋 변경이 그 파일에 있으면 반영으로 치지 않는다.
 - 설치 버전과 캐시 파일을 실제 push한 커밋의 배포 내용과 대조한다. 다른 작업의 미커밋 변경이 있으면 커밋된 배포본을 기준으로 업데이트하며, 작성 중인 내용을 함께 설치하지 않는다.
 - 배포 내용이 그대로이고 `grok inspect`의 선택 경로·manifest 내용이 일치하면 최신 상태로 보고 불필요한 재등록은 생략한다.

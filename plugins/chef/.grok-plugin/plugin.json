@@ -1,0 +1,18 @@
+{
+  "name": "chef",
+  "version": "0.3.0",
+  "description": "Grok 역할 파견과 확인 A·B·C를 사용하는 미션·슬롯·피드백 도구와 공통 미션 가드",
+  "skills": [
+    "./grok/skills/chef-status",
+    "./grok/skills/chef-doctor",
+    "./grok/skills/chef-mission-brief",
+    "./grok/skills/chef-run",
+    "./grok/skills/chef-mission",
+    "./grok/skills/chef-slots",
+    "./grok/skills/chef-adapter-init",
+    "./grok/skills/chef-distill"
+  ],
+  "agents": [
+    "./grok/agents"
+  ]
+}

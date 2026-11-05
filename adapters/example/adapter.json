@@ -118,12 +118,12 @@
     ]
   },
   "roles": {
-    "research": "han:researcher",
-    "implement": "han:dev-medium",
-    "verify": "han:verifier",
+    "research": "chef:researcher",
+    "implement": "chef:dev-medium",
+    "verify": "chef:verifier",
     "review": "code-reviewer",
     "reviewLoopSkill": "review-loop",
-    "implementSmall": "han:dev-small"
+    "implementSmall": "chef:dev-small"
   },
   "rolePolicy": { "model": "definition", "subagents": true },
   "verify": {
@@ -212,12 +212,12 @@
   "runtimes": {
     "codex": {
       "roles": {
-        "research": "han_researcher",
-        "implement": "han_developer_medium",
-        "verify": "han_verifier",
+        "research": "chef_researcher",
+        "implement": "chef_developer_medium",
+        "verify": "chef_verifier",
         "review": "code-reviewer",
         "reviewLoopSkill": "review-loop",
-        "implementSmall": "han_developer_small"
+        "implementSmall": "chef_developer_small"
       },
       "slots": {
         "prepare": [
