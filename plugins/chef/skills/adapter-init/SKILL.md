@@ -42,7 +42,7 @@ description: 프로젝트를 조사해 /chef:mission 이 쓰는 어댑터(adapte
 
 - `adapter.json`: 계약의 모든 키를 채운다. `stages`는 프로젝트의 실제 작업 순서로, PoC 스킬이 없으면
   `design` 단계를 뺀다. `verify.backend`는 엔진 자동화 수단에 맞춘다(Unity 6 미만이면 `cli` 불가).
-  `roles.verify`는 `chef:verifier`로 두고 검증·Unity Play 실행은 Haiku 5.5 / medium 하나에 맡긴다.
+  `roles.verify`는 `chef:verifier`로 두고 검증·Unity Play 실행은 Sonnet 5.5 / high 하나에 맡긴다(`agents/verifier.md` 정의와 같음).
 - `guard.deny`: 미션 중 막을 명령. submit·머지·푸시, 이력 삭제, 남의 작업 단위를 건드리는 명령,
   공유 작업 공간 동기화, 기본 작업 단위로 여는 명령. 실행 파일 이름 변형(`.exe`, `.bat`, 래퍼 도구)과 동사 별칭까지.
   가드는 명령을 조각으로 나눠 검사하므로(계약의 "가드") 규칙은 `^`로 조각 첫머리에 고정하고
