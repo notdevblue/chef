@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+RUNNER_VERSION = 2
+
+
 class VerificationError(Exception):
     def __init__(self, message, category="result_invalid"):
         super().__init__(message)
@@ -117,10 +120,14 @@ def launcher_script(executable, arguments):
     return ""
 
 
+def declared_environment(plan):
+    return {name: os.environ.get(name) for name in plan.get("environmentKeys", [])}
+
+
 def runtime_key(project, plan):
     return digest({
         "verification": file_hash(__file__), "python": platform.python_version(), "platform": platform.platform(),
-        "environment": digest(dict(os.environ)),
+        "environment": declared_environment(plan),
         "commands": [command_runtime(project, command) for command in plan["commands"]],
     })
 
@@ -191,6 +198,12 @@ def validate_plan(project, plan, grades):
         raise VerificationError("command.id 가 중복됨")
     if not isinstance(plan.get("environment"), dict) or not plan["environment"]:
         raise VerificationError("plan.environment 에 런타임·대상 환경 식별자를 지정할 것")
+    keys = plan.get("environmentKeys", [])
+    if (not isinstance(keys, list) or not all(isinstance(name, str) and name and "=" not in name
+                                              and not any(ord(char) < 32 or 127 <= ord(char) < 160 for char in name)
+                                              for name in keys)
+            or len(keys) != len(set(keys))):
+        raise VerificationError("plan.environmentKeys 는 중복 없는 환경변수 이름 배열이어야 함")
     assertions = plan.get("results", [])
     if not isinstance(assertions, list):
         raise VerificationError("plan.results 는 배열이어야 함")
@@ -306,6 +319,8 @@ def validate_receipt(project, folder, unit, receipt, plan=None):
         raise VerificationError("통과한 같은 마일스톤의 검증 기록이 필요함")
     if receipt.get("project") != str(Path(project).resolve()) or receipt.get("mission") != str(Path(folder).resolve()):
         raise VerificationError("다른 프로젝트·미션의 검증 기록임")
+    if receipt.get("runnerVersion") != RUNNER_VERSION:
+        raise VerificationError("옛 런타임 지문 방식의 검증 기록임: 같은 계획으로 verify 를 다시 실행할 것")
     recorded_plan = receipt.get("plan", {})
     if (not isinstance(recorded_plan, dict) or not isinstance(recorded_plan.get("commands"), list)
             or recorded_plan.get("grade") != receipt.get("grade")):
@@ -433,7 +448,7 @@ def step_key(project, folder, unit, plan, before, index, dependency):
         "project": str(Path(project).resolve()), "mission": str(Path(folder).resolve()), "unit": unit,
         "settings": settings, "inputs": before, "command": command, "runtime": command_runtime(project, command),
         "runner": file_hash(__file__), "python": platform.python_version(), "platform": platform.platform(),
-        "environment": digest(dict(os.environ)),
+        "environment": declared_environment(plan),
         "results": results, "dependency": dependency,
     })
 
@@ -467,7 +482,8 @@ def save_receipt(project, folder, unit, plan, before, runtime, log_path, receipt
             if previous.get("failure", {}).get("signature") == signature:
                 count += previous["failure"].get("repeatCount", 0)
     receipt = {
-        "schema": 1, "project": str(Path(project).resolve()), "mission": str(Path(folder).resolve()),
+        "schema": 1, "runnerVersion": RUNNER_VERSION,
+        "project": str(Path(project).resolve()), "mission": str(Path(folder).resolve()),
         "unit": unit, "status": "fail" if category else "pass", "grade": plan.get("grade", "unknown"),
         "plan": plan, "snapshot": before, "runner": runtime, "results": results,
         "exitCodes": [step["exitCode"] for step in steps if "exitCode" in step and step["status"] != "reused"],

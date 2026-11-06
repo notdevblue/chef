@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -328,7 +329,7 @@ def test_later_argv_fix_reuses_only_valid_prefix_and_original_result(mission):
 
 
 @pytest.mark.parametrize("change", ["output-add", "output-delete", "output-edit", "input", "environment",
-                                         "inherited-environment", "script", "brief", "original-log", "original-receipt"])
+                                         "script", "brief", "original-log", "original-receipt"])
 def test_reuse_invalidates_changed_evidence_and_dependencies(mission, monkeypatch, change):
     root, _, _ = mission
     plan = reusable_plan(mission)
@@ -343,8 +344,6 @@ def test_reuse_invalidates_changed_evidence_and_dependencies(mission, monkeypatc
         (root / "src.py").write_text("changed")
     elif change == "environment":
         plan["environment"]["target"] = "changed"
-    elif change == "inherited-environment":
-        monkeypatch.setenv("FICTIONAL_CHECK_MODE", "changed")
     elif change == "script":
         script = root / "build.py"
         script.write_text(script.read_text(encoding="utf-8") + "\nvalue=2\n", encoding="utf-8")
@@ -359,6 +358,106 @@ def test_reuse_invalidates_changed_evidence_and_dependencies(mission, monkeypatc
     save_plan(mission)
     assert verify(mission)[0] == 0
     assert (root / "build_runs").read_text() == "xx"
+
+
+def runtime_key_in_new_process(mission, cwd, extra):
+    root, _, _ = mission
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import verification; "
+            "print(verification.runtime_key(sys.argv[2], json.load(open(sys.argv[3], encoding='utf-8'))))")
+    done = subprocess.run(
+        [sys.executable, "-c", code, str(Path(verification.__file__).parent), str(root), str(root / "plan.json")],
+        cwd=cwd, env={**os.environ, **extra}, capture_output=True, text=True, check=True,
+    )
+    return done.stdout.strip()
+
+
+def test_runtime_key_ignores_session_and_shell_environment_across_processes(mission, tmp_path):
+    root, _, _ = mission
+    first = runtime_key_in_new_process(mission, root, {"PWD": str(root), "CLAUDE_SESSION_ID": "session-a"})
+    second = runtime_key_in_new_process(mission, tmp_path, {
+        "PWD": str(tmp_path), "CLAUDE_SESSION_ID": "session-b", "CLAUDE_AGENT_ID": "agent-b",
+        "SHLVL": "7", "FICTIONAL_CHECK_MODE": "changed",
+    })
+    assert first == second
+
+
+def test_undeclared_environment_change_still_reuses_receipt_and_steps(mission, monkeypatch):
+    root, _, _ = mission
+    _, first = verify(mission)
+    monkeypatch.setenv("PWD", str(root / "elsewhere"))
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "other-session")
+    monkeypatch.setenv("FICTIONAL_CHECK_MODE", "changed")
+    assert verify(mission) == (0, first)
+    assert (root / "runs").read_text() == "x"
+    clean = review(mission, first)
+    assert mission_state.main(["complete", "M1", "--receipt", str(first), "--review", str(clean),
+                               "--done-evidence", "checked"]) == 0
+
+    plan = reusable_plan(mission)
+    plan["commands"][1]["argv"] = [sys.executable, "-c", "raise SystemExit(7)"]
+    save_plan(mission)
+    verify(mission)
+    monkeypatch.setenv("FICTIONAL_CHECK_MODE", "changed-again")
+    record = receipt_data(verify(mission)[1])
+    assert [step["status"] for step in record["steps"]] == ["reused", "failed"]
+    assert (root / "build_runs").read_text() == "x"
+
+
+def test_declared_environment_value_is_part_of_runtime_identity(mission, monkeypatch):
+    root, _, plan = mission
+    plan["environmentKeys"] = ["FICTIONAL_CHECK_MODE"]
+    save_plan(mission)
+    monkeypatch.delenv("FICTIONAL_CHECK_MODE", raising=False)
+    _, first = verify(mission)
+    assert verify(mission) == (0, first)
+    monkeypatch.setenv("FICTIONAL_CHECK_MODE", "strict")
+    with pytest.raises(verification.VerificationError, match="런타임"):
+        verification.validate_receipt(root, mission[1], "M1", receipt_data(first))
+    second = verify(mission)[1]
+    assert second != first and (root / "runs").read_text() == "xx"
+    assert verify(mission) == (0, second)
+    monkeypatch.setenv("FICTIONAL_CHECK_MODE", "lenient")
+    assert verify(mission)[1] != second and (root / "runs").read_text() == "xxx"
+
+
+def test_declared_environment_value_invalidates_reusable_step(mission, monkeypatch):
+    root, _, _ = mission
+    plan = reusable_plan(mission)
+    plan["environmentKeys"] = ["FICTIONAL_CHECK_MODE"]
+    save_plan(mission)
+    monkeypatch.setenv("FICTIONAL_CHECK_MODE", "strict")
+    verify(mission)
+    monkeypatch.setenv("FICTIONAL_CHECK_MODE", "lenient")
+    verify(mission)
+    assert (root / "build_runs").read_text() == "xx"
+
+
+@pytest.mark.parametrize("value", ["PATH", ["A", "A"], [""], ["A=B"], [1], ["A\nB"]])
+def test_environment_keys_must_be_unique_variable_names(mission, value):
+    root, _, plan = mission
+    plan["environmentKeys"] = value
+    save_plan(mission)
+    assert mission_state.main(["verify", "M1", "--plan", str(root / "plan.json")]) == 1
+    assert not (root / "runs").exists()
+
+
+def test_receipt_with_old_runtime_fingerprint_is_not_trusted_and_reruns(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    data = receipt_data(receipt)
+    data.pop("runnerVersion")
+    receipt.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="다시 실행"):
+        verification.validate_receipt(root, folder, "M1", data)
+    evidence = root / "review.md"
+    evidence.write_text("independent review\n", encoding="utf-8")
+    assert mission_state.main([
+        "review", "M1", "--receipt", str(receipt), "--evidence", str(evidence),
+        "--reviewer", "fresh-reviewer", "--kind", "unit", "--status", "clean",
+    ]) == 1
+    second = verify(mission)[1]
+    assert second != receipt and (root / "runs").read_text() == "xx"
+    assert receipt_data(second)["runnerVersion"] == verification.RUNNER_VERSION
 
 
 def test_force_and_default_nonreusable_steps_execute_again(mission):
@@ -587,6 +686,7 @@ def test_typed_execution_failures(mission, monkeypatch, failure, category):
     elif failure == "input":
         plan["commands"][0]["argv"] = [sys.executable, "-c", "from pathlib import Path; Path('src.py').write_text('changed')"]
     else:
+        plan["environmentKeys"] = ["FICTIONAL_RUNTIME_MODE"]
         real = verification.subprocess.run
         def launch(*args, **kwargs):
             result = real(*args, **kwargs)
