@@ -728,17 +728,17 @@ def command_fragments(command, tool_name="Bash"):
     return list(dict.fromkeys(fragments))
 
 
-def rule_exceptions(rule, problems):
-    patterns = rule.get("except", [])
+def rule_exceptions(rule, problems, key="except"):
+    patterns = rule.get(key, [])
     if not isinstance(patterns, list) or any(not isinstance(pattern, str) for pattern in patterns):
-        problems.append("guard.deny.except 형식 오류: 문자열 배열이어야 함. 이 규칙의 예외를 적용하지 않음")
+        problems.append(f"guard.deny.{key} 형식 오류: 문자열 배열이어야 함. 이 규칙의 예외를 적용하지 않음")
         return []
     compiled = []
     for pattern in patterns:
         try:
             compiled.append(re.compile(pattern, re.IGNORECASE))
         except re.error as e:
-            problems.append(f"guard.deny.except 정규식 오류: {pattern} ({e}). 이 규칙의 예외를 적용하지 않음")
+            problems.append(f"guard.deny.{key} 정규식 오류: {pattern} ({e}). 이 규칙의 예외를 적용하지 않음")
             return []
     return compiled
 
@@ -813,7 +813,26 @@ def p4_deny_reason(adapter, fragments, problems):
     return ""
 
 
-def find_denied_reason(adapter, fragments, problems=None):
+LITERAL_ARGUMENT = r'(?:[A-Za-z0-9_./:\\-]+|"[A-Za-z0-9_./:\\ -]+"|\'[A-Za-z0-9_./:\\ -]+\')'
+LITERAL_COMMAND = re.compile(
+    r"(?P<name>rg(?:\.exe)?|grep(?:\.exe)?|echo|Write-Output)(?P<args>(?:[ \t]+" + LITERAL_ARGUMENT + r")+)",
+    re.IGNORECASE,
+)
+LITERAL_SEARCH_OPTIONS = frozenset(("-n", "-i", "-l", "-F", "-E", "--line-number", "--no-heading", "--fixed-strings", "--no-config"))
+
+
+def literal_data_command(command):
+    match = LITERAL_COMMAND.fullmatch(command.strip(" \t"))
+    if not match:
+        return False
+    name = match.group("name").lower().removesuffix(".exe")
+    if name in ("rg", "grep"):
+        arguments = [unquote(item.group(0)) for item in re.finditer(LITERAL_ARGUMENT, match.group("args"))]
+        return all(not item.startswith("\\") and (not item.startswith("-") or item in LITERAL_SEARCH_OPTIONS) for item in arguments)
+    return True
+
+
+def find_denied_reason(adapter, fragments, problems=None, command=""):
     problems = [] if problems is None else problems
     fragments = allowed_fragments(adapter, fragments, problems)
     if not fragments:
@@ -828,6 +847,10 @@ def find_denied_reason(adapter, fragments, problems=None):
             problems.append(f"잘못된 정규식 건너뜀: {pattern} ({e})")
             continue
         exceptions = rule_exceptions(rule, problems)
+        command_exceptions = rule_exceptions(rule, problems, "exceptCommand")
+        if command_exceptions and literal_data_command(command):
+            if any(exception.fullmatch(command) for exception in command_exceptions):
+                continue
         if any(
             compiled.search(fragment) and not any(exception.fullmatch(fragment) for exception in exceptions)
             for fragment in fragments
@@ -946,7 +969,7 @@ def judge_command(adapter, command, tool_name="Bash", problems=None, project="")
         return Verdict("mixed", MARKER_ALONE_REASON)
     wrapped = [p4 for p4 in (p4c_as_p4(fragment, project, adapter) for fragment in fragments) if p4]
     fragments = list(dict.fromkeys(fragments + wrapped))
-    reason = find_denied_reason(adapter, fragments, problems) or p4_client_reason(adapter, fragments, project)
+    reason = find_denied_reason(adapter, fragments, problems, command) or p4_client_reason(adapter, fragments, project)
     return Verdict("rule", reason) if reason else Verdict("allow")
 
 

@@ -1,7 +1,8 @@
 # 검증과 완료 처리
 
-코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
-Claude는 `chef:verifier`의 Sonnet 5.5 / high, Codex는 `chef_verifier`의 GPT-6 Luna / high로 고정한다.
+코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `preflight <단위> --plan <계획.json>`으로 정적 검사한 뒤
+`roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
+Claude는 `chef:verifier`의 Sonnet 5.5 / low, Codex는 `chef_verifier`의 GPT-6 Luna / high로 고정한다.
 등록되지 않은 Codex 역할은 `codex-roles.md`의 명시적 모델·추론 수준과 지시로 파견한다.
 어댑터 `rolePolicy.model`이 `inherit`면 두 런타임 모두 이 고정보다 그 정책이 우선한다(각 mission 스킬의 역할 정책).
 검증자는 코드·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 실패·예상 밖 상태는 증거와 미완료 이유를 반환한다.
@@ -28,6 +29,19 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 
 같은 CL이어도 기존 승인 범위와 마일스톤별 검증·receipt를 유지하며, 이미 승인된 마일스톤을 자동 병합하거나 receipt를 공유하지 않는다. 새 계획에서는 목표와 검증이 결합된 소작업을 하나의 마일스톤으로 묶을 수 있지만, 1시간 상한·승인 범위·명확한 완료 조건을 지킨다. medium 구현자가 하위 작업을 나누면 주담당이 전체 파일 소유, 하위 반환, 잔여 작업을 모아 코디네이터에게 보고한다.
 
+## 실행 준비와 공유 자원
+
+`preflight`는 계획 구조·입력·cwd·실행 파일·가드·참조 묶음과 어댑터의 준비 명령을 읽기 전용으로 검사한다.
+명령·테스트·readiness를 실행하거나 receipt·로그·잠금 폴더를 만들지 않는다. 통과는 실제 검증 통과가 아니다.
+
+공유 자원은 `adapter.verify.resources`의 등급별 이름과 `resourceDir`로 지정한다.
+같은 자원을 쓰는 프로젝트·슬롯은 같은 폴더와 이름을 써야 서로 배타 실행된다.
+`verify`는 모든 자원 잠금을 얻은 뒤 `readiness` 명령을 실행하고 기존 receipt 재사용 여부를 확인한다.
+잠금이나 준비 확인 실패를 통과 기록으로 대체하지 않으며 정상 종료·실패 때 잠금을 해제한다.
+선택 등급의 `resources`·`resourceDir`·`readiness` 설정과 준비 명령의 실행 파일·스크립트 지문은 receipt·단계 identity에 포함되며, `review`·`complete`는 현재 `adapter.verify`와 대조해 정책 변경·삭제나 스크립트 변경이 있으면 기존 receipt를 거부한다.
+`review`·`complete`는 준비 검사를 실행하지 않으며 에디터 정리 여부 같은 현재 관측값은 identity에 넣지 않는다.
+자원 설정이 없으면 기존 실행 방식을 유지한다. 설정 계약은 [어댑터](adapter-schema.md)의 `verify.*`를 따른다.
+
 ## 계획
 
 ```json
@@ -42,6 +56,8 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 }
 ```
 
+- `referenceBundle`(선택): 프로젝트 기준 참조 묶음 JSON 경로. `reference snapshot`으로 고정한 같은 파일을 지정한다.
+  `preflight`·`verify`는 참조 파일의 누락·변경을 거부한다. 원문이 바뀌면 코디네이터가 승인 범위를 확인하고 다시 고정한다.
 - `inputs`: 동작에 영향을 주는 소스·테스트·데이터·설정·도구의 실제 상대 경로. 폴더는 하위 파일과 새 파일·삭제를 함께 감지한다.
   생성 로그·미션 상태 폴더·빌드 출력은 넣지 않는다. 프로젝트 밖 입력은 거부한다.
 - `environment`: 실제 대상·런타임·리비전 식별자. 대상 DB·서버·도구 버전이 바뀌면 갱신한다.
@@ -88,7 +104,7 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 
 ## 한 단위의 흐름
 
-1. `verify M1 --plan <계획.json>`: 입력·계획·환경·로그·결과가 그대로면 통과 기록 재사용, 아니면 실제 실행.
+1. `preflight M1 --plan <계획.json>` 통과 뒤 `verify M1 --plan <계획.json>`: 입력·계획·환경·로그·결과가 그대로면 통과 기록 재사용, 아니면 실제 실행.
    실패는 종료 코드 1과 로그·기록 경로를 반환한다. 상태를 알아내려고 같은 검증을 재요청하지 않는다.
 2. 독립 리뷰: 첫 라운드는 단위 전체. 후속은 `review-scope M1 --plan <계획.json>`의 변경 목록,
    직전 finding, 그 수정이 영향을 주는 계약과 호출자를 본다. 같은 고정 참조 묶음으로 결함과 명시적 규칙 위반을 함께 수집한다.

@@ -3,6 +3,7 @@ name: dev-medium
 description: 프로젝트 workflow를 읽고 여러 파일·계층의 변경과 복잡한 구현을 맡는다. 승인된 문서·정해진 소규모 수정은 dev-small로 돌린다.
 model: claude-sonnet-5-5[1m]
 effort: high
+tools: Read, Grep, Glob, Bash, PowerShell, Write, Edit, Agent
 maxTurns: 60
 autoCompactWindow: 200000
 ---

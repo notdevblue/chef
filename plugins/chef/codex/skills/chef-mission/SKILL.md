@@ -140,6 +140,12 @@ python "<plugin-root>/codex/skills/chef-mission/scripts/mission_state.py" <명�
 | `decision add --what --chosen --why --affects [--fixes Dn]` | `[~]` 결정, 앞 기록 정정 |
 | `status` | 세 줄 요약(마일스톤 수·최근 판정·걸린 것) |
 | `context` | 재개용 요약: 현재 단위·최근 판정·최근 결정·승인 원본 위치 |
+| `schema` | 어댑터의 허용 enum·검증 등급 조회(ACTIVE 불필요) |
+| `reference snapshot --source <파일>… --output <묶음.json> [--expect-sha256 <해시>]` | 새 출력에는 해시 생략. 기존 묶음 갱신에만 직전 `output.sha256` 필수 |
+| `reference check --input <묶음.json>` / `reference show --input <묶음.json>` | 참조 변경·누락 검사 / 참조 포인터 조회 |
+| `brief <id> [--references <묶음.json>]` | 단위 브리프·승인 원문 위치·검사한 참조 포인터를 읽기 전용 출력 |
+| `handoff <id> --summary <결과> --detail <상세> [--evidence <근거>]…` | 기존 상세·증거 파일을 해시와 함께 읽기 전용 반환. 상태·완료·승인 불변 |
+| `preflight <id> --plan <json>` | 명령 실행 없이 계획·입력·실행 준비·참조 검사 |
 | `verify <id> --plan <json> [--force]` | 검증 실행·결과 수집, 유효한 같은 입력 결과 재사용 |
 | `review-scope <id> --plan <json>` | 직전 리뷰 이후 바뀐 입력 파일 |
 | `review <id> --receipt <json> --evidence <파일> --reviewer <이름> --kind poc\|unit\|integration --status clean\|findings` | 독립 리뷰 근거와 검증 입력 상태 연결 |
@@ -171,7 +177,7 @@ python "<plugin-root>/codex/skills/chef-mission/scripts/p4c.py" --dry-run sync -
 
 래퍼 호출도 가드가 `p4 -c <작업 공간> ...`로 보고 같은 deny 규칙(submit 금지 등)을 적용한다.
 
-검증 계획·재사용·리뷰 범위 계약은 `../../../skills/mission/references/verification-workflow.md`를 따른다. 새 작업 단위는 이 경로를 사용하고,
+검증 계획·재사용·리뷰 범위 계약은 `references/verification-workflow.md`를 따른다. 파견 입력·참조 고정 계약은 `references/usage-policy.md`를 따른다. 새 작업 단위는 이 경로를 사용하고,
 기존 문자열 ledger는 이력으로 보존한다. 실제 동작·파일 상태가 바뀐 결과를 재사용하지 않는다.
 
 작업 폴더가 프로젝트 밖이면 `--project <폴더>`, 다른 미션을 보려면 `--mission <id>`를 붙인다.
@@ -239,7 +245,7 @@ python "<plugin-root>/codex/skills/chef-mission/scripts/mission_state.py" docume
    PoC 진입 파일(예: `index.html`)은 `mission set --poc <작업 공간 기준 경로>`로 머리 필드에도 적는다. 슬롯
    대시보드의 미션 문서 목록에 뜬다. 진입 파일이 바뀌면 다시 적는다.
 
-파견 입력·작업 묶기·재리뷰 비용·측정은 `../../../skills/mission/references/usage-policy.md`를 따른다.
+파견 입력·작업 묶기·재리뷰 비용은 `references/usage-policy.md`를 따른다.
 
 ## 4. 구현 계획
 
@@ -275,7 +281,7 @@ PoC 명세와의 일치로 쓴다.
   빼서 확인 C에 모은다. 그 마일스톤의 기계 판정에 묶지 않는다.
 - **시범 단위**: `M1`은 작고 대표적인 것으로 고른다. 브리프 형식과 검증 명령이 맞는지 여기서 확인한다.
 
-브리프에는 해당 작업에 필요한 파일·CL 소유, 사용자 기능 완료 범위, 검증 반례, 반환 항목을 기존 칸과 추가 주의사항에 적는다. 구체 항목은 `../../../skills/mission/references/verification-workflow.md`를 따른다.
+브리프에는 해당 작업에 필요한 파일·작업 단위 소유, 사용자 기능 완료 범위, 검증 반례, 반환 항목을 기존 칸과 추가 주의사항에 적는다. 구체 항목은 `references/verification-workflow.md`를 따른다.
 
 **사람 확인 B** — PoC 결과(있으면), 마일스톤별 목표·완료 조건·검증 범위, 사람 확인 목록·위험·예상 규모를
 `confirm-B.md`로 공유하고 승인받는다("사람에게 묻는 법"). 정확한 파일·검증 명령·작업 단위는
@@ -297,13 +303,13 @@ PoC 명세와의 일치로 쓴다.
    `after`가 안 끝났으면 CLI가 거부한다. `started`는 CLI가 적는다.
 2. **구현 파견** — 승인된 문서·명세가 확정된 소규모 수정은 `roles.implementSmall`(없으면 `roles.implement`),
    설계 판단·여러 계층 변경은 `roles.implement` 하나에게 그 행의 브리프 전부, 관련 명세, `adapter.md`의 관련 절,
-   `forbid`와 고정 참조 묶음을 넘긴다. 구현자는 반환 전에 변경 함수·블록 전체 또는 문서 전체를 확정 명세·승인·규칙·양식과 대조하고 모든 명확한 결함·규칙 위반을 먼저 고친다. 실제 변경·대조 경로·자기 확인 결과·증거·미실행 검증·미완료 작업·남은 판단을 짧게 돌려준다. 병렬 파견 조건과 하위 구현을 나눈 주담당의 반환 책임은 `../../../skills/mission/references/verification-workflow.md`를 따른다.
+   `forbid`와 고정 참조 묶음을 넘긴다. 구현자는 반환 전에 변경 함수·블록 전체 또는 문서 전체를 확정 명세·승인·규칙·양식과 대조하고 모든 명확한 결함·규칙 위반을 먼저 고친다. 실제 변경·대조 경로·자기 확인 결과·증거·미실행 검증·미완료 작업·남은 판단을 짧게 돌려준다. 병렬 파견 조건과 하위 구현을 나눈 주담당의 반환 책임은 `references/verification-workflow.md`를 따른다.
    파견 역할의 부분 반환·실패·턴 상한은 done이나 사용자 승인 요청이 아니다. 코디네이터가 근거와 현재 상태로 원인을 진단하고
    승인 범위 안의 수정과 남은 범위를 새 브리프로 파견한다. 리뷰 3라운드·timebox 상한과 실제 멈춤 조건은 유지한다.
-3. **검증 파견** — 브리프의 타깃 명령·입력·환경으로 검증 계획 JSON을 한 번 만들고 `roles.verify` 하나에
-   `verify <id> --plan …` 실행과 결과 수집을 맡긴다. 역할이 없으면 `codex-roles.md`의 verify 지시를 쓴다.
+3. **검증 파견** — 브리프의 타깃 명령·입력·환경과 `referenceBundle`로 계획 JSON을 한 번 만들고
+   `preflight <id> --plan …` 통과 뒤 `roles.verify` 하나에 `verify <id> --plan …` 실행과 결과 수집을 맡긴다. 역할이 없으면 `codex-roles.md`의 verify 지시를 쓴다.
    - GPT-6 Luna / high로 고정한다(`rolePolicy.model`이 `inherit`면 역할 정책이 우선). 모델·추론 수준을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
-   - Unity Refresh·컴파일·EditMode·Play 순서와 입력 동결은 `../../../skills/mission/references/verification-workflow.md`를 따른다.
+   - Unity Refresh·컴파일·EditMode·Play 순서와 입력 동결은 `references/verification-workflow.md`를 따른다.
    - Play 브리프에는 대상 프로젝트·조작 순서·기대 결과·증거 경로를 넣는다. 실패·예상 밖 상태는 증거와 미완료 이유를 메인에 반환한다.
    - 검증자는 코드·테스트·설정·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 원인 분석·수정·독립 리뷰·완료 판정은 분리한다.
    - 실행기는 명령별 제한 시간 안에서 기다리고 로그·결과 파일·입력 상태를 기록한다. 에이전트가 상태 조회 루프를 만들지 않는다.

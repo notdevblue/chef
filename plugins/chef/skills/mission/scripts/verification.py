@@ -1,17 +1,27 @@
+import contextlib
 import hashlib
 import json
 import math
 import os
 import platform
+import re
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "slots" / "scripts"))
+import slots
+import reference_bundle
+
+
 RUNNER_VERSION = 2
+WINDOWS_RESERVED_NAMES = {"con", "prn", "aux", "nul", *[f"com{index}" for index in range(1, 10)],
+                          *[f"lpt{index}" for index in range(1, 10)]}
 
 
 class VerificationError(Exception):
@@ -64,6 +74,8 @@ def command_runtime(project, command):
         executable = Path(found).resolve()
     if not executable.is_file():
         raise VerificationError(f"실행 파일이 아님: {executable}", "preflight")
+    if os.name != "nt" and not os.access(executable, os.X_OK):
+        raise VerificationError(f"실행 권한 없음: {executable}", "preflight")
     tools = {str(executable): executable_identity(executable)}
     argument = launcher_script(executable, command["argv"][1:])
     if argument:
@@ -124,10 +136,23 @@ def declared_environment(plan):
     return {name: os.environ.get(name) for name in plan.get("environmentKeys", [])}
 
 
-def runtime_key(project, plan):
+def reference_identity(project, plan):
+    if "referenceBundle" not in plan:
+        return {}
+    try:
+        reference_bundle.require_current(project, plan["referenceBundle"])
+        path = reference_bundle.resolve_path(project, plan["referenceBundle"])
+        return {"path": str(path), "sha256": file_hash(path), "validator": file_hash(reference_bundle.__file__)}
+    except (reference_bundle.ReferenceError, OSError) as error:
+        raise VerificationError(str(error), "reference_changed") from error
+
+
+def runtime_key(project, plan, settings=None):
     return digest({
         "verification": file_hash(__file__), "python": platform.python_version(), "platform": platform.platform(),
         "environment": declared_environment(plan),
+        "referenceBundle": reference_identity(project, plan),
+        "verificationPolicy": policy_runtime(project, plan, settings),
         "commands": [command_runtime(project, command) for command in plan["commands"]],
     })
 
@@ -164,7 +189,7 @@ def snapshot(project, inputs):
 
 
 def validate_plan(project, plan, grades):
-    if plan.get("grade") not in grades:
+    if not isinstance(plan.get("grade"), str) or not plan["grade"] or plan["grade"] not in grades:
         raise VerificationError("plan.grade 가 어댑터 verify.grades 에 없음")
     commands = plan.get("commands")
     if not isinstance(commands, list) or not commands:
@@ -244,6 +269,195 @@ def load_plan(project, path, grades):
         raise
 
 
+def verification_settings(project, plan, settings):
+    if settings is None:
+        settings = {}
+    if not isinstance(settings, dict):
+        raise VerificationError("verify 설정은 객체여야 함", "preflight")
+    resource_map = settings.get("resources", {})
+    readiness_map = settings.get("readiness", {})
+    if not isinstance(resource_map, dict) or not isinstance(readiness_map, dict):
+        raise VerificationError("resources 와 readiness 는 등급별 객체여야 함", "preflight")
+    for names in resource_map.values():
+        if (not isinstance(names, list) or not all(isinstance(name, str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name)
+                and name.lower() not in WINDOWS_RESERVED_NAMES for name in names)
+                or len(names) != len({name.casefold() for name in names})):
+            raise VerificationError("resources 는 중복 없는 안전한 자원 이름 배열이어야 함", "preflight")
+    resources = sorted(resource_map.get(plan.get("grade"), []))
+    resource_dir = ""
+    value = settings.get("resourceDir", "")
+    if resources or "resourceDir" in settings:
+        if not isinstance(value, str) or not value or any(
+                ord(char) < 32 or 127 <= ord(char) < 160 for char in value):
+            raise VerificationError("resources 에 유효한 resourceDir 경로가 필요함", "preflight")
+        candidate = Path(value)
+        if os.name == "nt" and any(
+                re.search(r'[<>:"|?*]', part) or part.endswith((".", " "))
+                or part.split(".")[0].lower() in WINDOWS_RESERVED_NAMES
+                for part in candidate.parts if part not in (candidate.anchor, ".", "..")):
+            raise VerificationError("resourceDir 에 사용할 수 없는 경로 이름이 있음", "preflight")
+        if candidate.is_absolute():
+            root = candidate.resolve()
+        else:
+            try:
+                root = project_path(project, value)
+            except VerificationError as error:
+                raise VerificationError(str(error), "preflight") from error
+        if root.exists() and not root.is_dir():
+            raise VerificationError("resourceDir 은 폴더여야 함", "preflight")
+        ancestor = root
+        while not ancestor.exists() and ancestor != ancestor.parent:
+            ancestor = ancestor.parent
+        if not ancestor.is_dir() or not os.access(ancestor, os.W_OK):
+            raise VerificationError("resourceDir 경로를 사용할 수 없음", "preflight")
+        resource_dir = str(root)
+    for commands in readiness_map.values():
+        if not isinstance(commands, list):
+            raise VerificationError("readiness 는 명령 배열이어야 함", "preflight")
+        for command in commands:
+            if not isinstance(command, dict):
+                raise VerificationError("readiness 명령은 객체여야 함", "preflight")
+            argv = command.get("argv", [])
+            if (not isinstance(argv, list) or not argv
+                    or not all(isinstance(value, str) and value for value in argv)
+                    or any(any(ord(char) < 32 or 127 <= ord(char) < 160 for char in value) for value in argv)):
+                raise VerificationError("readiness.argv 는 제어 문자 없는 문자열 배열이어야 함", "preflight")
+            timeout = command.get("timeoutSeconds", 30)
+            if type(timeout) is not int or not 1 <= timeout <= 60:
+                raise VerificationError("readiness.timeoutSeconds 는 1~60 정수여야 함", "preflight")
+            try:
+                project_path(project, command.get("cwd", "."))
+            except VerificationError as error:
+                raise VerificationError(str(error), "preflight") from error
+    readiness = []
+    for command in readiness_map.get(plan.get("grade"), []):
+        readiness.append({"argv": [value.replace("{project}", str(Path(project).resolve()))
+                                    for value in command["argv"]],
+                          "cwd": command.get("cwd", "."), "timeoutSeconds": command.get("timeoutSeconds", 30)})
+    return {"resourceDir": resource_dir, "resources": resources, "readiness": readiness}
+
+
+def policy_settings(project, plan, settings=None):
+    if settings is None:
+        return {}
+    configured = verification_settings(project, plan, settings)
+    grade = plan.get("grade")
+    policy = {}
+    if configured["resourceDir"]:
+        policy.update(resourceDir=configured["resourceDir"], resources={grade: configured["resources"]})
+    if configured["readiness"]:
+        policy["readiness"] = {grade: [
+            {"argv": list(command["argv"]), "cwd": str(project_path(project, command.get("cwd", "."))),
+             "timeoutSeconds": command.get("timeoutSeconds", 30)}
+            for command in settings["readiness"][grade]
+        ]}
+    return policy
+
+
+def policy_runtime(project, plan, settings=None):
+    policy = policy_settings(project, plan, settings)
+    if not policy:
+        return {}
+    configured = verification_settings(project, plan, policy)
+    return {"settings": policy,
+            "readiness": [command_runtime(project, command) for command in configured["readiness"]]}
+
+
+def guarded_runtime(project, command, guard):
+    identity = command_runtime(project, command)
+    try:
+        guard(subprocess.list2cmdline(command["argv"]))
+        guard(subprocess.list2cmdline([identity["executable"], *command["argv"][1:]]))
+    except Exception as error:
+        raise VerificationError(str(error), "guard_rejected") from error
+    return identity
+
+
+def preflight(project, plan, guard, settings=None):
+    result = {"status": "fail", "grade": "", "commandCount": 0, "readinessCount": 0,
+              "resources": [], "failure": {}}
+    try:
+        if not isinstance(plan, dict):
+            raise VerificationError("검증 계획은 객체여야 함", "plan_invalid")
+        if isinstance(plan.get("grade"), str):
+            result["grade"] = plan["grade"]
+        root = str(project)
+        if any(ord(char) < 32 or 127 <= ord(char) < 160 for char in root) or not Path(project).is_dir():
+            raise VerificationError("유효한 프로젝트 폴더가 필요함", "preflight")
+        grades = [plan.get("grade")]
+        if isinstance(settings, dict):
+            grades = settings.get("grades", grades)
+        if not isinstance(grades, list) or not all(isinstance(grade, str) and grade for grade in grades):
+            raise VerificationError("verify.grades 는 등급 문자열 배열이어야 함", "plan_invalid")
+        validate_plan(project, plan, grades)
+        reference_identity(project, plan)
+        configured = verification_settings(project, plan, settings)
+        for command in [*plan["commands"], *configured["readiness"]]:
+            guarded_runtime(project, command, guard)
+        result.update(status="pass", commandCount=len(plan["commands"]),
+                      readinessCount=len(configured["readiness"]), resources=configured["resources"])
+    except (VerificationError, OSError, ValueError, TypeError, RuntimeError) as error:
+        category = getattr(error, "category", "preflight")
+        if category == "result_invalid":
+            category = "plan_invalid"
+        result["failure"] = {"category": category, "message": str(error)}
+    return result
+
+
+class ResourceLock(slots.FileLock):
+    def reclaim_if_stale(self):
+        try:
+            pid, started = self.read_holder()
+            self.holder = f"pid {pid}, {started}"
+        except FileNotFoundError:
+            return True
+        except OSError:
+            self.holder = "확인할 수 없는 소유자"
+        return False
+
+
+@contextlib.contextmanager
+def resource_locks(settings):
+    with contextlib.ExitStack() as locks:
+        try:
+            for name in settings["resources"]:
+                path = Path(settings["resourceDir"]) / f"{name}.lock"
+                locks.enter_context(ResourceLock(str(path), name, timeout=0))
+        except slots.LockBusy as error:
+            raise VerificationError(str(error), "resource_busy") from error
+        yield
+
+
+def child_environment():
+    environment = dict(os.environ)
+    environment.setdefault("PYTHONUTF8", "1")
+    environment.setdefault("PYTHONIOENCODING", "utf-8")
+    return environment
+
+
+def execute_command(project, command, identity, log):
+    return subprocess.run(
+        [identity["executable"], *command["argv"][1:]],
+        cwd=project_path(project, command.get("cwd", ".")), stdin=subprocess.DEVNULL,
+        stdout=log, stderr=subprocess.STDOUT, timeout=command.get("timeoutSeconds", 600), shell=False,
+        env=child_environment(),
+    )
+
+
+def require_readiness(project, commands, guard, log):
+    for command in commands:
+        identity = guarded_runtime(project, command, guard)
+        try:
+            done = execute_command(project, command, identity, log)
+        except subprocess.TimeoutExpired as error:
+            raise VerificationError(str(error), "readiness_timeout") from error
+        except OSError as error:
+            raise VerificationError(str(error), "readiness_launch_error") from error
+        if done.returncode:
+            raise VerificationError(f"readiness 종료 코드 {done.returncode}", "readiness_exit")
+
+
 def result_producer(plan, result):
     value = result.get("command")
     if type(value) is int and 0 <= value < len(plan["commands"]):
@@ -314,7 +528,7 @@ def validate_results(project, plan):
     return hashes
 
 
-def validate_receipt(project, folder, unit, receipt, plan=None):
+def validate_receipt(project, folder, unit, receipt, plan=None, settings=None):
     if receipt.get("schema") != 1 or receipt.get("status") != "pass" or receipt.get("unit") != unit:
         raise VerificationError("통과한 같은 마일스톤의 검증 기록이 필요함")
     if receipt.get("project") != str(Path(project).resolve()) or receipt.get("mission") != str(Path(folder).resolve()):
@@ -327,7 +541,13 @@ def validate_receipt(project, folder, unit, receipt, plan=None):
         raise VerificationError("검증 기록의 계획·등급이 올바르지 않음")
     if plan is not None and recorded_plan != plan:
         raise VerificationError("검증 계획·환경이 바뀜")
-    if receipt.get("runner") != runtime_key(project, recorded_plan):
+    if settings is None:
+        settings = receipt.get("verificationPolicy", {})
+    if receipt.get("verificationPolicy", {}) != policy_settings(project, recorded_plan, settings):
+        raise VerificationError("검증 준비·자원 정책이 바뀜")
+    if "grades" in settings and recorded_plan["grade"] not in settings["grades"]:
+        raise VerificationError("검증 등급이 현재 어댑터와 다름")
+    if receipt.get("runner") != runtime_key(project, recorded_plan, settings):
         raise VerificationError("검증 실행기 런타임이 바뀜")
     if receipt.get("snapshot") != snapshot(project, recorded_plan.get("inputs")):
         raise VerificationError("검증 후 입력 파일·데이터가 바뀜")
@@ -387,14 +607,14 @@ def require_cache_integrity(receipt, proof):
         raise VerificationError("검증 입력·런타임 불변 증거가 없어 단계를 재사용할 수 없음")
 
 
-def check_run_integrity(project, plan, before, runtime, prior=()):
+def check_run_integrity(project, plan, before, runtime, prior=(), settings=None):
     inputs_unchanged, runtime_unchanged = False, False
     try:
         inputs_unchanged = before == snapshot(project, plan["inputs"])
     except (VerificationError, OSError):
         pass
     try:
-        runtime_unchanged = runtime == runtime_key(project, plan)
+        runtime_unchanged = runtime == runtime_key(project, plan, settings)
     except (VerificationError, OSError):
         pass
     prior = dict(prior)
@@ -439,16 +659,18 @@ def validate_step_evidence(project, folder, unit, receipt, step):
         validate_step_evidence(project, folder, unit, original, source_step)
 
 
-def step_key(project, folder, unit, plan, before, index, dependency):
+def step_key(project, folder, unit, plan, before, index, dependency, settings=None):
     command = plan["commands"][index]
-    settings = {name: value for name, value in plan.items() if name not in ("commands", "results")}
+    plan_settings = {name: value for name, value in plan.items() if name not in ("commands", "results")}
     results = [result for result in plan.get("results", [])
                if "command" in result and result_producer(plan, result) == index]
     return digest({
         "project": str(Path(project).resolve()), "mission": str(Path(folder).resolve()), "unit": unit,
-        "settings": settings, "inputs": before, "command": command, "runtime": command_runtime(project, command),
+        "settings": plan_settings, "inputs": before, "command": command, "runtime": command_runtime(project, command),
         "runner": file_hash(__file__), "python": platform.python_version(), "platform": platform.platform(),
         "environment": declared_environment(plan),
+        "referenceBundle": reference_identity(project, plan),
+        "verificationPolicy": policy_runtime(project, plan, settings),
         "results": results, "dependency": dependency,
     })
 
@@ -458,7 +680,7 @@ def utc_now():
 
 
 def save_receipt(project, folder, unit, plan, before, runtime, log_path, receipt_path, started_at,
-                 started, steps, category="", error="", previous_path="", previous=None, cache_integrity=()):
+                 started, steps, category="", error="", previous_path="", previous=None, cache_integrity=(), settings=None):
     previous = previous or {}
     failed_step = next((step["index"] for step in steps if step["status"] == "failed"), -1)
     signature = ""
@@ -472,7 +694,7 @@ def save_receipt(project, folder, unit, plan, before, runtime, log_path, receipt
     results = {}
     if not category:
         try:
-            cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity)
+            cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity, settings)
             require_run_integrity(cache_integrity)
             results = validate_results(project, plan)
         except VerificationError as failure:
@@ -500,6 +722,9 @@ def save_receipt(project, folder, unit, plan, before, runtime, log_path, receipt
     }
     if previous_path and Path(previous_path).is_file():
         receipt["priorReceiptHash"] = file_hash(previous_path)
+    policy = policy_settings(project, plan, settings)
+    if policy:
+        receipt["verificationPolicy"] = policy
     write_json(receipt_path, receipt)
     write_json(Path(folder) / "verification" / f"{unit}.latest.json", {"receipt": str(receipt_path)})
     return str(receipt_path), receipt, False
@@ -516,7 +741,22 @@ def record_failure(project, folder, unit, error, category="plan_invalid"):
                         utc_now(), time.monotonic(), [], category, str(error), previous_path, previous)
 
 
-def run(project, folder, unit, plan, guard, force=False):
+def run(project, folder, unit, plan, guard, force=False, settings=None):
+    checked = preflight(project, plan, guard, settings)
+    if checked["status"] == "fail":
+        failure = checked["failure"]
+        return record_failure(project, folder, unit, failure["message"], failure["category"])
+    try:
+        configured = verification_settings(project, plan, settings)
+        with resource_locks(configured):
+            return _run_locked(project, folder, unit, plan, guard, force, configured["readiness"], settings)
+    except VerificationError as error:
+        return record_failure(project, folder, unit, error, error.category)
+    except OSError as error:
+        return record_failure(project, folder, unit, error, "preflight")
+
+
+def _run_locked(project, folder, unit, plan, guard, force, readiness, settings):
     directory = Path(folder) / "verification"
     directory.mkdir(exist_ok=True)
     previous_path, previous = latest_receipt(folder, unit)
@@ -527,26 +767,19 @@ def run(project, folder, unit, plan, guard, force=False):
     before, runtime, steps = {}, "", []
     cache_integrity = {}
     category, error_text = "", ""
-    try:
-        validate_plan(project, plan, [plan.get("grade")])
-    except VerificationError as error:
-        category = error.category
-        if category == "result_invalid":
-            category = "plan_invalid"
-        return record_failure(project, folder, unit, error, category)
     with log_path.open("wb") as log:
         try:
-            runtimes = [command_runtime(project, command) for command in plan["commands"]]
-            for command, identity in zip(plan["commands"], runtimes):
-                try:
-                    guard(subprocess.list2cmdline(command["argv"]))
-                    guard(subprocess.list2cmdline([identity["executable"], *command["argv"][1:]]))
-                except Exception as error:
-                    raise VerificationError(str(error), "guard_rejected") from error
+            runtimes = [guarded_runtime(project, command, guard) for command in plan["commands"]]
+            if readiness:
+                before = snapshot(project, plan["inputs"])
+                runtime = runtime_key(project, plan, settings)
+                require_readiness(project, readiness, guard, log)
+                cache_integrity = check_run_integrity(project, plan, before, runtime, settings=settings)
+                require_run_integrity(cache_integrity)
             if previous and not force:
                 reusable = False
                 try:
-                    validate_receipt(project, folder, unit, previous, plan)
+                    validate_receipt(project, folder, unit, previous, plan, settings=settings or {})
                     reusable = True
                 except (VerificationError, OSError, TypeError, KeyError, IndexError):
                     pass
@@ -554,8 +787,9 @@ def run(project, folder, unit, plan, guard, force=False):
                     log.close()
                     log_path.unlink()
                     return previous_path, previous, True
-            before = snapshot(project, plan["inputs"])
-            runtime = runtime_key(project, plan)
+            if not before:
+                before = snapshot(project, plan["inputs"])
+                runtime = runtime_key(project, plan, settings)
             prior_results = result_times(project, plan.get("results", []))
             reuse_prefix = not force and bool(previous)
             dependency = ""
@@ -563,7 +797,7 @@ def run(project, folder, unit, plan, guard, force=False):
                 step = {"index": index, "id": command.get("id", str(index)), "status": "not_run",
                         "seconds": 0, "startedAt": utc_now(), "finishedAt": "", "outputs": {}, "results": {}}
                 steps.append(step)
-                step["key"] = step_key(project, folder, unit, plan, before, index, dependency)
+                step["key"] = step_key(project, folder, unit, plan, before, index, dependency, settings)
                 dependency = step["key"]
                 if reuse_prefix and command.get("reusable"):
                     try:
@@ -576,7 +810,7 @@ def run(project, folder, unit, plan, guard, force=False):
                         step.update(status="reused", startedAt=utc_now(), finishedAt=utc_now(), seconds=0)
                         if old["status"] == "passed":
                             step.update(sourceReceipt=previous_path, sourceReceiptHash=file_hash(previous_path), sourceStep=index)
-                        cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity)
+                        cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity, settings)
                         step["cacheIntegrity"] = dict(cache_integrity)
                         require_run_integrity(cache_integrity)
                         continue
@@ -589,11 +823,7 @@ def run(project, folder, unit, plan, guard, force=False):
                 producer_times = result_times(project, owned)
                 try:
                     step["status"] = "failed"
-                    done = subprocess.run(
-                        [runtimes[index]["executable"], *command["argv"][1:]],
-                        cwd=project_path(project, command.get("cwd", ".")), stdin=subprocess.DEVNULL,
-                        stdout=log, stderr=subprocess.STDOUT, timeout=command.get("timeoutSeconds", 600), shell=False,
-                    )
+                    done = execute_command(project, command, runtimes[index], log)
                     step["exitCode"] = done.returncode
                     if done.returncode:
                         raise VerificationError(f"명령 종료 코드 {done.returncode}", "command_exit")
@@ -610,12 +840,12 @@ def run(project, folder, unit, plan, guard, force=False):
                 finally:
                     step["seconds"] = round(time.monotonic() - step_started, 3)
                     step["finishedAt"] = utc_now()
-                    cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity)
+                    cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity, settings)
                     step["cacheIntegrity"] = dict(cache_integrity)
                     if cache_integrity["status"] == "invalid":
                         step["status"] = "failed"
                     require_run_integrity(cache_integrity)
-            cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity)
+            cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity, settings)
             require_run_integrity(cache_integrity)
             legacy_results = [result for result in plan.get("results", []) if "command" not in result]
             require_fresh_results(project, legacy_results, prior_results)
@@ -632,7 +862,7 @@ def run(project, folder, unit, plan, guard, force=False):
         except OSError as error:
             category, error_text = "preflight", str(error)
         if before and runtime:
-            cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity)
+            cache_integrity = check_run_integrity(project, plan, before, runtime, cache_integrity, settings)
             try:
                 require_run_integrity(cache_integrity)
             except VerificationError as error:
@@ -643,7 +873,7 @@ def run(project, folder, unit, plan, guard, force=False):
         steps.append({"index": index, "id": plan["commands"][index].get("id", str(index)),
                       "status": "not_run", "seconds": 0})
     return save_receipt(project, folder, unit, plan, before, runtime, log_path, receipt_path,
-                        started_at, started, steps, category, error_text, previous_path, previous, cache_integrity)
+                        started_at, started, steps, category, error_text, previous_path, previous, cache_integrity, settings)
 
 
 def result_times(project, results):
@@ -755,13 +985,13 @@ def structured_findings(path, history, status, findings_count, fixed_count):
 
 
 def record_review(project, folder, unit, receipt_path, evidence, reviewer, kind, status,
-                  findings_count=-1, fixed_count=-1, findings_input=""):
+                  findings_count=-1, fixed_count=-1, findings_input="", settings=None):
     if findings_count < -1 or fixed_count < -1:
         raise VerificationError("지적·해소 수는 0 이상 또는 미기록(-1)이어야 함")
     if status == "clean" and findings_count > 0 or status == "findings" and findings_count == 0:
         raise VerificationError("리뷰 상태와 남은 지적 수가 다름")
     receipt = read_json(receipt_path)
-    validate_receipt(project, folder, unit, receipt)
+    validate_receipt(project, folder, unit, receipt, settings=settings)
     validate_latest(folder, unit, receipt_path)
     report = Path(evidence).resolve()
     if not report.is_file() or not reviewer.strip():
@@ -776,6 +1006,7 @@ def record_review(project, folder, unit, receipt_path, evidence, reviewer, kind,
         "receipt": str(Path(receipt_path).resolve()), "receiptHash": file_hash(receipt_path),
         "evidence": str(report), "evidenceHash": file_hash(report),
         "snapshot": receipt["snapshot"], "planHash": digest(receipt["plan"]),
+        "runner": receipt["runner"],
         "round": len(history) + 1, "previousReview": "", "previousReviewHash": "", "diagnostics": [],
     }
     if history:
@@ -820,14 +1051,15 @@ def validate_review(folder, unit, receipt_path, review_path):
     review_history(folder, unit)
 
 
-def review_scope(project, folder, unit, plan):
+def review_scope(project, folder, unit, plan, settings=None):
     current = snapshot(project, plan["inputs"])
     latest = Path(folder) / "verification" / f"{unit}.review.latest.json"
     prior = {}
     if latest.exists():
         review = read_json(read_json(latest)["review"])
         evidence = Path(review.get("evidence", ""))
-        if (review.get("planHash") == digest(plan) and evidence.is_file()
+        if (review.get("planHash") == digest(plan) and review.get("runner") == runtime_key(project, plan, settings)
+                and evidence.is_file()
                 and file_hash(evidence) == review.get("evidenceHash")):
             prior = review.get("snapshot", {})
     return [name for name in sorted(set(current) | set(prior)) if current.get(name) != prior.get(name)]

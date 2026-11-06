@@ -999,3 +999,227 @@ def test_runtime_grok_reads_grok_adapter(tmp_path, capsys, monkeypatch):
     captured = capsys.readouterr()
     assert code == 0, captured.err
     assert "ACTIVE 없음" in captured.out
+
+
+def project_contents(root):
+    return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+
+def test_schema_uses_adapter_enums_without_active(mission):
+    (mission.root / "state" / "ACTIVE").unlink()
+    before = project_contents(mission.root)
+    schema = json.loads(mission.ok("schema"))
+    assert schema["stages"] == ["content", "poc", "impl", "review"]
+    assert schema["grades"] == ["editmode-pass", "pytest-pass"]
+    assert schema["unitStatuses"] == list(mission_state.UNIT_STATUSES)
+    assert schema["questionApprovalStatuses"] == ["none", "pending", "complete"]
+    assert project_contents(mission.root) == before
+
+
+def test_reference_cli_without_active_records_pointers_and_reports_drift(mission):
+    (mission.root / "state" / "ACTIVE").unlink()
+    source = mission.root / "guidance.md"
+    source.write_text("Use the selected format\n")
+    result = json.loads(mission.ok("reference", "snapshot", "--source", "guidance.md", "--output", "runtime/ref.json",
+                                   "--revision", "r3", "--section", "Style"))
+    assert result["sources"][0]["revision"] == "r3"
+    before = project_contents(mission.root)
+    assert json.loads(mission.ok("reference", "show", "--input", "runtime/ref.json"))["schema"] == 1
+    assert json.loads(mission.ok("reference", "check", "--input", "runtime/ref.json"))["status"] == "pass"
+    assert project_contents(mission.root) == before
+    source.write_text("Changed format\n")
+    code, out, err = mission.run("reference", "check", "--input", "runtime/ref.json")
+    assert code == 1 and not err and json.loads(out)["changed"] == ["guidance.md"]
+    source.unlink()
+    code, out, err = mission.run("reference", "check", "--input", "runtime/ref.json")
+    assert code == 1 and not err and json.loads(out)["missing"] == ["guidance.md"]
+
+
+def test_brief_returns_fixed_fields_and_approval_sources_without_writing(opened):
+    opened.add_unit()
+    opened.publish_question("confirm-A.md", statuses=("answered",), approval="complete")
+    guide = opened.root / "guidance.md"
+    guide.write_text("Read the current contract\n")
+    opened.ok("reference", "snapshot", "--source", "guidance.md", "--output", "runtime/ref.json")
+    before = project_contents(opened.root)
+    brief = json.loads(opened.ok("brief", "M1", "--references", "runtime/ref.json"))
+    assert brief["unit"] == "M1" and brief["goal"] == "목표"
+    assert all(field in brief for field in mission_state.EDITABLE_FIELDS)
+    assert str(opened.folder / "questions" / "confirm-A.json") in brief["approvalSources"]
+    assert brief["references"][0]["path"] == "guidance.md"
+    assert project_contents(opened.root) == before
+    guide.write_text("Changed contract\n")
+    assert "변경/누락" in opened.fail("brief", "M1", "--references", "runtime/ref.json")
+
+
+def test_handoff_preserves_detail_evidence_and_state(opened):
+    opened.add_unit()
+    detail = opened.root / "detail.md"
+    evidence = opened.root / "evidence.json"
+    detail.write_text("Full original detail\nLine two\n")
+    evidence.write_text('{"checks": 4}\n')
+    before = project_contents(opened.root)
+    result = json.loads(opened.ok("handoff", "M1", "--summary", "Implemented and checked", "--detail", "detail.md",
+                                 "--evidence", "evidence.json"))
+    assert result["summary"] == "Implemented and checked"
+    assert result["detail"]["sha256"] == hashlib.sha256(detail.read_bytes()).hexdigest()
+    assert result["evidence"][0]["path"] == "evidence.json"
+    assert project_contents(opened.root) == before
+    assert "상세를 --detail" in opened.fail("handoff", "M1", "--summary", "long", "--detail", "detail.md", "--max-summary-chars", "3")
+    assert json.loads(opened.ok("handoff", "M1", "--summary", "long", "--detail", "detail.md", "--max-summary-chars", "4"))["summary"] == "long"
+    assert "한 줄" in opened.fail("handoff", "M1", "--summary", "bad\nsummary", "--detail", "detail.md")
+    assert "파일 없음" in opened.fail("handoff", "M1", "--summary", "ready", "--detail", "missing.md")
+    assert "path 형식" in opened.fail("handoff", "M1", "--summary", "ready", "--detail", "../detail.md")
+    assert "파일 없음" in opened.fail("handoff", "M1", "--summary", "ready", "--detail", "detail.md", "--evidence", "missing.json")
+    assert project_contents(opened.root) == before
+
+
+def verification_input(mission, **changes):
+    (mission.root / "input.txt").write_text("Fixed input\n")
+    plan = {"grade": "pytest-pass", "commands": [{"argv": [sys.executable, "-c", "print('checked')"]}],
+            "inputs": ["input.txt"], "environment": {"target": "fixture"}}
+    plan.update(changes)
+    return mission.json_input("plan.json", plan)
+
+
+@pytest.mark.parametrize("status", ["pass", "fail"])
+def test_preflight_passes_settings_and_guard_without_state_or_receipts(opened, monkeypatch, status):
+    opened.add_unit()
+    plan_path = verification_input(opened)
+    seen = []
+    def preflight(project, plan, guard, settings=None):
+        seen.append((project, plan, settings))
+        guard("python -V")
+        return {"status": status, "grade": plan["grade"], "commandCount": 1, "readinessCount": 0, "resources": []}
+    monkeypatch.setattr(mission_state.verification, "preflight", preflight)
+    before = project_contents(opened.root)
+    code, out, err = opened.run("preflight", "M1", "--plan", plan_path)
+    expected_code = 1
+    if status == "pass":
+        expected_code = 0
+    assert code == expected_code and not err
+    assert json.loads(out)["status"] == status
+    assert seen[0][2] == ADAPTER["verify"]
+    assert seen[0][1]["unitBrief"]["goal"] == "목표"
+    assert project_contents(opened.root) == before
+
+
+def test_reference_bundle_drift_prevents_preflight_and_verify_execution(opened, monkeypatch):
+    opened.add_unit()
+    guide = opened.root / "guidance.md"
+    guide.write_text("Current reference\n")
+    opened.ok("reference", "snapshot", "--source", "guidance.md", "--output", "runtime/ref.json")
+    plan_path = verification_input(opened, referenceBundle="runtime/ref.json")
+    def unexpected(*args, **kwargs):
+        pytest.fail("changed reference reached verification execution")
+    monkeypatch.setattr(mission_state.verification, "preflight", unexpected)
+    monkeypatch.setattr(mission_state.verification, "run", unexpected)
+    guide.write_text("Changed reference\n")
+    before = project_contents(opened.root)
+    assert "변경/누락" in opened.fail("preflight", "M1", "--plan", plan_path)
+    assert project_contents(opened.root) == before
+    assert "변경/누락" in opened.fail("verify", "M1", "--plan", plan_path)
+
+
+def test_verify_passes_adapter_settings(opened, monkeypatch):
+    opened.add_unit()
+    plan_path = verification_input(opened)
+    settings_seen = []
+    def run(project, folder, unit, plan, guard, force, settings=None):
+        settings_seen.append(settings)
+        guard("python -V")
+        return "receipt.json", {"status": "pass", "grade": "pytest-pass", "log": "output.log", "error": ""}, False
+    monkeypatch.setattr(mission_state.verification, "run", run)
+    assert "검증 pass" in opened.ok("verify", "M1", "--plan", plan_path)
+    assert settings_seen == [ADAPTER["verify"]]
+
+
+def test_preflight_actual_runner_does_not_launch_commands_or_write_receipts(opened):
+    opened.add_unit()
+    command = {"argv": [sys.executable, "-c", "from pathlib import Path; Path('launched.txt').write_text('ran')"]}
+    plan_path = verification_input(opened, commands=[command])
+    before = project_contents(opened.root)
+    result = json.loads(opened.ok("preflight", "M1", "--plan", plan_path))
+    assert result["status"] == "pass" and result["commandCount"] == 1
+    assert project_contents(opened.root) == before
+
+
+def test_reference_cli_refresh_uses_snapshot_output_hash(opened):
+    (opened.root / "guidance.md").write_text("Current guidance\n")
+    initial = json.loads(opened.ok("reference", "snapshot", "--source", "guidance.md", "--output", "runtime/ref.json"))
+    assert initial["output"]["path"] == "runtime/ref.json"
+    before = (opened.root / "runtime/ref.json").read_bytes()
+    assert "expect-sha256" in opened.fail("reference", "snapshot", "--source", "guidance.md", "--output", "runtime/ref.json")
+    assert (opened.root / "runtime/ref.json").read_bytes() == before
+    updated = json.loads(opened.ok("reference", "snapshot", "--source", "guidance.md", "--output", "runtime/ref.json",
+                                  "--expect-sha256", initial["output"]["sha256"], "--revision", "r2"))
+    assert updated["output"]["sha256"] != initial["output"]["sha256"]
+    assert updated["sources"][0]["revision"] == "r2"
+
+
+def completion_with_policy(mission):
+    mission.add_unit()
+    mission.ok("unit", "set", "M1", "--status", "doing")
+    (mission.root / "machine-state").write_text("ready", encoding="utf-8")
+    (mission.root / "readiness.py").write_text(
+        "from pathlib import Path\nPath('observations').open('a').write('x')\n"
+        "raise SystemExit(int(Path('machine-state').read_text() != 'ready'))\n", encoding="utf-8",
+    )
+    adapter_path = mission.root / ".claude/orchestrator/adapter.json"
+    adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
+    adapter["verify"].update(
+        resourceDir=str(mission.root / "resources"), resources={"pytest-pass": ["engine"]},
+        readiness={"pytest-pass": [{"argv": [sys.executable, "readiness.py"]}]},
+    )
+    adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
+    plan = verification_input(mission, commands=[{"argv": [sys.executable, "-c",
+        "from pathlib import Path; Path('validation-runs').open('a').write('x')"], "reusable": True, "outputs": []}])
+    mission.ok("verify", "M1", "--plan", plan)
+    receipt = json.loads((mission.folder / "verification/M1.latest.json").read_text(encoding="utf-8"))["receipt"]
+    report = mission.root / "review.md"
+    report.write_text("Fictional independent review", encoding="utf-8")
+    review_args = ["review", "M1", "--receipt", receipt, "--evidence", str(report), "--reviewer", "independent",
+                   "--kind", "unit", "--status", "clean"]
+    mission.ok(*review_args)
+    review = json.loads((mission.folder / "verification/M1.review.latest.json").read_text(encoding="utf-8"))["review"]
+    return adapter_path, adapter, plan, receipt, review, review_args
+
+
+@pytest.mark.parametrize("change", ["resources", "resourceDir", "readiness-command", "readiness-script", "remove"])
+def test_changed_policy_and_readiness_tools_block_review_complete_and_reuse(opened, change):
+    adapter_path, adapter, plan, receipt, review, review_args = completion_with_policy(opened)
+    if change == "resources":
+        adapter["verify"]["resources"]["pytest-pass"] = ["other-engine"]
+    elif change == "resourceDir":
+        adapter["verify"]["resourceDir"] = str(opened.root / "other-resources")
+    elif change == "readiness-command":
+        adapter["verify"]["readiness"]["pytest-pass"][0]["argv"].append("extra")
+    elif change == "readiness-script":
+        (opened.root / "readiness.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    else:
+        adapter["verify"] = {"grades": ["pytest-pass", "editmode-pass"]}
+    adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
+    units_before = (opened.folder / "units.tsv").read_bytes()
+    ledger_before = (opened.folder / "ledger.tsv").read_bytes()
+    assert "검증" in opened.fail(*review_args)
+    assert "검증" in opened.fail("complete", "M1", "--receipt", receipt, "--review", review, "--done-evidence", "verified")
+    assert (opened.folder / "units.tsv").read_bytes() == units_before
+    assert (opened.folder / "ledger.tsv").read_bytes() == ledger_before
+    assert "input.txt" in opened.ok("review-scope", "M1", "--plan", plan)
+    opened.ok("verify", "M1", "--plan", plan)
+    latest_path = json.loads((opened.folder / "verification/M1.latest.json").read_text(encoding="utf-8"))["receipt"]
+    latest = json.loads(Path(latest_path).read_text(encoding="utf-8"))
+    assert latest_path != receipt and latest["executionCounts"] == {"executed": 1, "reused": 0}
+    assert (opened.root / "validation-runs").read_text(encoding="utf-8") == "xx"
+
+
+def test_cleanup_observation_changes_allow_review_and_completion_without_readiness(opened, monkeypatch):
+    _, _, _, receipt, _, review_args = completion_with_policy(opened)
+    (opened.root / "machine-state").write_text("closed", encoding="utf-8")
+    def unexpected(*args, **kwargs):
+        pytest.fail("review or complete reran a readiness observation")
+    monkeypatch.setattr(mission_state.verification, "execute_command", unexpected)
+    opened.ok(*review_args)
+    review = json.loads((opened.folder / "verification/M1.review.latest.json").read_text(encoding="utf-8"))["review"]
+    assert "완료" in opened.ok("complete", "M1", "--receipt", receipt, "--review", review, "--done-evidence", "verified")
+    assert (opened.root / "observations").read_text(encoding="utf-8") == "x"

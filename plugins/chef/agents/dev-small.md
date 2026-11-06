@@ -2,7 +2,8 @@
 name: dev-small
 description: 승인된 문서 작성·정해진 소규모 수정을 맡는다. 설계 판단이나 여러 계층 변경은 dev-medium으로 돌린다.
 model: claude-sonnet-5-5[1m]
-effort: high
+effort: medium
+tools: Read, Grep, Glob, Bash, PowerShell, Write, Edit
 maxTurns: 24
 autoCompactWindow: 150000
 ---

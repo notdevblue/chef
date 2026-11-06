@@ -19,6 +19,7 @@ import mission_guard  # noqa: E402
 import slots  # noqa: E402
 import verification
 import question_records
+import reference_bundle
 from question_summary import QuestionSummary, is_answer_section, markdown_lines, plain_text, summarize_question
 
 OK = 0
@@ -808,8 +809,90 @@ def verification_plan(ctx, args):
     require_folder(ctx)
     row = require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
     plan = verification.load_plan(ctx.project, args.plan, (ctx.adapter.get("verify") or {}).get("grades", []))
+    if "referenceBundle" in plan:
+        try:
+            reference_bundle.require_current(ctx.project, plan["referenceBundle"])
+        except reference_bundle.ReferenceError as error:
+            raise verification.VerificationError(str(error), "plan_invalid") from error
     plan["unitBrief"] = {name: row[name] for name in EDITABLE_FIELDS}
     return plan
+
+
+def verification_guard(ctx):
+    def guard(command):
+        problems = []
+        shell = "Bash"
+        if os.name == "nt":
+            shell = "PowerShell"
+        verdict = mission_guard.judge_command(ctx.adapter, command, shell, problems)
+        if verdict.kind != "allow" or problems:
+            raise StateError(f"검증 명령 거부: {verdict.reason or problems}")
+    return guard
+
+
+def cmd_preflight(ctx, args):
+    plan = verification_plan(ctx, args)
+    result = verification.preflight(ctx.project, plan, verification_guard(ctx), settings=ctx.adapter.get("verify"))
+    args.exit_code = OK
+    if result["status"] == "fail":
+        args.exit_code = FAILED
+    return [json.dumps(result, ensure_ascii=False)]
+
+
+def cmd_schema(ctx, args):
+    return [json.dumps({
+        "schema": 1,
+        "stages": [stage["id"] for stage in ctx.adapter.get("stages", []) if isinstance(stage, dict) and stage.get("id")],
+        "unitStatuses": UNIT_STATUSES, "ledgerStatuses": LEDGER_STATUSES, "missionStates": MISSION_STATES,
+        "grades": (ctx.adapter.get("verify") or {}).get("grades", []), "humanGrade": NEEDS_HUMAN,
+        "reviewKinds": ["poc", "unit", "integration"], "reviewStatuses": ["clean", "findings"],
+        "questionItemStatuses": question_records.ITEM_STATUSES,
+        "questionApprovalStatuses": question_records.APPROVAL_STATUSES, "runtimes": RUNTIMES,
+    }, ensure_ascii=False)]
+
+
+def cmd_reference_snapshot(ctx, args):
+    bundle = reference_bundle.snapshot(ctx.project, args.source, args.output, args.revision, args.section, args.expect_sha256)
+    return [json.dumps({"output": reference_bundle.file_pointer(ctx.project, args.output), **bundle}, ensure_ascii=False)]
+
+
+def cmd_reference_check(ctx, args):
+    result = reference_bundle.check(ctx.project, args.input)
+    args.exit_code = OK
+    if result["status"] == "fail":
+        args.exit_code = FAILED
+    return [json.dumps(result, ensure_ascii=False)]
+
+
+def cmd_reference_show(ctx, args):
+    return [json.dumps(reference_bundle.load(ctx.project, args.input), ensure_ascii=False)]
+
+
+def cmd_brief(ctx, args):
+    require_folder(ctx)
+    row = require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    require_question_integrity(ctx.folder)
+    result = {"schema": 1, "unit": args.id, **{name: row[name] for name in EDITABLE_FIELDS},
+              "approvalSources": [ctx.path("mission.md")]}
+    for name in question_records.document_names(ctx.folder):
+        result["approvalSources"].append(str(question_records.source_path(ctx.folder, name)))
+    if args.references:
+        result["references"] = reference_bundle.require_current(ctx.project, args.references)["sources"]
+    return [json.dumps(result, ensure_ascii=False)]
+
+
+def cmd_handoff(ctx, args):
+    reference_bundle.text_value(args.summary, "--summary")
+    if args.max_summary_chars < 1:
+        raise StateError("--max-summary-chars 는 양수여야 함")
+    if len(args.summary) > args.max_summary_chars:
+        raise StateError(f"--summary {len(args.summary)}자: 최대 {args.max_summary_chars}자; 상세를 --detail 파일로 옮기거나 --max-summary-chars 를 명시할 것")
+    require_folder(ctx)
+    require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    detail = reference_bundle.file_pointer(ctx.project, args.detail)
+    evidence = [reference_bundle.file_pointer(ctx.project, path) for path in args.evidence]
+    return [json.dumps({"schema": 1, "unit": args.id, "summary": args.summary,
+                        "detail": detail, "evidence": evidence}, ensure_ascii=False)]
 
 
 def cmd_verify(ctx, args):
@@ -824,17 +907,20 @@ def cmd_verify(ctx, args):
         verification.record_failure(ctx.project, ctx.folder, args.id, error, category)
         raise
 
-    def guard(command):
-        problems = []
-        verdict = mission_guard.judge_command(ctx.adapter, command, "PowerShell" if os.name == "nt" else "Bash", problems)
-        if verdict.kind != "allow" or problems:
-            raise StateError(f"검증 명령 거부: {verdict.reason or problems}")
-
-    path, receipt, reused = verification.run(ctx.project, ctx.folder, args.id, plan, guard, args.force)
-    args.exit_code = OK if receipt["status"] == "pass" else FAILED
+    path, receipt, reused = verification.run(
+        ctx.project, ctx.folder, args.id, plan, verification_guard(ctx), args.force, settings=ctx.adapter.get("verify"),
+    )
+    args.exit_code = FAILED
+    if receipt["status"] == "pass":
+        args.exit_code = OK
+    mode = "실행"
+    if reused:
+        mode = "재사용"
+    log = f"로그: {receipt['log']}"
+    if receipt["error"]:
+        log += f" | {receipt['error']}"
     return [
-        f"검증 {receipt['status']} {receipt['grade']} {'재사용' if reused else '실행'} | {path}",
-        f"로그: {receipt['log']}" + (f" | {receipt['error']}" if receipt["error"] else ""),
+        f"검증 {receipt['status']} {receipt['grade']} {mode} | {path}", log,
     ]
 
 
@@ -843,7 +929,7 @@ def cmd_review(ctx, args):
     require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
     path = verification.record_review(
         ctx.project, ctx.folder, args.id, args.receipt, args.evidence, args.reviewer, args.kind, args.status,
-        args.findings_count, args.fixed_count, args.findings_input,
+        args.findings_count, args.fixed_count, args.findings_input, settings=ctx.adapter.get("verify") or {},
     )
     review = verification.read_json(path)
     return [f"리뷰 {args.id} {args.status} {args.kind} | {path}", *review.get("diagnostics", [])]
@@ -851,7 +937,7 @@ def cmd_review(ctx, args):
 
 def cmd_review_scope(ctx, args):
     plan = verification_plan(ctx, args)
-    paths = verification.review_scope(ctx.project, ctx.folder, args.id, plan)
+    paths = verification.review_scope(ctx.project, ctx.folder, args.id, plan, settings=ctx.adapter.get("verify") or {})
     return [f"리뷰 변경 범위 {args.id}: {len(paths)}개", *paths]
 
 
@@ -864,7 +950,7 @@ def cmd_complete(ctx, args):
         raise StateError("doing 마일스톤만 완료할 수 있음")
     require_text("--done-evidence", args.done_evidence)
     receipt = verification.read_json(args.receipt)
-    verification.validate_receipt(ctx.project, ctx.folder, args.id, receipt)
+    verification.validate_receipt(ctx.project, ctx.folder, args.id, receipt, settings=ctx.adapter.get("verify") or {})
     verification.validate_latest(ctx.folder, args.id, args.receipt)
     if receipt.get("plan", {}).get("unitBrief") != {name: row[name] for name in EDITABLE_FIELDS}:
         raise StateError("검증 이후 브리프·완료 조건이 바뀜")
@@ -1051,6 +1137,25 @@ def build_parser():
     init.add_argument("--force-tier", action="store_true", help="S 티어도 미션으로 연다(사용자가 원할 때만)")
     leaf(sub, "status", cmd_status)
     leaf(sub, "context", cmd_context)
+    leaf(sub, "schema", cmd_schema)
+    brief = leaf(sub, "brief", cmd_brief)
+    brief.add_argument("id")
+    brief.add_argument("--references", default="")
+    handoff = leaf(sub, "handoff", cmd_handoff)
+    handoff.add_argument("id")
+    handoff.add_argument("--summary", required=True)
+    handoff.add_argument("--detail", required=True)
+    handoff.add_argument("--evidence", action="append", default=[])
+    handoff.add_argument("--max-summary-chars", type=int, default=1000)
+    reference = sub.add_parser("reference").add_subparsers(dest="action", required=True)
+    snapshot = leaf(reference, "snapshot", cmd_reference_snapshot)
+    snapshot.add_argument("--source", action="append", required=True)
+    snapshot.add_argument("--output", required=True)
+    snapshot.add_argument("--revision", default="")
+    snapshot.add_argument("--section", default="")
+    snapshot.add_argument("--expect-sha256", default="")
+    leaf(reference, "check", cmd_reference_check).add_argument("--input", required=True)
+    leaf(reference, "show", cmd_reference_show).add_argument("--input", required=True)
     leaf(sub, "transcripts", cmd_transcripts)
     leaf(sub, "active", cmd_active).add_argument("--hours", type=float, help="끊김 기준 시간 (기본: 어댑터 mission.staleHours, 24)")
     close_stale = leaf(sub, "close-stale", cmd_close_stale)
@@ -1087,6 +1192,9 @@ def build_parser():
     verify.add_argument("id")
     verify.add_argument("--plan", required=True)
     verify.add_argument("--force", action="store_true")
+    preflight = leaf(sub, "preflight", cmd_preflight)
+    preflight.add_argument("id")
+    preflight.add_argument("--plan", required=True)
     review = leaf(sub, "review", cmd_review)
     review.add_argument("id")
     for field in ("receipt", "evidence", "reviewer"):
@@ -1159,7 +1267,8 @@ def main(argv=None, runtime="claude"):
         except (slots.UsageError, mission_guard.GuardOff) as e:
             raise StateError(str(e))
         mission_id = args.mission or ""
-        if args.handler == cmd_active:
+        standalone = args.handler in (cmd_active, cmd_schema, cmd_reference_snapshot, cmd_reference_show, cmd_reference_check)
+        if standalone:
             mission_id = "-"
         elif not mission_id:
             active = mission_guard.read_active(state_dir)
@@ -1168,11 +1277,12 @@ def main(argv=None, runtime="claude"):
             if not active.id:
                 raise StateError("미션 id 없음: --mission <id> 를 주거나 `echo han-mission open <id>` 로 먼저 열 것")
             mission_id = active.id
-        if args.handler != cmd_active and not mission_guard.valid_mission_id(mission_id):
+        if not standalone and not mission_guard.valid_mission_id(mission_id):
             raise StateError(f"미션 id 형식 오류: {mission_id}")
         readonly = args.handler in (
             cmd_status, cmd_context, cmd_transcripts, cmd_unit_list, cmd_review_scope, cmd_document_list, cmd_active,
             cmd_question_preview, cmd_question_show, cmd_question_check,
+            cmd_preflight, cmd_schema, cmd_brief, cmd_handoff, cmd_reference_show, cmd_reference_check,
         )
         lock_name = mission_id
         if args.handler == cmd_verify:
@@ -1184,7 +1294,8 @@ def main(argv=None, runtime="claude"):
         )
         with lock:
             lines = args.handler(Context(adapter, state_dir, mission_id, runtime, located.project), args)
-    except (StateError, OSError, verification.VerificationError, question_records.QuestionRecordError, slots.LockBusy) as e:
+    except (StateError, OSError, verification.VerificationError, question_records.QuestionRecordError,
+            reference_bundle.ReferenceError, slots.LockBusy) as e:
         print(f"오류: {e}", file=sys.stderr)
         return FAILED
     for line in lines:

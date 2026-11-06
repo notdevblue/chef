@@ -11,7 +11,7 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 | 구성 | 위치 | 하는 일 |
 | --- | --- | --- |
 | 개인 규칙 | `plugins/chef/rules/` | 플러그인 설정 `inject_rules`가 `on`이거나 `shared`일 때만(`shared`는 `personal-rules.md`를 뺀 나머지), 세션 시작·재개·압축 때 `SessionStart` 훅이, 서브에이전트 시작 때 `SubagentStart` 훅이 컨텍스트에 넣는다(예전 `~/.claude/CLAUDE.md`) |
-| 에이전트 | `plugins/chef/agents/` | `chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier` |
+| 에이전트 | `plugins/chef/agents/` | `chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:reviewer-small` |
 | `/chef:mission` | `plugins/chef/skills/mission/` | 컨텐츠 확인 → PoC → 구현 → 검토, 사람 확인 A·B·C. 상태 파일은 `scripts/mission_state.py`로만 쓰고, 끝에 기록 감사 |
 | `/chef:distill` | `plugins/chef/skills/distill/` | 대화 기록에서 사용자 피드백을 뽑아 가이드·메모리·개인 규칙·플러그인 반영 후보로 분류, 고른 것만 반영. 미션은 확인 C 직전에 자동 |
 | `/chef:adapter-init` | `plugins/chef/skills/adapter-init/` | 프로젝트 조사해 어댑터 초안, 슬롯 폴더 묻기 |
@@ -216,10 +216,11 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
 - Claude 메인 슬롯 새 세션·재개는 기본 500000토큰, Codex는 200000토큰에서 압축한다. `slots.autocompact`로 100000~1000000 사이에서 바꾼다.
   이미 실행 중인 세션은 Claude의 `/autocompact 500k` 또는 다음 슬롯 재개 때 적용한다.
 - 구현 역할은 `dev-small`(승인된 문서·정해진 소규모 수정)과 `dev-medium`(복잡한 구현, high effort)이다.
-  `dev-small`은 Claude Sonnet 5.5 / high, Codex GPT-6 Luna / high로 고정한다.
+  `dev-small`은 Claude Sonnet 5.5 / medium, Codex GPT-6 Luna / high로 고정한다.
+  Claude `dev-medium`은 기존 Sonnet / high, `researcher`와 `reviewer-small`은 기존 Sonnet / medium을 쓴다.
   Codex `dev-medium`은 GPT-6.1 Sol / high로 고정한다.
   코디네이터가 직접 편집하지 않는 미션 경계와 독립 리뷰는 유지한다.
-- 테스트·Unity Play 실행은 `roles.verify` 하나가 맡는다. Claude는 `chef:verifier`(Sonnet 5.5 / high),
+- 테스트·Unity Play 실행은 `roles.verify` 하나가 맡는다. Claude는 `chef:verifier`(Sonnet 5.5 / low),
   Codex는 `chef_verifier`(GPT-6 Luna / high)로 고정한다. 구현자는 공유 Unity 검증을 직접 실행하지 않는다.
   검증자는 코드·검증 범위·모델을 바꾸지 않고 실패·예상 밖 상태·미확인 증거를 메인에 반환한다.
   공유 Unity 순서와 에디터 수명, 최종 완료 판정은 코디네이터가 맡고 독립 리뷰는 별도로 받는다.
@@ -227,7 +228,8 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
 - 승인된 계약과 파일 소유가 독립적인 구현은 병렬로 진행한다. 관련 하위 작업까지 반환을 모으고 필요한
   `.meta`·생성물·CL 정리를 마친 뒤 검증 입력을 고정한다. Unity 검증은 하나씩 실행하고, 검증 중 입력을 바꾸지 않는다.
   브리프에는 해당 작업의 파일·CL 소유, 기능 완료 범위와 반례를 넣는다. 같은 CL에 속해도 마일스톤별 검증 기록은 따로 유지한다.
-- 미션 재개는 `context`, 검증은 `verify --plan`, 독립 리뷰 근거 등록 후 완료는 `complete` 한 호출을 쓴다.
+- 미션 재개는 `context`, 파견 입력은 `reference snapshot`·`brief`, 검증 전에는 읽기 전용 `preflight --plan`을 쓴다.
+  실제 검증은 `verify --plan`, 반환 근거는 `handoff`, 독립 리뷰 근거 등록 후 완료는 `complete` 한 호출로 연결한다.
   [검증 계획과 결과 재사용](plugins/chef/skills/mission/references/verification-workflow.md)에 계약·예시가 있다.
   기존 ledger 이력은 유지하며 새 완료는 문자열 pass 대신 유효한 검증·리뷰 기록이 필요하다.
 
@@ -248,10 +250,8 @@ Claude 입력·캐시·출력·Advisor와 리뷰 기록을 함께 집계한다. 
 작업 종류·단위·단계는 명시적인 활동 매핑으로 연결하고, 없는 기록이나 충돌은 미확인으로 남긴다.
 검증 보고는 실제 실행과 단계 재사용, 실패 원인과 반복 실패를 구분한다. 설정과 예시는 위 운영 규약을 따른다.
 
-작성자와 독립 검토자는 같은 적용 규칙 경로와 확정 계약을 받는다. 작성자는 변경 범위 전체를
-자가 확인해 명확한 결함을 고친 뒤 반환하고, 독립 검토자는 완전한 원문·승인·완성본을 함께 본다.
-후속 검토는 지적 ID별 해소와 수정의 영향을 확인한다. 반복 상한에서는 원인과 남은 판단을 진단하며
-실제 결함·규칙 위반이나 승인·검증 게이트를 생략하지 않는다.
+참조 묶음·파견·반환 CLI와 첫 리뷰·후속 범위는 위 [사용량 운영 규약](plugins/chef/skills/mission/references/usage-policy.md)에 있다.
+자동 검사는 원문 보존·입력 일치·실행 준비를 확인하며 승인 범위와 의미·독립 clean 판정은 사람이 확인한다.
 
 ## 설계 메모
 

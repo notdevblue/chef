@@ -2,7 +2,8 @@
 name: reviewer-small
 description: 직전 리뷰 이후의 좁은 변경과 finding 해소를 독립적으로 재검증한다. 첫 심층 리뷰·공통 계약 변경은 메인에 반환한다.
 model: claude-sonnet-5-5[1m]
-effort: high
+effort: medium
+tools: Read, Grep, Glob, Bash, PowerShell
 maxTurns: 32
 autoCompactWindow: 150000
 ---

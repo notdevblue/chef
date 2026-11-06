@@ -121,6 +121,12 @@ python "${CLAUDE_PLUGIN_ROOT}/skills/mission/scripts/mission_state.py" <명령> 
 | `decision add --what --chosen --why --affects [--fixes Dn]` | `[~]` 결정, 앞 기록 정정 |
 | `status` | 세 줄 요약(마일스톤 수·최근 판정·걸린 것) |
 | `context` | 재개용 요약: 현재 단위·최근 판정·최근 결정·승인 원본 위치 |
+| `schema` | adapter의 허용 열거형·검증 등급 조회(ACTIVE 불필요) |
+| `reference snapshot --source <파일>… --output <묶음.json> [--expect-sha256 <해시>]` | 원문 경로·해시 고정. 출력은 프로젝트 안 상대 경로. 기존 묶음 갱신은 직전 `output.sha256` 필수 |
+| `reference check --input <묶음.json>` / `reference show --input <묶음.json>` | 참조 변경·누락 검사 / 참조 포인터 조회 |
+| `brief <id> [--references <묶음.json>]` | 단위 브리프·승인 원문 위치·검사한 참조 포인터를 읽기 전용으로 출력 |
+| `handoff <id> --summary <결과> --detail <상세> [--evidence <근거>]…` | 기존 상세·증거 파일을 해시와 함께 읽기 전용 반환. 완료·승인 상태는 바꾸지 않음 |
+| `preflight <id> --plan <json>` | 명령 실행 없이 계획·입력·실행 준비·참조 검사 |
 | `verify <id> --plan <json> [--force]` | 검증 실행·결과 수집, 유효한 같은 입력 결과 재사용 |
 | `review-scope <id> --plan <json>` | 직전 리뷰 이후 바뀐 입력 파일 |
 | `review <id> --receipt <json> --evidence <파일> --reviewer <이름> --kind poc\|unit\|integration --status clean\|findings` | 독립 리뷰 근거와 검증 입력 상태 연결 |
@@ -286,14 +292,16 @@ PoC 명세와의 일치로 쓴다.
 
 1. **작업 단위 준비** — `adapter.md` 절차로 CL·브랜치를 만들고 `unit set <id> --status doing --unit <CL>`.
    `after`가 안 끝났으면 CLI가 거부한다. `started`는 CLI가 적는다.
-2. **구현 파견** — 승인된 문서·명세가 확정된 소규모 수정은 `roles.implementSmall`(없으면 `roles.implement`),
+2. **구현 파견** — 방향·최신 답·승인 원문·규칙·양식을 `reference snapshot`으로 고정하고
+   `brief <id> --references <묶음.json>`의 출력으로 파견한다. 같은 묶음을 첫 리뷰에도 쓴다(`references/usage-policy.md`).
+   승인된 문서·명세가 확정된 소규모 수정은 `roles.implementSmall`(없으면 `roles.implement`),
    설계 판단·여러 계층 변경은 `roles.implement` 하나에게 그 행의 브리프 전부, 관련 명세, `adapter.md`의 관련 절,
    `forbid`와 고정 참조 묶음을 넘긴다. 구현자는 반환 전에 변경 함수·블록 전체 또는 문서 전체를 확정 명세·승인·규칙·양식과 대조하고 모든 명확한 결함·규칙 위반을 먼저 고친다. 실제 변경·대조 경로·자기 확인 결과·증거·미실행 검증·미완료 작업·남은 판단을 짧게 돌려준다. 병렬 파견 조건과 하위 구현을 나눈 주담당의 반환 책임은 `references/verification-workflow.md`를 따른다.
    파견 역할의 부분 반환·실패·턴 상한은 done이나 사용자 승인 요청이 아니다. 코디네이터가 근거와 현재 상태로 원인을 진단하고
    승인 범위 안의 수정과 남은 범위를 새 브리프로 파견한다. 리뷰 3라운드·timebox 상한과 실제 멈춤 조건은 유지한다.
-3. **검증 파견** — 브리프의 타깃 명령·입력·환경으로 검증 계획 JSON을 한 번 만들고 `roles.verify` 하나에
-   `verify <id> --plan …` 실행과 결과 수집을 맡긴다. 역할이 없으면 `chef:verifier`를 쓴다.
-   - Claude Sonnet 5.5 / high로 고정한다(어댑터 `rolePolicy.model`이 `inherit`면 역할 정책이 우선). 역할이 없거나 모델을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
+3. **검증 파견** — 브리프의 타깃 명령·입력·환경과 `referenceBundle`로 계획 JSON을 한 번 만들고
+   `preflight <id> --plan …`을 먼저 실행한다. 통과 뒤 `roles.verify` 하나에 `verify <id> --plan …` 실행과 결과 수집을 맡긴다. 역할이 없으면 `chef:verifier`를 쓴다.
+   - Claude Sonnet 5.5 / low로 고정한다(어댑터 `rolePolicy.model`이 `inherit`면 역할 정책이 우선). 역할이 없거나 모델을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
    - Unity Refresh·컴파일·EditMode·Play 순서와 입력 동결은 `references/verification-workflow.md`를 따른다.
    - Play 브리프에는 대상 프로젝트·조작 순서·기대 결과·증거 경로를 넣는다. 실패·예상 밖 상태는 증거와 미완료 이유를 메인에 반환한다.
    - 검증자는 코드·테스트·설정·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 원인 분석·수정·독립 리뷰·완료 판정은 분리한다.
@@ -302,7 +310,7 @@ PoC 명세와의 일치로 쓴다.
    - 승인된 검증 범위 변경, 결과 손상·환경 변경, 입력 변경이면 다시 실행한다. 입력에는 운영 코드·테스트·데이터·도구와 필요한 설정을 빠뜨리지 않는다.
    - 에디터 준비·검증·결과 수집·정리는 어댑터 실행 명령에 묶는다. 프로젝트 경로·양수 테스트 수·결과 상태를 검사하고 이번에 연 에디터만 정리한다.
 4. **마일스톤 리뷰** — fresh `roles.review` 하나로 첫 라운드는 단위 전체를 Opus / high로 본다(`rolePolicy.model`이 `inherit`면 역할 정책이 우선). fork는 쓰지 않는다.
-   좁은 수정 확인은 `chef:reviewer-small`(Sonnet / high)로 시작한다. 공통 계약·구조 변경이나 불명확한 원인이 나오면
+   좁은 수정 확인은 `chef:reviewer-small`(Sonnet / medium)로 시작한다. 공통 계약·구조 변경이나 불명확한 원인이 나오면
    근거와 남은 범위를 반환받아 Opus / high 리뷰어로 확대한다. 프로젝트 리뷰 규약은 두 역할 모두 지킨다.
    첫 리뷰는 같은 고정 참조 묶음으로 모든 근거 있는 결함과 명시적 규칙 위반을 함께 수집하고 제안은 분리한다.
    후속 라운드는 `review-scope`의 변경·직전 finding·영향받는 계약을 본다. 새 파일·삭제·이동을 빠뜨리지 않고 미변경 부분을 다시 열 때는 실제 결함·규칙·원문 근거를 적는다.
@@ -313,7 +321,9 @@ PoC 명세와의 일치로 쓴다.
 5. **체크포인트와 완료** — 완료 조건을 확인하고 어댑터 절차로 shelve(또는 커밋)한 뒤
    `complete <id> --receipt … --review … --done-evidence …`로 판정·done·다음 단위 조회를 묶는다.
    입력이 바뀌었거나 독립 리뷰 근거가 없으면 CLI가 거부한다. 완료를 위해 상태 TSV를 직접 고치지 않는다.
-6. **보고** — 단위 진행은 상태 CLI가 정본이며 완료 응답의 요약을 세션에 보고한다.
+6. **보고** — 단위 진행은 상태 CLI가 정본이다. 반환의 상세·근거는 파일로 받고
+   `handoff <id> --summary <결과> --detail <상세> --evidence <근거>` 출력으로 연결한다.
+   세션에는 완료 응답의 결과·다음 일·미확인만 짧게 보고한다.
    `report.push`가 켜져 있고 알림 도구가 있으면 끝난 단위·등급·새 결정·다음 단위를 짧게 알린다.
    사람에게 확인·질문·종료 결과를 공유할 때만 담당 작성자 하나에게 관련 사람용·상세 문서를 쓰게 한다.
    확인·질문은 작성자의 JSON 초안·상세를 검토한 뒤 `question publish`로 발행하고, 보고서(`report.md`, `details/report.md`)는
@@ -400,7 +410,7 @@ PoC 명세와의 일치로 쓴다.
      실제 폴더를 기준으로 `references/human-writing.md`를 찾는다. 기존 Markdown 양식은 본문 문체·순서·승인 범위의 참고로 쓴다.
      파견할 때 원문·최신 답과 상태·문서 id·개정·JSON 초안·출력·상세 위치와 공통 규칙·작성 안내·선택한 양식·예시의 실제 경로를 넘긴다.
      작성자가 전체 본문·상세를 고정 원문·최신 답·승인·규칙·양식·예시에 함께 대조해 명확한 결함을 모두 고친 뒤 반환한다. 대조 경로·결과·남은 판단만 짧게 덧붙인다. 수정도 작성 담당에게 맡기며 코디네이터가 사후 윤문하지 않는다.
-   - 질문 작성자는 JSON 초안과 상세를 직접 쓴다. 코디네이터가 검토를 마친 초안을 `question publish --input <초안JSON>`으로 발행한다.
+   - 질문마다 작성 담당 하나가 JSON 초안·상세를 쓰고 생성 Markdown은 CLI에 맡긴다. 코디네이터가 검토를 마친 초안을 `question publish --input <초안JSON>`으로 발행한다.
      보고서(`report.md`, `details/report.md`)는 하네스가 서브에이전트의 보고서 `.md` 작성을 거부하므로, 작성자가 완성 본문
      (또는 절별 교체 내용)을 돌려주고 코디네이터가 받은 그대로 반영한다. 검사·검토에서 나온 수정은 작성자에게 다시 맡긴다.
    - 상세 양식은 `references/details-template.md`다. 같은 id·개정으로 연결하고, 상세를 루트의 `ask-1-details.md`처럼 두지 않는다.

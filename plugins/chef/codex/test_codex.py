@@ -476,13 +476,9 @@ def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
 def test_installed_codex_integrity_uses_config_registry_read_only(project, tmp_path, event, tool_name):
     (project / ".codex/orchestrator/adapter.json").unlink()
     installed = tmp_path / "installed/plugins/chef"
-    paths = ("codex/question_integrity.py", "hooks/question_integrity.py", "hooks/question_write_guard.py", "hooks/mission_guard.py", "hooks/hook_runtime.py",
-             "skills/mission/scripts/mission_state.py", "skills/mission/scripts/verification.py", "skills/mission/scripts/question_records.py",
-             "skills/mission/scripts/question_summary.py", "skills/slots/scripts/slots.py", "grok/scripts/grok_transcript.py")
-    for relative in paths:
-        target = installed / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(PLUGIN / relative, target)
+    shutil.copytree(PLUGIN, installed, ignore=shutil.ignore_patterns(
+        "__pycache__", ".pytest_cache", "pytest-cache-files-*", "*.pyc",
+    ))
     registry = tmp_path / "registry"
     adapter = registry / "fictional/adapter.json"
     adapter.parent.mkdir(parents=True)

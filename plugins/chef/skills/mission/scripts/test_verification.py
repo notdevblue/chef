@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,327 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import mission_state
 import verification
+
+
+def resource_settings(tmp_path, *resources):
+    return {"resourceDir": str(tmp_path / "shared-resources"), "resources": {"pytest-pass": list(resources)}}
+
+
+def allow_command(command):
+    return command
+
+
+def test_preflight_is_read_only_and_checks_readiness_without_running(mission, monkeypatch):
+    root, folder, plan = mission
+    settings = resource_settings(root.parent, "engine")
+    settings["readiness"] = {"pytest-pass": [{"argv": [sys.executable, "-c", "print('{project}')"]}]}
+    before = sorted(str(path.relative_to(root)) for path in root.rglob("*"))
+    def unexpected(*args, **kwargs):
+        pytest.fail("preflight started a subprocess")
+    monkeypatch.setattr(verification.subprocess, "run", unexpected)
+    result = verification.preflight(root, plan, allow_command, settings)
+    assert json.loads(json.dumps(result)) == result
+    assert result == {"status": "pass", "grade": "pytest-pass", "commandCount": 1,
+                      "readinessCount": 1, "resources": ["engine"], "failure": {}}
+    assert sorted(str(path.relative_to(root)) for path in root.rglob("*")) == before
+    assert not (folder / "verification").exists()
+    assert not Path(settings["resourceDir"]).exists()
+
+
+@pytest.mark.parametrize("change,category", [("cwd", "preflight"), ("executable", "preflight"),
+                                              ("control", "preflight"), ("guard", "guard_rejected"),
+                                              ("grade", "plan_invalid")])
+def test_preflight_classifies_invalid_plan_and_readiness(mission, change, category):
+    root, folder, plan = mission
+    settings = {"grades": ["pytest-pass"], "readiness": {"pytest-pass": [{"argv": [sys.executable, "-c", "pass"]}]}}
+    command = settings["readiness"]["pytest-pass"][0]
+    if change == "cwd":
+        command["cwd"] = "missing"
+    elif change == "executable":
+        command["argv"][0] = "fictional-missing-program"
+    elif change == "control":
+        command["argv"].append("invalid\nargument")
+    elif change == "grade":
+        settings["grades"] = []
+    else:
+        command["argv"].append("forbidden")
+    def guard(command):
+        if "forbidden" in command:
+            raise RuntimeError("fictional guard rejection")
+    result = verification.preflight(root, plan, guard, settings)
+    assert result["status"] == "fail" and result["failure"]["category"] == category
+    assert not (folder / "verification").exists()
+
+
+@pytest.mark.parametrize("names", [["../escape"], ["nested/name"], ["nested\\name"], ["a\nb"],
+                                  ["."], ["alpha", "alpha"], ["Alpha", "alpha"], ["CON"], ["lpt1"], [1], "alpha"])
+def test_preflight_rejects_resource_path_injection_and_duplicate_names(mission, names):
+    root, _, plan = mission
+    settings = resource_settings(root.parent)
+    settings["resources"]["pytest-pass"] = names
+    assert verification.preflight(root, plan, allow_command, settings)["status"] == "fail"
+    assert not Path(settings["resourceDir"]).exists()
+
+
+@pytest.mark.parametrize("value", ["..", "invalid\nfolder", 0, ""])
+def test_preflight_rejects_invalid_resource_directory(mission, value):
+    root, _, plan = mission
+    settings = resource_settings(root.parent, "engine")
+    settings["resourceDir"] = value
+    assert verification.preflight(root, plan, allow_command, settings)["failure"]["category"] == "preflight"
+
+
+def test_resources_serialize_distinct_projects_and_release_after_run(mission, tmp_path, monkeypatch):
+    root, folder, plan = mission
+    other = tmp_path / "other-project"
+    other.mkdir()
+    (other / "src.py").write_text("value = 2\n", encoding="utf-8")
+    other_plan = {"grade": "pytest-pass", "inputs": ["src.py"], "environment": {"target": "fictional"},
+                  "commands": [{"argv": [sys.executable, "-c", "pass"]}]}
+    other_folder = other / "mission"
+    other_folder.mkdir()
+    settings = resource_settings(tmp_path, "engine")
+    entered, finish = threading.Event(), threading.Event()
+    real_execute = verification.execute_command
+    def launch(project, command, identity, log):
+        if project == root:
+            entered.set()
+            assert finish.wait(10)
+        return real_execute(project, command, identity, log)
+    monkeypatch.setattr(verification, "execute_command", launch)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(verification.run, root, folder, "M1", plan, allow_command, settings=settings)
+        try:
+            assert entered.wait(10), first.result(timeout=1)
+            _, busy, reused = verification.run(other, other_folder, "M1", other_plan, allow_command, settings=settings)
+            assert busy["failure"]["category"] == "resource_busy" and not reused
+            assert busy["executionCounts"]["executed"] == 0
+            assert (Path(settings["resourceDir"]) / "engine.lock").exists()
+        finally:
+            finish.set()
+        assert first.result(timeout=10)[1]["status"] == "pass"
+    assert not (Path(settings["resourceDir"]) / "engine.lock").exists()
+    assert verification.run(other, other_folder, "M1", other_plan, allow_command, settings=settings)[1]["status"] == "pass"
+
+
+def test_partial_resource_acquisition_releases_in_sorted_order_without_stale_deletion(mission, tmp_path, monkeypatch):
+    root, folder, plan = mission
+    settings = resource_settings(tmp_path, "zeta", "alpha")
+    directory = Path(settings["resourceDir"])
+    directory.mkdir()
+    blocker = directory / "zeta.lock"
+    blocker.write_text("999999999\tfictional dead holder\n", encoding="utf-8")
+    seen = []
+    acquire = verification.ResourceLock.acquire
+    def track(lock):
+        seen.append(Path(lock.path).stem)
+        return acquire(lock)
+    monkeypatch.setattr(verification.ResourceLock, "acquire", track)
+    record = verification.run(root, folder, "M1", plan, allow_command, settings=settings)[1]
+    assert record["failure"]["category"] == "resource_busy"
+    assert seen == ["alpha", "zeta"]
+    assert not (directory / "alpha.lock").exists()
+    assert blocker.read_text(encoding="utf-8") == "999999999\tfictional dead holder\n"
+    assert not (root / "runs").exists()
+
+
+@pytest.mark.parametrize("failure,category", [("exit", "readiness_exit"), ("timeout", "readiness_timeout"),
+                                             ("launch", "readiness_launch_error")])
+def test_readiness_failures_do_not_start_validation_and_release_resources(mission, tmp_path, monkeypatch, failure, category):
+    root, folder, plan = mission
+    settings = resource_settings(tmp_path, "engine")
+    settings["readiness"] = {"pytest-pass": [{"argv": [sys.executable, "-c", "pass"], "timeoutSeconds": 1}]}
+    verification.platform.platform()
+    def launch(argv, **kwargs):
+        assert (Path(settings["resourceDir"]) / "engine.lock").is_file()
+        assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["shell"] is False and kwargs["timeout"] == 1
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 1)
+        if failure == "launch":
+            raise OSError("fictional readiness launch failure")
+        return subprocess.CompletedProcess(argv, 7)
+    monkeypatch.setattr(verification.subprocess, "run", launch)
+    record = verification.run(root, folder, "M1", plan, allow_command, settings=settings)[1]
+    assert record["failure"]["category"] == category
+    assert record["plan"] == plan and record["executionCounts"]["executed"] == 0
+    assert all(step["status"] == "not_run" for step in record["steps"])
+    assert not (root / "runs").exists()
+    assert not (Path(settings["resourceDir"]) / "engine.lock").exists()
+
+
+def test_readiness_input_mutation_prevents_validation(mission):
+    root, folder, plan = mission
+    settings = {"readiness": {"pytest-pass": [{"argv": [sys.executable, "-c",
+        "from pathlib import Path; Path('src.py').write_text('changed by readiness')"]}]}}
+    record = verification.run(root, folder, "M1", plan, allow_command, settings=settings)[1]
+    assert record["failure"]["category"] == "input_changed"
+    assert record["cacheIntegrity"]["inputsUnchanged"] is False
+    assert record["executionCounts"]["executed"] == 0 and not (root / "runs").exists()
+
+
+def test_readiness_runs_before_receipt_reuse_and_only_substitutes_project(mission, tmp_path):
+    root, folder, plan = mission
+    settings = resource_settings(tmp_path, "engine")
+    settings["readiness"] = {"pytest-pass": [{"argv": [sys.executable, "-c",
+        "import sys; from pathlib import Path; p=Path(sys.argv[1])/'ready-runs'; "
+        "p.open('a').write('x'); assert sys.argv[2] == '{literal}'",
+        "{project}", "{literal}"]}]}
+    first = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    second = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    assert first[1]["status"] == "pass" and second[2] is True and first[0] == second[0]
+    assert (root / "ready-runs").read_text() == "xx" and (root / "runs").read_text() == "x"
+    settings["readiness"]["pytest-pass"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(3)"]
+    failed = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    assert failed[1]["failure"]["category"] == "readiness_exit" and failed[0] != first[0]
+    assert (root / "runs").read_text() == "x"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_verification_child_utf8_defaults_preserve_parent_and_explicit_values(mission, monkeypatch, explicit):
+    root, folder, plan = mission
+    keys = {"PYTHONUTF8": "0", "PYTHONIOENCODING": "latin-1"}
+    for key, value in keys.items():
+        if explicit:
+            monkeypatch.setenv(key, value)
+        else:
+            monkeypatch.delenv(key, raising=False)
+    plan["commands"] = [{"argv": [sys.executable, "-c",
+        "import json,os; from pathlib import Path; "
+        "Path('child.json').write_text(json.dumps({k:os.environ[k] for k in ['PYTHONUTF8','PYTHONIOENCODING']}))"]}]
+    before = dict(os.environ)
+    record = verification.run(root, folder, "M1", plan, allow_command)[1]
+    assert record["status"] == "pass" and dict(os.environ) == before
+    expected = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if explicit:
+        expected = keys
+    assert json.loads((root / "child.json").read_text()) == expected
+
+
+def test_reference_bundle_preflight_and_receipt_reuse_require_current_sources(mission):
+    root, folder, plan = mission
+    source = root / "reference.txt"
+    source.write_text("fictional rule one", encoding="utf-8")
+    verification.reference_bundle.snapshot(root, ["reference.txt"], "references.json")
+    plan["referenceBundle"] = "references.json"
+    first = verification.run(root, folder, "M1", plan, allow_command)
+    assert first[1]["status"] == "pass"
+    source.write_text("fictional rule two", encoding="utf-8")
+    checked = verification.preflight(root, plan, allow_command)
+    assert checked["failure"]["category"] == "reference_changed"
+    with pytest.raises(verification.VerificationError):
+        verification.validate_receipt(root, folder, "M1", first[1])
+    verification.reference_bundle.snapshot(root, ["reference.txt"], "references.json",
+                                           expected_sha256=verification.file_hash(root / "references.json"))
+    second = verification.run(root, folder, "M1", plan, allow_command)
+    assert second[1]["status"] == "pass" and second[0] != first[0]
+    assert (root / "runs").read_text() == "xx"
+
+
+def test_reference_bundle_recapture_metadata_invalidates_receipt_and_stage_identity(mission):
+    root, folder, plan = mission
+    (root / "reference.txt").write_text("fictional rule", encoding="utf-8")
+    verification.reference_bundle.snapshot(root, ["reference.txt"], "references.json", revision="first")
+    plan["referenceBundle"] = "references.json"
+    plan["commands"][0].update(reusable=True, outputs=[])
+    first = verification.run(root, folder, "M1", plan, allow_command)
+    verification.reference_bundle.snapshot(root, ["reference.txt"], "references.json", revision="second",
+                                           expected_sha256=verification.file_hash(root / "references.json"))
+    second = verification.run(root, folder, "M1", plan, allow_command)
+    assert first[1]["runner"] != second[1]["runner"]
+    assert first[1]["steps"][0]["key"] != second[1]["steps"][0]["key"]
+    assert second[1]["status"] == "pass" and second[1]["executionCounts"] == {"executed": 1, "reused": 0}
+
+
+def test_reference_source_change_during_validation_invalidates_run_integrity(mission):
+    root, folder, plan = mission
+    (root / "reference.txt").write_text("fictional original", encoding="utf-8")
+    verification.reference_bundle.snapshot(root, ["reference.txt"], "references.json")
+    plan["referenceBundle"] = "references.json"
+    plan["commands"] = [{"argv": [sys.executable, "-c",
+        "from pathlib import Path; Path('reference.txt').write_text('fictional changed')"]}]
+    record = verification.run(root, folder, "M1", plan, allow_command)[1]
+    assert record["failure"]["category"] == "runtime_changed"
+    assert record["cacheIntegrity"]["runtimeUnchanged"] is False
+    assert record["steps"][0]["status"] == "failed"
+
+
+def test_unexpected_runner_exception_still_releases_resources(mission, tmp_path, monkeypatch):
+    root, folder, plan = mission
+    settings = resource_settings(tmp_path, "engine")
+    def launch(*args, **kwargs):
+        raise RuntimeError("fictional unexpected failure")
+    monkeypatch.setattr(verification.subprocess, "run", launch)
+    with pytest.raises(RuntimeError, match="fictional unexpected failure"):
+        verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    assert not (Path(settings["resourceDir"]) / "engine.lock").exists()
+
+
+def readiness_policy(mission):
+    root, _, _ = mission
+    (root / "machine-state").write_text("ready", encoding="utf-8")
+    (root / "readiness.py").write_text(
+        "from pathlib import Path\nraise SystemExit(int(Path('machine-state').read_text() != 'ready'))\n",
+        encoding="utf-8",
+    )
+    settings = resource_settings(root.parent, "engine")
+    settings["readiness"] = {"pytest-pass": [{"argv": [sys.executable, "readiness.py"]}]}
+    return settings
+
+
+@pytest.mark.parametrize("change", ["resources", "resourceDir", "argv", "timeout", "script"])
+def test_policy_and_readiness_tools_invalidate_receipt_and_stage_reuse(mission, change):
+    root, folder, plan = mission
+    settings = readiness_policy(mission)
+    plan["commands"][0].update(reusable=True, outputs=[])
+    first = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    assert first[1]["status"] == "pass"
+    if change == "resources":
+        settings["resources"]["pytest-pass"] = ["other-engine"]
+    elif change == "resourceDir":
+        settings["resourceDir"] = str(root.parent / "other-resources")
+    elif change == "argv":
+        settings["readiness"]["pytest-pass"][0]["argv"].append("extra")
+    elif change == "timeout":
+        settings["readiness"]["pytest-pass"][0]["timeoutSeconds"] = 20
+    else:
+        (root / "readiness.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    with pytest.raises(verification.VerificationError):
+        verification.validate_receipt(root, folder, "M1", first[1], settings=settings)
+    second = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    assert second[1]["status"] == "pass" and second[2] is False
+    assert second[1]["executionCounts"] == {"executed": 1, "reused": 0}
+    assert second[1]["runner"] != first[1]["runner"]
+    assert second[1]["steps"][0]["key"] != first[1]["steps"][0]["key"]
+    assert (root / "runs").read_text() == "xx"
+
+
+def test_machine_observation_does_not_invalidate_receipt_or_run_readiness_at_review(mission, monkeypatch):
+    root, folder, plan = mission
+    settings = readiness_policy(mission)
+    path, receipt, _ = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    (root / "machine-state").write_text("closed", encoding="utf-8")
+    report = root / "review.md"
+    report.write_text("Fictional independent review", encoding="utf-8")
+    def unexpected(*args, **kwargs):
+        pytest.fail("receipt validation reran readiness")
+    monkeypatch.setattr(verification, "execute_command", unexpected)
+    verification.validate_receipt(root, folder, "M1", receipt, settings=settings)
+    verification.validate_receipt(root, folder, "M1", receipt)
+    review_path = verification.record_review(root, folder, "M1", path, report, "reviewer", "unit", "clean", settings=settings)
+    verification.validate_review(folder, "M1", path, review_path)
+    assert verification.review_scope(root, folder, "M1", plan, settings=settings) == []
+
+
+def test_missing_current_policy_rejects_policy_receipt_but_none_preserves_optional_api(mission):
+    root, folder, plan = mission
+    settings = readiness_policy(mission)
+    _, receipt, _ = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
+    verification.validate_receipt(root, folder, "M1", receipt, settings=None)
+    with pytest.raises(verification.VerificationError, match="정책"):
+        verification.validate_receipt(root, folder, "M1", receipt, settings={})
+    _, ordinary, _ = verification.run(root, folder, "M1", plan, allow_command, settings=None)
+    assert ordinary["status"] == "pass" and "verificationPolicy" not in ordinary
+    verification.validate_receipt(root, folder, "M1", ordinary, settings=None)
 
 
 @pytest.fixture
@@ -659,6 +982,7 @@ def test_resolved_executable_is_executed_relative_to_command_cwd(mission, monkey
     work.mkdir()
     local = work / Path(sys.executable).name
     local.write_bytes(b"fictional executable identity")
+    local.chmod(0o755)
     plan["commands"] = [{"cwd": "work", "argv": [local.name, "-c", "pass"]}]
     seen = []
 

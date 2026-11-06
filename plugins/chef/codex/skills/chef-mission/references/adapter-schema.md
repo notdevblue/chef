@@ -164,6 +164,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `stages[]` | 미션 단계 순서. `kind`는 `research` / `design` / `implement` / `review`. `design`은 `skill`과 `optional`을 가진다. 없으면 `research → implement → review` |
 | `guard.deny[]` | 미션 진행 중 막을 명령의 정규식(대소문자 무시)과 이유. 명령 조각마다 검사한다(아래 "가드") |
 | `guard.deny[].except` | 선택 문자열 배열. 각 정규식이 같은 조각 전체에 맞을 때 그 deny 규칙만 면제한다. 다른 조각·규칙은 계속 검사한다 |
+| `guard.deny[].exceptCommand` | 선택 정규식 배열. 원문 전체가 맞고 가드가 단일 리터럴 조회·출력 명령으로 인정할 때 그 deny 규칙만 면제한다. 연쇄·파이프·치환·동적 실행·제어 문자·리다이렉션은 예외 불가. 기존 `except`의 조각 fullmatch 동작은 유지 |
 | `guard.allow[]` | 선택 문자열 정규식 배열. 명령 조각 **전체**가 맞으면(`fullmatch`, 대소문자 무시) 그 조각은 `deny`·`p4Deny`를 보지 않는다. 여러 규칙이 같이 쓰는 검증된 예외(예: `--check-only`)를 한 곳에 둔다. `p4Client` 검사는 그대로 받는다 |
 | `guard.p4Deny[]` | 선택. p4 하위 명령 이름으로 막는 규칙 `{"commands": [...], "when": "<정규식>", "unless": "<정규식>", "reason"}`. 실행 파일 경로·따옴표·`&`·전역 옵션(`-c`·`-u`·`-p` 등)은 훅이 해석하므로 정규식에 다시 쓰지 않는다. `when`·`unless`는 하위 명령 뒤 인자(따옴표 벗겨 공백으로 이음)에 `search` |
 | `guard.coordinatorWrite` | 선택 glob 배열(프로젝트 폴더 기준, `**` 여러 단계·`*` 한 단계, 대소문자 무시). 있으면 미션 진행 중 ACTIVE 세션의 메인 코디네이터(`agent_id` 없음)가 Write·Edit·MultiEdit·NotebookEdit로 프로젝트 안 이 목록 밖 파일을 쓰면 막는다. 서브에이전트·다른 세션·프로젝트 밖 경로(메모리 등)는 보지 않는다. 예: `["_My/missions/**"]`. Claude 훅만 적용(Codex 훅은 셸 명령만 받음) |
@@ -177,7 +178,10 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex에서 미등록 파견의 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
 | `rolePolicy.subagents` | `false`면 하위 파견을 허용하던 역할(Claude `chef:dev-medium`, Codex `chef_developer_medium`)의 파견 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다. 해당 역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막는 강제 차단은 아니다. Grok 역할은 어차피 자식을 띄우지 않는다 |
 | `verify.backend` | `mcp` / `cli` / `dotnet` — 엔진 검증 수단. 명령 자체는 `adapter.md` |
-| `verify.grades` | 이 프로젝트에서 낼 수 있는 검증 등급 |
+| `verify.grades` | 이 프로젝트에서 낼 수 있는 검증 등급. 실제 허용 값은 상태 CLI `schema`로 조회 |
+| `verify.resourceDir` | 공유 검증 잠금 폴더. 절대 경로 또는 프로젝트 기준 상대 경로. `resources`에 자원을 선언하면 필수이며 같은 자원을 쓰는 프로젝트·슬롯은 같은 폴더 사용 |
+| `verify.resources` | 선택 등급별 자원 이름 배열. 예: `{"compile-only": ["preview-editor"]}`. 이름은 영숫자로 시작하는 1~64자의 영숫자·`_`·`-`; 중복·대소문자 충돌 금지. 등급 키는 정확히 일치하며 wildcard 없음 |
+| `verify.readiness` | 선택 등급별 준비 확인 명령 배열. 예: `{"compile-only": [{"argv": ["python", "tools/check_editor.py", "--project", "{project}"], "cwd": ".", "timeoutSeconds": 30}]}`. timeout 1~60초, argv의 `{project}`만 치환. 자원 잠금 뒤 receipt 재사용 전 실행. 읽기 전용 preflight는 명령을 실행하지 않음 |
 | `report.push` | 마일스톤마다 푸시 알림을 보낼지 |
 | `slots.autocompact` | 슬롯 세션 압축 예산(100000~1000000 토큰, 기본 Claude 500000, Codex 200000). Claude와 Codex 실행 옵션에 적용 |
 | `slots.*` | 에이전트 슬롯 워크스페이스(아래 "슬롯"). 없거나 `enabled: false`면 슬롯을 안 쓴다 |
