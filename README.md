@@ -114,6 +114,8 @@ adapter → adapter.runtimes.codex → local → local.runtimes.codex다.
 슬롯 검사 후 에디터·CLI 실행 전에 한 번 돌며, 실패하면 세션을 열지 않는다. 단계 형식은 기존 `prepare[]`와 같다.
 Codex 프로젝트 지침 읽기 한도는 선택 설정 `slots.codexProjectDocMaxBytes`(양의 정수, 바이트)로 새 세션·재개에 적용한다.
 생략하면 기존 CLI 동작을 유지한다. 전체 계약은 [어댑터 슬롯 설정](plugins/chef/codex/skills/chef-mission/references/adapter-schema.md#슬롯)에 있다.
+슬롯에 준비한 native 역할 파일은 `slots.codexAgentConfigs`의 별칭별 `{configFile, description}`으로 명시 등록한다.
+새 세션·재개 모두 준비 단계가 끝난 뒤 파일을 확인하고, 역할 파일 경로와 설명을 Codex 설정 인자로 전달한다.
 
 `codex/agents/*.toml`은 역할별 지시다. 등록된 Codex 에이전트가 없으면 스킬이 그 지시를
 새 서브에이전트에게 전달한다. research와 review는 부모 모델·추론 수준을 상속한다. 중간 구현 역할은 `gpt-6.1-sol` / high,

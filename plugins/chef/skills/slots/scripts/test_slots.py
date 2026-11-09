@@ -1223,6 +1223,248 @@ def test_codex_document_limit_leaves_other_runtime_arguments_unchanged(project, 
     assert limited_command == command
 
 
+@pytest.mark.parametrize("value", [None, [], True, "roles"])
+def test_codex_agent_configs_requires_a_mapping(project, value):
+    project.write_adapter([], codexAgentConfigs=value)
+    code, _, err = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and "slots.codexAgentConfigs" in err
+
+
+@pytest.mark.parametrize("alias", ["", "role.name", "role name", "role/name", "a=1", "역할", *sorted(slots.CODEX_AGENT_RESERVED)])
+def test_codex_agent_configs_rejects_unsafe_and_reserved_aliases(project, alias):
+    project.write_adapter([], codexAgentConfigs={alias: {"configFile": "{slot}/role.toml", "description": "Fictional role"}})
+    code, _, err = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and "역할 이름" in err
+
+
+@pytest.mark.parametrize("role", [
+    None, [], "role", {}, {"configFile": "{slot}/role.toml"},
+    {"configFile": "{slot}/role.toml", "description": "role", "model": "extra"},
+    {"configFile": 3, "description": "role"}, {"configFile": " ", "description": "role"},
+    {"configFile": "{slot}/role.toml", "description": False},
+    {"configFile": "{slot}/role.toml", "description": ""},
+    {"configFile": "{slot}/role.toml", "description": "\ud800"},
+])
+def test_codex_agent_configs_rejects_invalid_fields(project, role):
+    project.write_adapter([], codexAgentConfigs={"archive-helper": role})
+    code, _, err = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and ("slots.codexAgentConfigs" in err or "UTF-8" in err)
+
+
+@pytest.mark.parametrize("path", ["relative.toml", "{unknown}/role.toml"])
+def test_codex_agent_config_paths_must_expand_to_absolute_paths(project, path):
+    project.write_adapter([], codexAgentConfigs={"archive-helper": {"configFile": path, "description": "Fictional role"}})
+    seed_slot(project, "a")
+    code, _, err = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and ("절대 경로" in err or "정의 안 된 변수" in err)
+
+
+def test_codex_agent_toml_strings_preserve_unicode_and_escape_controls():
+    import tomllib
+
+    value = 'a"\\\n🚀\x7f;end'
+    expected = '"' + r'a\"\\\n' + '🚀' + r'\u007f\u003bend' + '"'
+    assert slots.toml_string(value) == expected
+    for text in [value, 'C:\\roles\\;moon🚀.toml', '\x00\b\t\f\r\n"\\', r'\u003b']:
+        assert tomllib.loads("value=" + slots.toml_string(text))["value"] == text
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_agent_configs_expand_into_discrete_new_and_resume_options(project, recorded_session, resume):
+    import tomllib
+
+    config, folder, session, _ = recorded_session
+    config.runtime = "codex"
+    config.vars["roleName"] = "archive;🚀"
+    description = 'Fictional "archive" role; \\ helper\nNext line'
+    config.codex_agent_configs = {"archive-helper": {"configFile": "{slot}/roles/{roleName}.toml", "description": description}}
+    command = slots.wt_command(config, "a", "task")
+    if resume:
+        command = slots.resume_command(config, "a", folder.name)
+        assert command[-3:] == ["resume", session, "$chef:chef-mission 미션 이어서"]
+    options = [command[index + 1] for index, part in enumerate(command[:-1]) if part == "-c"]
+    agent_options = [option for option in options if option.startswith("agents.")]
+    assert len(agent_options) == 2
+    assert all(";" not in option for option in command)
+    parsed = tomllib.loads("\n".join(agent_options))["agents"]["archive-helper"]
+    assert parsed == {"config_file": os.path.normpath(str(project.slot_root / "a/roles/archive;🚀.toml")), "description": description}
+    if resume:
+        assert command.index(agent_options[-1]) < command.index("resume")
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_agent_file_is_validated_after_before_run_and_before_editor(project, monkeypatch, resume):
+    project.helper.write_text(
+        'import pathlib, sys\n'
+        'path = pathlib.Path(sys.argv[1])\n'
+        'path.parent.mkdir(parents=True, exist_ok=True)\n'
+        'path.write_text(\'developer_instructions = "Fictional archive instructions"\')\n'
+    )
+    step = {"id": "roles", "run": '"{py}" "{helper}" "{slot}/roles/archive.toml"'}
+    project.write_adapter([], beforeRun=[step], codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/roles/archive.toml", "description": "Fictional archive role"},
+    })
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    role = project.slot_root / "a/roles/archive.toml"
+    assert not role.exists()
+    calls = []
+
+    def launched(kind):
+        assert role.is_file()
+        calls.append(kind)
+
+    monkeypatch.setattr(slots, "launch_editor", lambda *_: launched("editor"))
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: launched("terminal"))
+    code, _, _ = project.run("--runtime", "codex", "run", "a", *args, "--editor")
+    assert code == slots.OK and calls == ["editor", "terminal"]
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("callback", [False, True])
+def test_missing_codex_agent_file_blocks_editor_and_terminal_after_callback(project, monkeypatch, resume, callback):
+    steps = []
+    if callback:
+        steps = [project.tick_step("roles", 0)]
+    project.write_adapter([], beforeRun=steps, codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/missing.toml", "description": "Fictional archive role"},
+    })
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    calls = []
+    monkeypatch.setattr(slots, "launch_editor", lambda *_: calls.append("editor"))
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    code, _, err = project.run("--runtime", "codex", "run", "a", *args, "--editor")
+    assert code == slots.USAGE and "configFile 파일이 없음" in err and not calls
+    assert project.ticks.exists() == callback
+    assert slots.Rows(project.rows_path).find("a")["state"] == slots.STATE_READY
+
+
+def test_codex_agent_file_must_be_readable_without_reading_contents(project, monkeypatch):
+    import builtins
+
+    project.write_adapter([], codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/role.toml", "description": "Fictional archive role"},
+    })
+    seed_slot(project, "a")
+    role = project.slot_root / "a/role.toml"
+    role.write_text('developer_instructions = "Fictional instructions"')
+    original_open = builtins.open
+
+    def open_role(path, *args, **kwargs):
+        if os.fspath(path) == os.fspath(role):
+            raise PermissionError("fictional denied role")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", open_role)
+    code, _, err = project.run("--runtime", "codex", "run", "a", "task")
+    assert code == slots.USAGE and "파일을 읽을 수 없음" in err
+
+
+def test_codex_agent_files_are_not_checked_when_before_run_fails(project, monkeypatch):
+    project.write_adapter([], beforeRun=[project.tick_step("roles", 0, args="a 7")], codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/missing.toml", "description": "Fictional archive role"},
+    })
+    seed_slot(project, "a")
+    calls = []
+    monkeypatch.setattr(slots.Config, "check_codex_agent_files", lambda *_: calls.append("file-check"))
+    code, out, _ = project.run("--runtime", "codex", "run", "a", "task")
+    assert code == slots.FAILED and "beforeRun 실패" in out and not calls
+
+
+def test_codex_agent_configs_apply_existing_runtime_and_local_overlays(project):
+    base = {"base-helper": {"configFile": "{slot}/base.toml", "description": "Fictional base role"}}
+    runtime = {"archive-helper": {"configFile": "{slot}/runtime.toml", "description": "Fictional runtime role"}}
+    local_role = {"archive-helper": {"configFile": "{slot}/local.toml", "description": "Fictional local role"}}
+    project.write_adapter([], codexAgentConfigs=base)
+    folder = project.dir / ".claude/orchestrator"
+    adapter_path = folder / "adapter.json"
+    adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
+    adapter["runtimes"] = {"codex": {"slots": {"codexAgentConfigs": runtime}}}
+    adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
+    local_path = folder / "local.json"
+    local = json.loads(local_path.read_text(encoding="utf-8"))
+    local["runtimes"] = {"codex": {"slots": {"codexAgentConfigs": local_role}}}
+    local_path.write_text(json.dumps(local), encoding="utf-8")
+    seed_slot(project, "a")
+    code, out, _ = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
+    assert code == slots.OK and "local.toml" in out and "Fictional local role" in out
+    assert "runtime.toml" not in out and "base-helper" in out
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_agent_configs_dry_run_allows_future_files_without_mutation(project, resume):
+    project.write_adapter([], codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/future.toml", "description": "Fictional archive role"},
+    })
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    before = {str(path): path.read_bytes() for path in project.dir.parent.rglob("*") if path.is_file()}
+    code, out, _ = project.run("--runtime", "codex", "run", "a", *args, "--dry-run")
+    after = {str(path): path.read_bytes() for path in project.dir.parent.rglob("*") if path.is_file()}
+    assert code == slots.OK and before == after
+    assert "agents.archive-helper.config_file=" in out and "agents.archive-helper.description=" in out
+
+
+@pytest.mark.parametrize("runtime", ["claude", "grok"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_agent_configs_do_not_check_files_or_add_options_for_other_runtimes(project, monkeypatch, runtime, resume):
+    project.write_adapter([], codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/missing.toml", "description": "Fictional archive role"},
+    })
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda _, __, command: calls.append(command))
+    code, _, _ = project.run("--runtime", runtime, "run", "a", *args)
+    assert code == slots.OK and len(calls) == 1
+    assert not any(part.startswith("agents.") for part in calls[0])
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_preexisting_codex_agent_file_can_launch_without_before_run_or_content_parsing(project, monkeypatch, resume):
+    import tomllib
+
+    description = "Reads fictional archives; verifies manifests"
+    project.write_adapter([], codexAgentConfigs={
+        "archive-helper": {"configFile": "{slot}/role;archive.toml", "description": description},
+    })
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    role = project.slot_root / "a/role;archive.toml"
+    role.write_text("Fictional data deliberately not parsed as TOML")
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda _, __, command: calls.append(command))
+    code, _, _ = project.run("--runtime", "codex", "run", "a", *args)
+    assert code == slots.OK and len(calls) == 1
+    options = [part for part in calls[0] if part.startswith("agents.")]
+    assert len(options) == 2 and all(";" not in part for part in calls[0])
+    assert tomllib.loads("\n".join(options))["agents"]["archive-helper"] == {
+        "config_file": os.path.normpath(str(role)), "description": description,
+    }
+    assert slots.Rows(project.rows_path).find("a")["state"] == slots.STATE_READY
+
+
 def test_remove_requires_yes(project):
     project.write_adapter([project.tick_step("one", 1)])
     seed_slot(project, "a")

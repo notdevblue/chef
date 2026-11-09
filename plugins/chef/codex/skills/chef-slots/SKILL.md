@@ -56,6 +56,9 @@ name	path	client	created	synced	state
 새 세션의 빈 UUID 인자도 보존하도록 명령 값은 큰따옴표로 감싼다.
 `slots.codexProjectDocMaxBytes`를 양의 정수로 설정하면 새 세션·재개 모두 Codex 프로젝트 지침 읽기 한도를 적용한다.
 생략하면 기존 CLI 동작을 유지한다. 전체 계약은 `../chef-mission/references/adapter-schema.md`의 "슬롯"을 따른다.
+슬롯에 준비한 native 역할 파일은 `slots.codexAgentConfigs`의 별칭별 `{configFile, description}`으로 등록한다.
+파일 경로는 템플릿 확장 후 절대 경로여야 하며, `beforeRun` 성공 후 파일 확인을 통과해야 새 세션·재개를 연다.
+dry-run은 생성 예정 파일이 없어도 등록할 명시 인자를 표시한다. 생략하면 기존 실행 인자를 유지한다.
 
 ## 명령
 
