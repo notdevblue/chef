@@ -93,6 +93,9 @@ Codex 슬롯의 `run`은 새 Windows Terminal 탭에서 `codex`와 `$chef:chef-m
 `run <슬롯> --resume`으로 진행 중인 미션의 기록된 대화를 새 탭에서 이어받는다. 미션 대시보드도
 `codex/skills/chef-slots/scripts/dashboard.py`로 실행할 수 있다.
 대시보드는 공유된 ask·confirm·보고와 답 이력을 읽는 화면이다. 답과 승인은 현재 미션 대화에서 받는다.
+슬롯 설정 없이 메인 프로젝트에서도 실행한다. 현재 프로젝트와 어댑터의 메인·등록 슬롯,
+개인 레지스트리의 exact·glob roots에서 미션 기록이 있는 작업 공간을 요청마다 발견한다. glob은 경로 한 단계씩만 확장하며
+등록 범위 밖의 드라이브나 하위 폴더를 재귀 검색하지 않는다.
 질문은 `questions/<id>.json`을 정본으로 두고 `question publish`·`question answer`가 Markdown을 생성한다.
 대시보드는 문항 상태만 읽으며 누락·손상·생성본 불일치는 `기록 확인 필요`로 구분한다. [질문 기록 절차](plugins/chef/skills/mission/references/question-records.md)를 따른다.
 기존 사용자 입력·답 이력은 보존하며 대시보드에서 답을 저장·전달하거나 중단된 세션을 자동 재개하지 않는다.

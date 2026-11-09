@@ -22,6 +22,7 @@ import grok_transcript
 import mission_guard  # noqa: E402 (slots 가 hooks 폴더를 sys.path 에 넣음)
 import question_summary  # noqa: E402
 import question_records
+import dashboard_discovery
 
 DEFAULT_PORT = 8765
 REFRESH_SECONDS = 30
@@ -592,6 +593,11 @@ class Mission:
     state_updated: float = 0.0
     report_updated: float = 0.0
     stale: str = ""  # ACTIVE 끊김 의심 문구(slots.stale_note)
+    location_key: str = ""
+
+    @property
+    def key(self):
+        return self.location_key or self.slot
 
     @property
     def state(self):
@@ -631,6 +637,9 @@ class Location:
     missions: list = field(default_factory=list)
     problem: str = ""
     stale: str = ""
+    key: str = ""
+    stages: list = field(default_factory=list)
+    stale_hours: float = 0
 
 
 def esc(value):
@@ -794,20 +803,21 @@ def read_session(mission, transcript):
 
 
 def mission_folder_allowed(location, mission_id):
-    state_dir = os.path.realpath(location.state_dir)
-    expected = os.path.join(state_dir, mission_id)
-    real = os.path.realpath(os.path.join(location.state_dir, mission_id))
-    return os.path.normcase(real) == os.path.normcase(expected) and slots.inside_root(os.path.realpath(location.root), real)
+    return dashboard_discovery.mission_folder_allowed(location.state_dir, mission_id)
 
 
 def load_mission(location, mission_id):
     folder = os.path.join(location.state_dir, mission_id)
     active = not location.active.corrupt and location.active.id == mission_id
     mission = Mission(location.label, mission_id, folder, active)
+    mission.location_key = location.key or location.label
     mission.stale = location.stale if active else ""
     errors = mission.errors
     if not mission_folder_allowed(location, mission_id):
         errors.append("미션 폴더 경로")
+        return mission
+    if not dashboard_discovery.mission_metadata_allowed(location.state_dir, mission_id):
+        errors.append("mission.md 경로")
         return mission
     lines = attempt(errors, "mission.md", os.path.join(folder, "mission.md"), lambda p: mission_state.read_text(p).split("\n"), [])
     mission.fields = mission_state.header_fields(lines)
@@ -876,25 +886,22 @@ def dated(timestamp):
 
 
 def locations(config):
-    problems = []
-    rows = attempt(problems, "slots.tsv", config.rows_path, lambda p: slots.Rows(p).read(), [])
-    tsv = {row["name"]: row for row in rows if slots.NAME_PATTERN.fullmatch(row["name"])}
-    names = sorted({*tsv, *config.names}, key=natural_key)
-    found = [Location(MAIN_LABEL, config.state_dir, {}, mission_guard.read_active(config.state_dir), config.main, problem="; ".join(problems))]
-    found.extend(
-        Location(name, config.slot_state_dir(name), tsv.get(name, {}), slots.active_of(config, name), config.slot_path(name)) for name in names
-    )
+    workspaces, problems = dashboard_discovery.discover(config)
+    found = [Location(item.label, item.state_dir, item.row, mission_guard.read_active(item.state_dir), item.root,
+                      key=item.key, stages=item.stages, stale_hours=item.stale_hours) for item in workspaces]
+    if found:
+        found[0].problem = "; ".join(problems)
     for location in found:
-        location.stale = stale_of(config, location)
+        location.stale = stale_of(location)
     return found
 
 
-def stale_of(config, location):
+def stale_of(location):
     active = location.active
     if not active.id or active.corrupt:
         return ""
     try:
-        state = mission_guard.staleness(location.state_dir, active, getattr(config, "stale_hours", 0))
+        state = mission_guard.staleness(location.state_dir, active, location.stale_hours)
     except Exception:
         return ""
     return mission_guard.stale_text(state) if state.stale else ""
@@ -911,11 +918,7 @@ def collect(config):
     found = locations(config)
     for location in found:
         try:
-            ids = [
-                entry.name
-                for entry in os.scandir(location.state_dir)
-                if entry.is_dir() and mission_guard.valid_mission_id(entry.name) and mission_folder_allowed(location, entry.name) and os.path.isfile(os.path.join(entry.path, "mission.md"))
-            ]
+            ids = dashboard_discovery.mission_ids(location.state_dir)
         except FileNotFoundError:
             continue
         except OSError:
@@ -984,7 +987,7 @@ def document_label(name, text, mission_title, folder=""):
 
 
 def mission_url(mission):
-    return f"/mission?slot={quote(mission.slot, safe='')}&id={quote(mission.id, safe='')}"
+    return f"/mission?slot={quote(mission.location_key or mission.slot, safe='')}&id={quote(mission.id, safe='')}"
 
 
 def question_count_text(summary):
@@ -1035,7 +1038,7 @@ def question_html(mission, name, compact=False, origin=""):
         document_name = esc(name)
         if origin:
             document_name += f" · {esc(origin)}"
-        result += f'<details data-key="question-{esc(mission.slot)}-{esc(mission.id)}-{esc(name)}"><summary>{question_expand_label(summary)}</summary><p class="document-name">{document_name}</p>'
+        result += f'<details data-key="question-{esc(mission.key)}-{esc(mission.id)}-{esc(name)}"><summary>{question_expand_label(summary)}</summary><p class="document-name">{document_name}</p>'
         if items:
             result += f'<ul class="question-items">{question_items_html(items)}</ul>'
         else:
@@ -1238,11 +1241,11 @@ def unit_html(mission, row, compact=False, brief=False, key_prefix="work", summa
         if conditions:
             content += f'<span class="condition">{esc(unit_condition_summary(row, dependency_count))}</span>'
     elif compact and conditions:
-        key = f"unit-conditions-{key_prefix}-{mission.slot}-{mission.id}-{row['id']}"
+        key = f"unit-conditions-{key_prefix}-{mission.key}-{mission.id}-{row['id']}"
         content += f'<details data-key="{esc(key)}"><summary>{esc(" · ".join(short_conditions))}</summary>{full_conditions}</details>'
     else:
         content += full_conditions
-    key = f"unit-{key_prefix}-{mission.slot}-{mission.id}-{row['id']}"
+    key = f"unit-{key_prefix}-{mission.key}-{mission.id}-{row['id']}"
     content += f'<details class="record unit-detail" data-key="{esc(key)}"><summary>작업 상세 펼치기</summary><div class="record-body">{unit_fields_html(mission, row, key)}</div></details>'
     return f"<li>{content}</li>"
 
@@ -1262,7 +1265,7 @@ def current_html(mission, compact=False, summarize_conditions=False):
             previews = " · ".join(f'{esc(row["id"])} {esc(row["goal"])}' for row in mission.doing[:2])
             if len(mission.doing) > 2:
                 previews += f' · 진행 작업 {len(mission.doing)}개'
-            key = f'current-{mission.slot}-{mission.id}'
+            key = f'current-{mission.key}-{mission.id}'
             return f'<details class="brief-details" data-key="{esc(key)}"><summary><span class="brief-clamp">{previews}</span></summary>{work_list(mission, mission.doing, key_prefix="current", summarize_conditions=summarize_conditions)}</details>'
         return work_list(mission, mission.doing, compact, key_prefix="current", summarize_conditions=summarize_conditions)
     text = "진행 중으로 기록된 작업 없음"
@@ -1289,7 +1292,7 @@ def remaining_html(mission, compact=False, summarize_conditions=False):
             preview_html = '<span class="muted">진행 중 작업만 남아 있음</span>'
         return (
             f'<div class="remaining-brief"><span class="counts">남은 {len(rows)}개</span>{preview_html}'
-            + f'<details class="remaining-more" data-key="remaining-{esc(mission.slot)}-{esc(mission.id)}"><summary>작업·조건 펼치기</summary>'
+            + f'<details class="remaining-more" data-key="remaining-{esc(mission.key)}-{esc(mission.id)}"><summary>작업·조건 펼치기</summary>'
             + f'<div><p class="counts">남은 작업 {len(rows)}개 · 진행 중 포함</p>{work_list(mission, rows, key_prefix="remaining", summarize_conditions=summarize_conditions)}</div></details></div>'
         )
     return f'<p class="counts">남은 작업 {len(rows)}개 · 진행 중 포함</p>{work_list(mission, rows, key_prefix="remaining", summarize_conditions=summarize_conditions)}'
@@ -1330,7 +1333,7 @@ def ledger_unit_text(mission, value):
 
 
 def state_record_html(mission, file_name, row, number):
-    key = f'record-{mission.slot}-{mission.id}-{file_name}-{number}'
+    key = f'record-{mission.key}-{mission.id}-{file_name}-{number}'
     if file_name == mission_state.LEDGER_FILE:
         status = token_text(row["status"], {"pass": "통과", "fail": "실패", "retry": "재시도", "blocked": "막힘"})
         grade = token_text(row["grade"], {"editmode-pass": "Unity EditMode 검증", "pytest-pass": "pytest 검증", "compile-only": "컴파일만 확인", "doc-only": "문서 검증", "needs-human": "사람 확인 필요"})
@@ -1412,11 +1415,11 @@ def slot_section(location):
     running = [mission for mission in location.missions if mission.state == RUNNING]
     folded = [mission for mission in location.missions if mission.state != RUNNING]
     rows = "".join(mission_row(mission, number) for number, mission in enumerate(running, start=1))
-    out = f'<h3 class="sub">{esc(label_text(location.label))}</h3><div>{meta}</div>'
+    out = f'<h3 class="sub" title="{esc(location.root)}">{esc(label_text(location.label))}</h3><div>{meta}</div>'
     out += f'<div class="list">{rows}</div>' if rows else '<p class="muted">진행 중 미션 없음</p>'
     if folded:
         inner = "".join(mission_row(mission, number) for number, mission in enumerate(folded, start=1))
-        out += f'<details data-key="{esc(location.label)}"><summary>중단·닫힘 {len(folded)}개</summary><div class="list">{inner}</div></details>'
+        out += f'<details data-key="{esc(location.key or location.label)}"><summary>중단·닫힘 {len(folded)}개</summary><div class="list">{inner}</div></details>'
     return out
 
 
@@ -1450,7 +1453,7 @@ def stage_track(config, mission):
 
 def slot_card(config, location):
     running = [mission for mission in location.missions if mission.state == RUNNING]
-    head = f'<div class="card-top"><span class="slot">{esc(label_text(location.label))}</span>'
+    head = f'<div class="card-top"><span class="slot" title="{esc(location.root)}">{esc(label_text(location.label))}</span>'
     if not running:
         state = "ACTIVE 손상" if location.active.corrupt else "비어 있음"
         return f'<div class="card idle">{head}<span class="state">{state}</span></div><span class="counts">진행 중 미션 없음</span></div>'
@@ -1471,7 +1474,7 @@ def slot_card(config, location):
     plan_state = "작업 계획 읽기 실패" if mission_state.UNITS_FILE in mission.errors else "작업 계획 미등록"
     progress = f'마일스톤 완료 {mission.counts["done"]}/{len(mission.units)} · 남음 {len(mission.remaining)}' if mission.units else plan_state
     goal_preview = next((line.strip() for line in mission.goal.splitlines() if line.strip()), "")
-    goal = f'<details class="brief-details goal-details" data-key="goal-{esc(mission.slot)}-{esc(mission.id)}"><summary class="goal"><span class="goal-preview">{esc(goal_preview)}</span><span class="goal-collapse">목표 접기</span></summary><p class="goal">{esc(mission.goal)}</p></details>' if mission.goal else '<p class="muted">목표 기록 없음</p>'
+    goal = f'<details class="brief-details goal-details" data-key="goal-{esc(mission.key)}-{esc(mission.id)}"><summary class="goal"><span class="goal-preview">{esc(goal_preview)}</span><span class="goal-collapse">목표 접기</span></summary><p class="goal">{esc(mission.goal)}</p></details>' if mission.goal else '<p class="muted">목표 기록 없음</p>'
     questions = "".join(
         question_html(item, name, compact=True, origin=item.id if item is not mission else "")
         for item in running for name in item.unanswered
@@ -1480,8 +1483,8 @@ def slot_card(config, location):
     issue_section = '<section><h3>기록 확인 필요</h3><div>' + issues + '</div></section>' if issues else ""
     others = "".join(f'<a href="{mission_url(item)}">{esc(item.title or item.id)} →</a>' for item in running if item is not mission)
     return (
-        f'<article class="card {kind}" data-slot="{esc(location.label)}">{head}<span class="state">{state}</span></div>'
-        + stage_track(config, mission)
+        f'<article class="card {kind}" data-slot="{esc(location.key or location.label)}">{head}<span class="state">{state}</span></div>'
+        + stage_track(location, mission)
         + '<div class="mission-grid"><section><h3>목표</h3><div>' + goal + '</div></section><section><h3>내 결정</h3><div>'
         + (questions or '<span class="muted">공유된 미답 질문 없음</span>') + '</div></section>' + issue_section + '<section><h3>지금</h3><div>'
         + current_html(mission, compact=True) + '</div></section><section><h3>다음</h3><div>' + remaining_html(mission, compact=True)
@@ -1525,7 +1528,9 @@ def overview_page(config):
     occupied.sort(key=lambda location: not any(mission.state == RUNNING and (mission.unanswered or mission.question_issues) for mission in location.missions))
     idle = [location for location in visible if location not in occupied]
     cards = [slot_card(config, location) for location in occupied]
-    body = section_head(1, "슬롯") + f'<div class="board">{"".join(cards)}</div>'
+    body = section_head(1, "미션 작업 공간")
+    body += "".join(f'<p class="warn">{esc(location.problem)}</p>' for location in found if location.problem)
+    body += f'<div class="board">{"".join(cards)}</div>'
     if idle:
         body += '<div class="idle-board">' + "".join(slot_card(config, location) for location in idle) + "</div>"
     body += section_head(2, "답 기다리는 질문")
@@ -1583,8 +1588,8 @@ def file_links(folder, names, lead=(), mission_title=""):
 def mission_page(config, slot, mission_id):
     if not (slot == MAIN_LABEL or slots.NAME_PATTERN.fullmatch(slot)) or not mission_guard.valid_mission_id(mission_id):
         return message(400, "slot·id 형식 오류")
-    matching = [item for item in locations(config) if item.label == slot]
-    if not matching or not mission_folder_allowed(matching[0], mission_id) or not os.path.isfile(os.path.join(matching[0].state_dir, mission_id, "mission.md")):
+    matching = [item for item in locations(config) if (item.key or item.label) == slot]
+    if not matching or not dashboard_discovery.mission_metadata_allowed(matching[0].state_dir, mission_id):
         return message(404, f"미션 없음: {slot}/{mission_id}")
     location = matching[0]
     mission = load_mission(location, mission_id)
@@ -1593,7 +1598,7 @@ def mission_page(config, slot, mission_id):
     automatic = attempt(mission.errors, "질문 문서", folder, mission_state.auto_question_documents, set())
     names = sorted(name for name in shared | automatic | SYSTEM_DOCUMENTS if os.path.isfile(os.path.join(folder, name)) and document_visible(folder, os.path.join(folder, name), shared))
     captures = sorted((name for name in names if name.startswith("captures/") and os.path.splitext(name)[1].lower() in IMAGE_TYPES), key=natural_key)
-    badges = tag(label_text(slot), "dim") + tag(mission.state, "" if mission.state == RUNNING else "dim")
+    badges = tag(label_text(location.label), "dim") + tag(mission.state, "" if mission.state == RUNNING else "dim")
     if mission.active:
         badges += tag("ACTIVE", "on") + stale_tag(mission.stale)
     elif mission.state == RUNNING:
@@ -1640,7 +1645,7 @@ def mission_page(config, slot, mission_id):
         )
         body += section_head(4, "캡처") + f'<div class="thumbs">{thumbs}</div>'
     body += '</details><details data-key="source-state"><summary>미션 상태·마일스톤·검증·결정·연결 기록</summary>'
-    body += mission_fields_html(config, mission)
+    body += mission_fields_html(location, mission)
     descriptions = {
         mission_state.UNITS_FILE: "작업 목표와 진행 상태 · 완료 조건과 검증 계획은 실행 결과가 아닙니다.",
         mission_state.LEDGER_FILE: "최근 기록부터 표시 · 판정 결과와 검증 수준은 별개이며 통과는 제출·승인을 뜻하지 않습니다.",
@@ -1723,10 +1728,10 @@ def read_shared_text(folder, path):
     return ""
 
 
-def mission_folders(config, raw, real):
+def mission_folders(allowed, raw, real):
     found = set()
     absolute = os.path.abspath(raw)
-    for location in locations(config):
+    for location in allowed:
         try:
             entries = list(os.scandir(location.state_dir))
         except FileNotFoundError:
@@ -1753,12 +1758,13 @@ def read_allowed(config, raw):
             real = os.path.realpath(raw)
     except ValueError:
         real = ""
-    if not real or not any(slots.inside_root(os.path.realpath(root), real) for root in (config.main, config.root)):
-        return real, b"", message(403, "허용된 폴더(메인·슬롯 루트) 밖 경로")
+    allowed = locations(config)
+    if not real or not any(slots.inside_root(os.path.realpath(root), real) for location in allowed for root in (location.root, location.state_dir)):
+        return real, b"", message(403, "허용된 작업 공간·미션 경로 밖 경로")
     if not os.path.isfile(real):
         return real, b"", message(404, "파일 없음")
     try:
-        folders = mission_folders(config, raw, real)
+        folders = mission_folders(allowed, raw, real)
         if any(not document_visible(folder, raw, set()) and not document_visible(folder, raw, mission_state.shared_documents(folder)) for folder in folders):
             return real, b"", message(404, "공유되지 않은 문서")
         with open(real, "rb") as f:
@@ -1806,7 +1812,8 @@ def view_response(config, raw, embedded=False):
     title = os.path.basename(real)
     if ext == ".md":
         title = document_label(os.path.basename(real), text, "", os.path.dirname(real))
-        root = max((item.root for item in locations(config) if slots.inside_root(os.path.realpath(item.root), real)), key=len, default=config.root)
+        boundaries = [item.root if slots.inside_root(os.path.realpath(item.root), real) else item.state_dir for item in locations(config)]
+        root = max((root for root in boundaries if slots.inside_root(os.path.realpath(root), real)), key=len, default=config.main)
         source_json = json.dumps(FILE_URL.sub(swap_file_link, text)).replace("<", "\\u003c")
         body = (
             f'<p class="muted document-path">{esc(real)}</p><script type="application/json" id="source" data-url="{esc(raw_url(real))}" data-root="{esc(raw_url(root) + "/")}">{source_json}</script>'
@@ -1888,8 +1895,8 @@ def main(argv=None, runtime="claude"):
     runtime = args.runtime or runtime
     try:
         located = slots.locate(args.project, runtime)
-        config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
-    except slots.UsageError as e:
+        config = dashboard_discovery.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+    except (slots.UsageError, mission_guard.GuardOff, ValueError, TypeError, AttributeError) as e:
         print(f"사용 오류: {e}", file=sys.stderr)
         return slots.USAGE
     try:
