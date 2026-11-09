@@ -902,6 +902,327 @@ def test_run_resume_rejects_task_and_sync_flags(project, extra):
     assert project.run("run", "a", "--resume", "--dry-run", *extra)[0] == slots.USAGE
 
 
+@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("resume", [False, True])
+def test_before_run_executes_once_under_slot_lock_before_editor_and_terminal(project, monkeypatch, runtime, resume):
+    project.write_adapter([], beforeRun=[project.tick_step("instructions", 0, cwd="{slot}")])
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    calls = []
+
+    def launched(kind):
+        assert project.lock_path("a").is_file()
+        lines = project.ticks_text().splitlines()
+        assert len(lines) == 2 and lines[-1].split()[1] == "end"
+        calls.append(kind)
+
+    monkeypatch.setattr(slots, "launch_editor", lambda *_: launched("editor"))
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: launched("terminal"))
+    code, _, _ = project.run("--runtime", runtime, "run", "a", *args, "--editor")
+    assert code == slots.OK and calls == ["editor", "terminal"]
+    assert slots.Rows(project.rows_path).find("a")["state"] == slots.STATE_READY
+    assert (project.state_dir / "slots/beforeRun/a-beforeRun.instructions.out.log").is_file()
+    assert not (project.state_dir / "slots/a-instructions.out.log").exists()
+    assert "\tbeforeRun.instructions\t" in (project.state_dir / "slots/beforeRun/a-timing.tsv").read_text()
+
+
+def test_run_refresh_finishes_before_before_run_even_with_matching_step_id(project, monkeypatch):
+    project.write_adapter([project.tick_step("instructions", 0)], beforeRun=[project.tick_step("instructions", 0)])
+    seed_slot(project, "a")
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    code, _, _ = project.run("run", "a", "task", "--refresh")
+    assert code == slots.OK and calls == ["terminal"]
+    kinds = [line.split()[1] for line in project.ticks_text().splitlines()]
+    assert kinds == ["start", "end", "start", "end"]
+    timing = (project.state_dir / "slots/a-timing.tsv").read_text().splitlines()
+    assert [line.split("\t")[1] for line in timing] == ["instructions"]
+    before_run_timing = (project.state_dir / "slots/beforeRun/a-timing.tsv").read_text().splitlines()
+    assert [line.split("\t")[1] for line in before_run_timing] == ["beforeRun.instructions"]
+    assert (project.state_dir / "slots/a-instructions.out.log").is_file()
+    assert (project.state_dir / "slots/beforeRun/a-beforeRun.instructions.out.log").is_file()
+
+
+def test_before_run_preserves_refresh_outputs_and_timing_when_prefixed_ids_collide(project, monkeypatch):
+    project.helper.write_text(
+        'import pathlib, sys\n'
+        'pathlib.Path(sys.argv[1]).write_text(sys.argv[2])\n'
+        'print(sys.argv[2])\n'
+    )
+    prepare = {"id": "beforeRun.instructions", "run": '"{py}" "{helper}" "{log}" refresh-output'}
+    before_run = {"id": "instructions", "run": '"{py}" "{helper}" "{log}" launch-output'}
+    project.write_adapter([prepare], beforeRun=[before_run])
+    seed_slot(project, "a")
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    code, _, _ = project.run("run", "a", "task", "--refresh")
+    assert code == slots.OK and calls == ["terminal"]
+    refresh_root = project.state_dir / "slots"
+    before_run_root = refresh_root / "beforeRun"
+    assert (refresh_root / "a-beforeRun.instructions.log").read_text() == "refresh-output"
+    assert (refresh_root / "a-beforeRun.instructions.out.log").read_text().strip() == "refresh-output"
+    assert (before_run_root / "a-beforeRun.instructions.log").read_text() == "launch-output"
+    assert (before_run_root / "a-beforeRun.instructions.out.log").read_text().strip() == "launch-output"
+    refresh_timing = (refresh_root / "a-timing.tsv").read_text().splitlines()
+    before_run_timing = (before_run_root / "a-timing.tsv").read_text().splitlines()
+    assert len(refresh_timing) == len(before_run_timing) == 1
+    assert refresh_timing[0].split("\t")[1] == before_run_timing[0].split("\t")[1] == "beforeRun.instructions"
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_before_run_failure_prevents_editor_and_terminal_and_preserves_ready(project, monkeypatch, resume):
+    project.write_adapter([], beforeRun=[project.tick_step("instructions", 0, args="a 7"), project.tick_step("later", 1)])
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    rows_before = Path(project.rows_path).read_bytes()
+    calls = []
+    monkeypatch.setattr(slots, "launch_editor", lambda *_: calls.append("editor"))
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    code, out, _ = project.run("run", "a", *args, "--editor")
+    assert code == slots.FAILED and not calls
+    assert "beforeRun 실패" in out and "종료 코드 7" in out
+    assert "a-beforeRun.instructions.out.log" in out
+    assert "later" not in project.ticks_text()
+    assert Path(project.rows_path).read_bytes() == rows_before
+
+
+@pytest.mark.parametrize("resume,state,active", [
+    (False, slots.STATE_READY, "mission-1"),
+    (False, "failed:prepare", ""),
+    (True, "failed:prepare", "mission-1"),
+    (True, slots.STATE_READY, ""),
+])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_before_run_never_executes_for_refused_slot(project, monkeypatch, resume, state, active, dry_run):
+    project.write_adapter([], beforeRun=[project.tick_step("instructions", 0)])
+    seed_slot(project, "a", active=active, state=state)
+    args = ["task"]
+    if resume:
+        args = ["--resume"]
+    if dry_run:
+        args.append("--dry-run")
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    code, out, _ = project.run("run", "a", *args)
+    assert code == slots.FAILED and "거부" in out
+    assert not project.ticks.exists() and not calls
+    assert not (project.state_dir / "slots/beforeRun/a-beforeRun.instructions.out.log").exists()
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_before_run_dry_run_renders_steps_in_order_without_mutation(project, monkeypatch, resume):
+    project.write_adapter([], beforeRun=[project.tick_step("instructions", 0)])
+    active = ""
+    args = ["task"]
+    if resume:
+        active = "mission-1"
+        args = ["--resume"]
+    seed_slot(project, "a", active=active)
+    before = {str(path): path.read_bytes() for path in project.dir.parent.rglob("*") if path.is_file()}
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    monkeypatch.setattr(slots, "launch_editor", lambda *_: calls.append("editor"))
+    code, out, _ = project.run("run", "a", *args, "--dry-run", "--editor")
+    after = {str(path): path.read_bytes() for path in project.dir.parent.rglob("*") if path.is_file()}
+    assert code == slots.OK and before == after and not calls
+    assert out.index("beforeRun.instructions") < out.index("editor:") < out.index("wt:")
+
+
+def test_before_run_respects_second_guard_check(project, monkeypatch):
+    project.write_adapter([], beforeRun=[project.tick_step("instructions", 0)])
+    seed_slot(project, "a", active="mission-1")
+    refusals = iter([("", "mission-1"), ("ownership changed", "")])
+    monkeypatch.setattr(slots, "resume_refusal", lambda *_: next(refusals))
+    code, out, _ = project.run("run", "a", "--resume")
+    assert code == slots.FAILED and "ownership changed" in out and not project.ticks.exists()
+
+
+def test_before_run_does_not_run_before_resume_session_validation(recorded_session, project):
+    config, _, _, _ = recorded_session
+    config.before_run = [project.tick_step("instructions", 0)]
+    args = slots.build_parser().parse_args(["run", "a", "--resume"])
+    with pytest.raises(slots.UsageError, match="codex"):
+        slots.cmd_run(config, args)
+    assert not project.ticks.exists()
+
+
+@pytest.mark.parametrize("mode", ["new", "resume", "new-session", "fallback"])
+def test_before_run_receives_launch_mode_and_the_same_verified_resume_session(project, recorded_session, monkeypatch, mode):
+    config, folder, session, _ = recorded_session
+    config.runtime = "codex"
+    project.helper.write_text(
+        'import json, pathlib, sys\n'
+        'pathlib.Path("launch-context.json").write_text(json.dumps(sys.argv[1:]))\n'
+    )
+    config.before_run = [{
+        "id": "context", "run": '"{py}" "{helper}" --launch-mode "{launchMode}" --session-id "{sessionId}"',
+        "cwd": "{slot}",
+    }]
+    args = ["run", "a", "--resume"]
+    expected_mode = "resume"
+    expected_session = session
+    if mode == "new":
+        (folder.parent / "ACTIVE").unlink()
+        args = ["run", "a", "task"]
+        expected_mode = "new"
+        expected_session = ""
+    elif mode == "new-session":
+        args.append("--new-session")
+        expected_session = ""
+    elif mode == "fallback":
+        (folder.parent / "ACTIVE").write_text(json.dumps({"id": folder.name, "session": "legacy-session"}), encoding="utf-8")
+        expected_session = ""
+    calls = []
+
+    def launched(_, __, command):
+        context = json.loads((project.slot_root / "a/launch-context.json").read_text())
+        assert context == ["--launch-mode", expected_mode, "--session-id", expected_session]
+        if expected_session:
+            assert command[-3:] == ["resume", expected_session, "$chef:chef-mission 미션 이어서"]
+        else:
+            assert "resume" not in command
+        calls.append(command)
+
+    monkeypatch.setattr(slots, "launch_mission", launched)
+    assert slots.cmd_run(config, slots.build_parser().parse_args(args)) == slots.OK
+    assert len(calls) == 1
+
+
+def test_before_run_context_dry_run_uses_validated_session_without_execution(project, recorded_session):
+    config, folder, session, _ = recorded_session
+    config.runtime = "codex"
+    config.before_run = [{"id": "context", "run": 'echo --launch-mode "{launchMode}" --session-id "{sessionId}"'}]
+    project.capsys.readouterr()
+    args = slots.build_parser().parse_args(["run", "a", "--resume", "--dry-run"])
+    assert slots.cmd_run(config, args) == slots.OK
+    out = project.capsys.readouterr().out
+    assert f'--launch-mode "resume" --session-id "{session}"' in out
+    assert not project.ticks.exists()
+
+
+def test_before_run_reuses_step_templates_success_codes_and_exclusive_runner(project, monkeypatch):
+    project.helper.write_text(
+        'import pathlib, sys\n'
+        'pathlib.Path("instructions.txt").write_text("fictional launch instructions")\n'
+        'pathlib.Path(sys.argv[1]).write_text("generated")\n'
+        'sys.exit(3)\n'
+    )
+    step = {
+        "id": "instructions", "group": 1, "run": '"{py}" "{helper}" "{log}"',
+        "cwd": "{slot}", "exclusive": True, "okExit": [0, 3],
+    }
+    project.write_adapter([], beforeRun=[step])
+    seed_slot(project, "a")
+    calls = []
+
+    def launched(*_):
+        assert (project.slot_root / "a/instructions.txt").read_text() == "fictional launch instructions"
+        calls.append("terminal")
+
+    monkeypatch.setattr(slots, "launch_mission", launched)
+    code, _, _ = project.run("run", "a", "task")
+    assert code == slots.OK and calls == ["terminal"]
+    assert (project.state_dir / "slots/beforeRun/a-beforeRun.instructions.log").read_text() == "generated"
+    assert not (project.state_dir / "slots/exclusive.lock").exists()
+
+
+@pytest.mark.parametrize("value", [None, {}, "echo docs", 7])
+def test_before_run_requires_an_array(project, value):
+    project.write_adapter([], beforeRun=value)
+    code, _, err = project.run("run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and "slots.beforeRun 은 단계 배열" in err
+
+
+def test_launch_settings_use_existing_runtime_overlay_precedence(project):
+    project.write_adapter([], beforeRun=[project.tick_step("base", 0)], codexProjectDocMaxBytes=32768)
+    folder = project.dir / ".claude/orchestrator"
+    adapter_path = folder / "adapter.json"
+    adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
+    adapter["runtimes"] = {"codex": {"slots": {"beforeRun": [project.tick_step("runtime", 0)], "codexProjectDocMaxBytes": 65536}}}
+    adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
+    local_path = folder / "local.json"
+    local = json.loads(local_path.read_text(encoding="utf-8"))
+    local["runtimes"] = {"codex": {"slots": {"beforeRun": [project.tick_step("local", 0)], "codexProjectDocMaxBytes": 131072}}}
+    local_path.write_text(json.dumps(local), encoding="utf-8")
+    seed_slot(project, "a")
+    code, out, _ = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
+    assert code == slots.OK and "beforeRun.local" in out and "project_doc_max_bytes=131072" in out
+    assert "beforeRun.runtime" not in out and "beforeRun.base" not in out
+    code, out, _ = project.run("run", "a", "task", "--dry-run")
+    assert code == slots.OK and "beforeRun.base" in out and "project_doc_max_bytes" not in out
+
+
+@pytest.mark.parametrize("step", ["bad", {}, {"id": "docs", "run": 3}, {"id": "docs", "run": "echo x", "cwd": 8}])
+def test_malformed_before_run_steps_report_the_setting(project, step):
+    project.write_adapter([], beforeRun=[step])
+    seed_slot(project, "a")
+    code, _, err = project.run("run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and "slots.beforeRun[0]" in err
+
+
+@pytest.mark.parametrize("configured", [{}, {"codexProjectDocMaxBytes": 65536}])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_document_limit_option_for_new_and_recorded_resume(recorded_session, configured, resume):
+    config, folder, session, _ = recorded_session
+    located = slots.locate(config.main, "codex")
+    adapter = slots.read_adapter(located.adapter_path, "codex")
+    adapter["slots"].update(configured)
+    config = slots.Config(located, adapter, "codex")
+    command = slots.wt_command(config, "a", "task")
+    if resume:
+        command = slots.resume_command(config, "a", folder.name)
+        assert command[-3:] == ["resume", session, "$chef:chef-mission 미션 이어서"]
+    limits = [part for part in command if part.startswith("project_doc_max_bytes=")]
+    if configured:
+        assert limits == ["project_doc_max_bytes=65536"]
+        index = command.index(limits[0])
+        assert command[index - 1] == "-c"
+        if resume:
+            assert index < command.index("resume")
+    else:
+        assert limits == []
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, False, 32768.0, "65536", None, [], {}])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_document_limit_rejects_invalid_config_for_both_launch_modes(project, limit, resume):
+    project.write_adapter([], codexProjectDocMaxBytes=limit)
+    args = ["task"]
+    if resume:
+        args = ["--resume"]
+    code, _, err = project.run("--runtime", "codex", "run", "a", *args, "--dry-run")
+    assert code == slots.USAGE and "slots.codexProjectDocMaxBytes" in err
+
+
+@pytest.mark.parametrize("runtime", ["claude", "grok"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_document_limit_leaves_other_runtime_arguments_unchanged(project, runtime, resume):
+    project.write_adapter([])
+    located = slots.locate(str(project.dir), runtime)
+    adapter = slots.read_adapter(located.adapter_path, runtime)
+    config = slots.Config(located, adapter, runtime)
+    session = ""
+    if resume:
+        session = "12345678-1234-1234-1234-123456789012"
+    command = slots.wt_command(config, "a", "task", resume_session=session)
+    adapter["slots"]["codexProjectDocMaxBytes"] = 65536
+    limited = slots.Config(located, adapter, runtime)
+    limited_command = slots.wt_command(limited, "a", "task", resume_session=session)
+    if "--session-id" in command:
+        index = command.index("--session-id") + 1
+        command[index] = "generated-session"
+        limited_command[index] = "generated-session"
+    assert limited_command == command
+
+
 def test_remove_requires_yes(project):
     project.write_adapter([project.tick_step("one", 1)])
     seed_slot(project, "a")

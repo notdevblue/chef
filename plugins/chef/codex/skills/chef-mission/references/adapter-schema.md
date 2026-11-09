@@ -243,11 +243,13 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `slots.p4` | `p4` 실행 명령(문자열 또는 인자 배열, 예: 경로·접속 옵션 포함). 없으면 PATH의 `p4` |
 | `slots.mainClient` | 메인 워크스페이스 이름. 새 슬롯의 옵션을 따라 만들 원본이자 `{baseline}`을 조회하는 대상. `refresh`는 슬롯을 갱신하기 전에 이 워크스페이스를 먼저 head로 sync한다(`create`는 하지 않음). 사람마다 달라 `local.json`에 둔다 |
 | `slots.prepare[]` | 슬롯 준비·갱신 단계 목록(아래) |
+| `slots.beforeRun[]` | 새 미션 시작·재개 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |
+| `slots.codexProjectDocMaxBytes` | Codex 프로젝트 지침 읽기 한도(바이트). 양의 정수만 허용하며 bool·실수·문자열은 거부. 새 세션과 재개 모두 `-c project_doc_max_bytes=N` 적용. 생략하면 CLI 기본 동작 유지 |
 | `slots.refresh` | `refresh`가 다시 돌릴 `prepare[].id` 목록. `refresh --keep-local`을 쓰려면 `sync` 단계가 있어야 한다(그 단계 직후 `resolve`) |
 | `slots.churn` | 엔진·에디터가 스스로 다시 쓰는 추적 파일의 목록(문자열 배열). 스트림 루트(`slots.stream`) 기준 상대 경로이고 p4 와일드카드 `*`(한 단계)·`...`(여러 단계) 허용, 배열이 아니거나 빈 문자열·절대 경로·`..` 구간이 있으면 오류. 로컬 변경 검사에서 빠지고 `refresh` 때 `#have` 내용으로 되돌린다. `slots.vcs`가 `perforce`일 때만 쓴다 |
 | `slots.editor` | 슬롯 에디터를 여는 명령 템플릿. `run --editor`는 사용자가 동시 실행을 명시했을 때만 쓰고, 기본 흐름은 필요 시 실행함. 준비 확인·직접 연 프로세스 식별·정상 종료 절차는 `adapter.md`에 적음 |
 
-`slots.prepare[]` 항목은 다음 키를 가진다. `group` 번호 순서로 돌고, 같은 번호의 단계끼리는 병렬이다.
+`slots.prepare[]`·`slots.beforeRun[]` 항목은 다음 키를 가진다. `group` 번호 순서로 돌고, 같은 번호의 단계끼리는 병렬이다.
 한 그룹이 실패하면 뒤 그룹은 돌지 않는다.
 
 | 키 | 뜻 |
@@ -267,11 +269,24 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `{slot}` | 슬롯 폴더(`<root>/<name>`) |
 | `{client}` | `slots.client`로 만든 슬롯 작업 공간 이름 |
 | `{main}` | 메인 프로젝트 폴더(`vars.main`, 없으면 어댑터를 찾은 폴더) |
-| `{log}` | 이 단계의 로그 파일 경로(`prepare` 단계에서만) |
+| `{log}` | 이 단계의 로그 파일 경로(`prepare`·`beforeRun` 단계에서 사용) |
+| `{launchMode}` | `beforeRun` 전용. 새 미션 시작은 `new`, 미션 재개는 `resume` |
+| `{sessionId}` | `beforeRun` 전용. CLI 재개 명령과 같은 검증된 기존 세션 UUID. 새 미션·`--new-session`·기존 UUID가 없어 새 세션으로 이어받는 경우 빈 문자열 |
 | `{baseline}` | 메인 워크스페이스가 받은 CL 번호(Perforce: `slots.mainClient`의 `changes -m1 //<mainClient>/...#have`). `create`는 메인이 지금 받은 CL이고, `refresh`·`run --refresh`는 메인을 먼저 head로 sync한 뒤 조회하므로 head다. 템플릿에 있을 때만 한 번 조회하고, `slots.vcs`가 없으면 쓸 수 없다 |
 | `{memoryDir}` | 슬롯 세션의 Claude 자동 메모리 폴더 |
 | `{mainMemoryDir}` | 메인 세션 쪽 Claude 자동 메모리 폴더 |
 | `{<키>}` | `vars`의 키(예: `{unityExe}`). 정의 안 된 변수를 쓰면 실행 전에 오류 |
+
+`beforeRun`은 슬롯 상태·ACTIVE·재개할 세션 검사를 통과한 뒤, 슬롯 잠금 안에서 에디터·CLI를 열기 전에 한 번 실행한다.
+`run --refresh`는 갱신을 먼저 끝낸다. 단계 실패 시 실행을 중단하고 로그를 알리며, 기존 `ready` 상태는 유지한다.
+`--dry-run`은 단계만 표시하고 실행·파일 쓰기는 하지 않는다. 로그와 시간 기록의 단계 이름은 `beforeRun.<id>`이고,
+로그는 `<stateDir>/slots/beforeRun/`에 두어 준비·갱신 로그와 분리한다.
+출력 로그는 `<이름>-beforeRun.<id>.out.log`, 명령의 `{log}`는 `<이름>-beforeRun.<id>.log`,
+시간 기록은 같은 디렉터리의 `<이름>-timing.tsv`다.
+런타임별 명령은 기존 `runtimes.<런타임>.slots.beforeRun`에 두고, 프로젝트별 도구·경로·지침 내용은 어댑터에서 관리한다.
+`beforeRun.run`에서 실행 문맥을 넘기려면 `--launch-mode "{launchMode}" --session-id "{sessionId}"`처럼 값에
+큰따옴표를 쓴다(JSON 문자열에서는 `\"`로 이스케이프). 빈 `sessionId`도 빈 인자 하나로 전달된다.
+`sessionId`는 새 CLI 세션 ID를 예약하지 않으며, 기존 슬롯·ACTIVE·세션 검사를 대신하지 않는다.
 
 슬롯 목록과 상태는 메인 프로젝트의 `<stateDir>/slots.tsv`에 둔다. 열은 탭으로 구분한다.
 
