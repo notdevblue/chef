@@ -42,6 +42,11 @@ name	path	client	created	synced	state
 `state`는 `creating`(만드는 중이거나 중단됨), `ready`, `failed:<단계>`(만들다 실패), `failed:refresh:<단계>`(갱신하다 실패)다.
 `ready`가 아니면 `run`은 거부한다.
 
+새 미션 시작·재개는 상태·ACTIVE·세션 검사를 통과한 뒤 `slots.beforeRun[]`을 슬롯 잠금 안에서 한 번 실행한다.
+`--refresh` 갱신 후, 에디터·CLI 실행 전에 적용하며 실패하면 실행을 멈추고 기존 `ready` 상태를 유지한다.
+`--dry-run`은 실행할 단계만 표시한다. 단계 형식·런타임별 설정은 어댑터 계약의 "슬롯"을 따른다.
+출력 로그는 `<stateDir>/slots/beforeRun/<이름>-beforeRun.<id>.out.log`다.
+
 ## 명령
 
 - `status [이름...]` — 슬롯별 폴더·작업 공간 존재, 열린 파일 수, `ACTIVE`(돌고 있는 미션)와 그 상태·단계,

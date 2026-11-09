@@ -681,11 +681,23 @@ class Config:
         for name in self.names:
             self.check_format(name)
         self.prepare = list(slots.get("prepare") or [])
+        self.before_run = slots.get("beforeRun", [])
+        if not isinstance(self.before_run, list):
+            raise UsageError("slots.beforeRun 은 단계 배열이어야 함")
         self.refresh_ids = list(slots.get("refresh") or [])
         self.editor = slots.get("editor") or ""
-        self.autocompact = slots.get("autocompact", 500000 if runtime == "claude" else 200000)
+        default_autocompact = 200000
+        if runtime == "claude":
+            default_autocompact = 500000
+        self.autocompact = slots.get("autocompact", default_autocompact)
         if type(self.autocompact) is not int or not 100000 <= self.autocompact <= 1000000:
             raise UsageError("slots.autocompact 는 100000~1000000 정수여야 함")
+        self.codex_project_doc_max_bytes = 0
+        if "codexProjectDocMaxBytes" in slots:
+            limit = slots["codexProjectDocMaxBytes"]
+            if type(limit) is not int or limit <= 0:
+                raise UsageError("slots.codexProjectDocMaxBytes 는 양의 정수여야 함")
+            self.codex_project_doc_max_bytes = limit
         self.stages = [stage for stage in adapter.get("stages") or [] if isinstance(stage, dict) and stage.get("id")]
         self.vcs = build_vcs(slots, self.main)
         self.baseline = ""
@@ -706,13 +718,13 @@ class Config:
     def slot_lock_path(self, name):
         return normalize(os.path.join(self.state_dir, "slots", f"{name}.lock"))
 
-    def log_path(self, name, step_id, suffix=".log"):
-        return normalize(os.path.join(self.state_dir, "slots", f"{name}-{step_id}{suffix}"))
+    def log_path(self, name, step_id, suffix=".log", namespace=""):
+        return normalize(os.path.join(self.state_dir, "slots", namespace, f"{name}-{step_id}{suffix}"))
 
-    def timing_path(self, name):
-        return normalize(os.path.join(self.state_dir, "slots", f"{name}-timing.tsv"))
+    def timing_path(self, name, namespace=""):
+        return normalize(os.path.join(self.state_dir, "slots", namespace, f"{name}-timing.tsv"))
 
-    def values(self, name, step_id=""):
+    def values(self, name, step_id="", namespace=""):
         values = dict(self.vars)
         values.update(
             name=name,
@@ -723,45 +735,65 @@ class Config:
         if self.runtime == "claude":
             values.update(memoryDir=claude_memory_dir(self.slot_path(name)), mainMemoryDir=claude_memory_dir(self.main))
         if step_id:
-            values["log"] = self.log_path(name, step_id)
+            values["log"] = self.log_path(name, step_id, namespace=namespace)
         return values
 
     def prepare_entries(self):
+        return self.step_entries(self.prepare, "prepare")
+
+    def step_entries(self, raw_steps, source):
         entries = []
-        for index, raw in enumerate(self.prepare):
-            step_id = str(raw.get("id") or "") if isinstance(raw, dict) else ""
+        for index, raw in enumerate(raw_steps):
+            step_id = ""
+            if isinstance(raw, dict):
+                step_id = str(raw.get("id") or "")
             if not step_id or not isinstance(raw.get("run"), str) or not raw["run"]:
-                raise UsageError(f"slots.prepare[{index}] 에 id 와 run 문자열이 필요함")
+                raise UsageError(f"slots.{source}[{index}] 에 id 와 run 문자열이 필요함")
             if not isinstance(raw.get("cwd") or "", str):
-                raise UsageError(f"slots.prepare[{index}] ({step_id}) 의 cwd 가 문자열이 아님")
+                raise UsageError(f"slots.{source}[{index}] ({step_id}) 의 cwd 가 문자열이 아님")
             try:
                 group = int(raw.get("group", 0))
             except (TypeError, ValueError):
-                raise UsageError(f"slots.prepare[{index}] ({step_id}) 의 group 이 숫자가 아님: {raw.get('group')!r}")
+                raise UsageError(f"slots.{source}[{index}] ({step_id}) 의 group 이 숫자가 아님: {raw.get('group')!r}")
             entries.append((step_id, group, raw))
         return entries
 
     def build_steps(self, name, only=None):
+        entries = self.prepare_entries()
+        if only is not None:
+            entries = [entry for entry in entries if entry[0] in only]
+        return self.convert_steps(name, entries)
+
+    def before_run_steps(self, name, launch_mode, session_id):
+        values = {"launchMode": launch_mode, "sessionId": session_id}
+        return self.convert_steps(name, self.step_entries(self.before_run, "beforeRun"), "beforeRun", values)
+
+    def convert_steps(self, name, entries, namespace="", extra_values=()):
         steps = []
-        for step_id, group, raw in self.prepare_entries():
-            if only is not None and step_id not in only:
-                continue
-            values = self.values(name, step_id)
+        for step_id, group, raw in entries:
+            if namespace:
+                step_id = f"{namespace}.{step_id}"
+            values = self.values(name, step_id, namespace)
+            values.update(extra_values)
             if "{baseline}" in raw["run"] + (raw.get("cwd") or ""):
                 if not self.baseline:
                     self.baseline = self.vcs.baseline()
                 values["baseline"] = self.baseline
-            cwd = expand(raw["cwd"], values) if raw.get("cwd") else ""
+            cwd = ""
+            if raw.get("cwd"):
+                cwd = expand(raw["cwd"], values)
+            if cwd:
+                cwd = normalize(cwd)
             steps.append(
                 Step(
                     id=step_id,
                     command=expand(raw["run"], values),
-                    cwd=normalize(cwd) if cwd else "",
+                    cwd=cwd,
                     group=group,
                     exclusive=bool(raw.get("exclusive")),
                     ok_exit=list(raw.get("okExit") or [0]),
                     log=values["log"],
-                    out=self.log_path(name, step_id, ".out.log"),
+                    out=self.log_path(name, step_id, ".out.log", namespace),
                 )
             )
         steps.sort(key=lambda step: step.group)
@@ -861,8 +893,9 @@ def row_state(row):
 
 
 class Runner:
-    def __init__(self, config):
+    def __init__(self, config, namespace=""):
         self.config = config
+        self.namespace = namespace
         self.rows = Rows(config.rows_path)
         self.say_lock = threading.Lock()
         self.timing_lock = threading.Lock()
@@ -889,7 +922,7 @@ class Runner:
                 return 127
 
     def record_timing(self, name, step_id, started, seconds, code):
-        path = self.config.timing_path(name)
+        path = self.config.timing_path(name, self.namespace)
         with self.timing_lock:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "a", encoding="utf-8", newline="\n") as f:
@@ -1383,6 +1416,8 @@ def wt_command(config, name, task, session_task="", resume_session=""):
     command = ["wt.exe", "-w", "0", "nt", "--title", title, "-d", config.slot_path(name), executable]
     if config.runtime == "codex":
         options = ["-c", f"model_auto_compact_token_limit={config.autocompact}"]
+        if config.codex_project_doc_max_bytes:
+            options += ["-c", f"project_doc_max_bytes={config.codex_project_doc_max_bytes}"]
         if resume_session:
             options += ["resume", resume_session]
         return command + options + [escaped]
@@ -1465,9 +1500,11 @@ def session_runtime(folder, session):
     return ""
 
 
-def resume_command(config, name, mission_id, new_session=False):
+def resume_session_id(config, name, mission_id, new_session=False):
     session = active_of(config, name).session
-    resume_session = session if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", session) else ""
+    resume_session = ""
+    if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", session):
+        resume_session = session
     if new_session:
         resume_session = ""
     if resume_session:
@@ -1478,11 +1515,27 @@ def resume_command(config, name, mission_id, new_session=False):
             raise UsageError(f"슬롯 {name} 세션 기록 확인 실패: {exc}") from exc
         if not runtime:
             raise UsageError(f"슬롯 {name} 의 기존 세션 {session} 기록을 못 찾음 — --new-session 으로 새 {config.runtime} 세션에서 이어받을 것")
-        if runtime != config.runtime:
+        if runtime == config.runtime:
+            return resume_session
+        else:
             raise UsageError(
                 f"슬롯 {name} 의 기존 세션은 {runtime} — 해당 런타임의 슬롯 스크립트로 이어받거나 --new-session 으로 새 {config.runtime} 세션에서 이어받을 것"
             )
+    return ""
+
+
+def resume_command(config, name, mission_id, new_session=False):
+    resume_session = resume_session_id(config, name, mission_id, new_session)
     return wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", resume_session)
+
+
+def run_before_run(config, name, launch_mode, session_id):
+    results = Runner(config, "beforeRun").run_steps(name, config.before_run_steps(name, launch_mode, session_id))
+    failures = [result for result in results if not result.ok]
+    if failures:
+        print(f"[{name}] beforeRun 실패: {failures[0].failure_text()}")
+        return False
+    return True
 
 
 def cmd_run_resume(config, args, name):
@@ -1500,9 +1553,13 @@ def cmd_run_resume(config, args, name):
     if refusal:
         print(f"거부: {refusal}")
         return FAILED
-    command = resume_command(config, name, mission_id, args.new_session)
+    session_id = resume_session_id(config, name, mission_id, args.new_session)
+    command = wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
     if args.dry_run:
         print_baseline(config)
+        before_run = config.before_run_steps(name, "resume", session_id)
+        if before_run:
+            print("\n".join(describe_steps(before_run)))
         if args.editor:
             print(f"editor: {expand(config.editor, config.values(name))}")
         print("wt: " + subprocess.list2cmdline(command))
@@ -1513,7 +1570,10 @@ def cmd_run_resume(config, args, name):
         if refusal:
             print(f"거부: {refusal}")
             return FAILED
-        command = resume_command(config, name, mission_id, args.new_session)
+        session_id = resume_session_id(config, name, mission_id, args.new_session)
+        command = wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
+        if not run_before_run(config, name, "resume", session_id):
+            return FAILED
         if args.editor:
             launch_editor(config, name)
         try:
@@ -1555,11 +1615,16 @@ def cmd_run(config, args):
             code = sync_main_workspace(config, [name], args.main_keep_local, dry_run=True)
             if code is not None:
                 return code
-        refresh_plan = config.refresh_steps(name, args.keep_local) if args.refresh else []
+        refresh_plan = []
+        if args.refresh:
+            refresh_plan = config.refresh_steps(name, args.keep_local)
         print_baseline(config)
         if args.refresh:
             print(f"[{name}] refresh (dry-run)")
             print("\n".join(describe_refresh(config, name, refresh_plan, args.keep_local)))
+        before_run = config.before_run_steps(name, "new", "")
+        if before_run:
+            print("\n".join(describe_steps(before_run)))
         if args.editor:
             print(f"editor: {expand(config.editor, config.values(name))}")
         print("wt: " + subprocess.list2cmdline(command))
@@ -1568,7 +1633,9 @@ def cmd_run(config, args):
         code = sync_main_workspace(config, [name], args.main_keep_local, dry_run=False)
         if code is not None:
             return code
-    refresh_plan = config.refresh_steps(name, args.keep_local) if args.refresh else []
+    refresh_plan = []
+    if args.refresh:
+        refresh_plan = config.refresh_steps(name, args.keep_local)
     print_baseline(config)
     if args.refresh:
         outcome = guarded(refresh_one, Runner(config), name, refresh_plan, args.keep_local, args.discard_local)
@@ -1580,6 +1647,8 @@ def cmd_run(config, args):
         refusal = idle_refusal(config, name, allow_refresh_failed=False)
         if refusal:
             print(f"거부: {refusal}")
+            return FAILED
+        if not run_before_run(config, name, "new", ""):
             return FAILED
         if args.editor:
             launch_editor(config, name)

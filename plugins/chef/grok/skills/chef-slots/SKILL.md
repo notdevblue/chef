@@ -13,6 +13,12 @@ description: "Grok CLI에서 슬롯 워크스페이스를 조회·생성·갱신
 슬롯 이름은 어댑터 `slots.names`에 있는 것만이다. 종료 코드 0 성공, 1 실패, 2 사용 오류.
 `state`가 `ready`가 아니면 `run`은 거부한다.
 
+새 미션 시작·재개 시 상태·ACTIVE·세션 검사 후 `slots.beforeRun[]`을 슬롯 잠금 안에서 한 번 실행한다.
+`--refresh` 갱신 후 에디터·CLI 실행 전에 적용하며 실패하면 실행을 멈추고 기존 `ready` 상태를 유지한다.
+`--dry-run`은 단계만 표시한다. 런타임별 명령은 `runtimes.grok.slots.beforeRun`에 두고,
+항목 형식은 공유 `skills/mission/references/adapter-schema.md`의 "슬롯"을 따른다.
+출력 로그는 `<stateDir>/slots/beforeRun/<이름>-beforeRun.<id>.out.log`다.
+
 ```text
 python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" status
 python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" create <이름> --dry-run

@@ -110,6 +110,10 @@ adapter → adapter.runtimes.codex → local → local.runtimes.codex다.
 예시 어댑터(`adapters/example/`)의 Codex 준비 단계는 sync·library·junction·import·verify이며, Claude 설정·메모리 복사는 하지 않는다.
 프로젝트 AGENTS.md와 Codex용 Unity MCP 연결은 해당 프로젝트에 준비되어 있어야 한다.
 로컬 Codex 설정·개인 AGENTS.md 복사가 필요하면 어댑터 준비 단계에 명시한다.
+매번 실행 직전에 갱신할 로컬 지침은 `runtimes.codex.slots.beforeRun[]`에 둔다. 새 미션 시작·재개 모두
+슬롯 검사 후 에디터·CLI 실행 전에 한 번 돌며, 실패하면 세션을 열지 않는다. 단계 형식은 기존 `prepare[]`와 같다.
+Codex 프로젝트 지침 읽기 한도는 선택 설정 `slots.codexProjectDocMaxBytes`(양의 정수, 바이트)로 새 세션·재개에 적용한다.
+생략하면 기존 CLI 동작을 유지한다. 전체 계약은 [어댑터 슬롯 설정](plugins/chef/codex/skills/chef-mission/references/adapter-schema.md#슬롯)에 있다.
 
 `codex/agents/*.toml`은 역할별 지시다. 등록된 Codex 에이전트가 없으면 스킬이 그 지시를
 새 서브에이전트에게 전달한다. research와 review는 부모 모델·추론 수준을 상속한다. 중간 구현 역할은 `gpt-6.1-sol` / high,

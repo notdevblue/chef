@@ -48,6 +48,15 @@ name	path	client	created	synced	state
 `state`는 `creating`(만드는 중이거나 중단됨), `ready`, `failed:<단계>`(만들다 실패), `failed:refresh:<단계>`(갱신하다 실패)다.
 `ready`가 아니면 `run`은 거부한다.
 
+새 미션 시작·재개는 상태·ACTIVE·세션 검사를 통과한 뒤 `slots.beforeRun[]`을 슬롯 잠금 안에서 한 번 실행한다.
+`--refresh` 갱신 후, 에디터·CLI 실행 전에 적용하며 실패하면 실행을 멈추고 기존 `ready` 상태를 유지한다.
+`--dry-run`은 실행할 단계만 표시한다. 출력 로그는 `<stateDir>/slots/beforeRun/<이름>-beforeRun.<id>.out.log`다.
+런타임별 지침 준비 명령은 `runtimes.codex.slots.beforeRun`에 둔다.
+이 단계의 `{launchMode}`·`{sessionId}`는 시작·재개 구분과 검증된 기존 세션 UUID를 전달한다.
+새 세션의 빈 UUID 인자도 보존하도록 명령 값은 큰따옴표로 감싼다.
+`slots.codexProjectDocMaxBytes`를 양의 정수로 설정하면 새 세션·재개 모두 Codex 프로젝트 지침 읽기 한도를 적용한다.
+생략하면 기존 CLI 동작을 유지한다. 전체 계약은 `../chef-mission/references/adapter-schema.md`의 "슬롯"을 따른다.
+
 ## 명령
 
 - `status [이름...]` — 슬롯별 폴더·작업 공간 존재, 열린 파일 수, `ACTIVE`(돌고 있는 미션)와 그 상태·단계,
@@ -154,5 +163,6 @@ python "<plugin-root>/codex/skills/chef-slots/scripts/dashboard.py" [--project <
   Claude 설정·메모리 junction은 만들지 않는다. 프로젝트 AGENTS.md는 VCS 동기화로 받고,
   개인 Codex 규칙은 세션 훅으로 주입한다. Unity MCP는 Codex 설정에서 슬롯의 projectPath에 붙는지 확인한다.
   프로젝트 로컬 `.codex/config.toml`·개인 AGENTS.md가 필요하면 어댑터 준비 단계에 명시한다.
+  매번 실행 전에 갱신해야 하는 로컬 지침은 `beforeRun` 단계에 둔다.
   새 폴더 신뢰 및 훅 신뢰 확인은 사용자가 한다. 전역 Codex 설정은 수정하지 않는다.
 - 기록 안 된 로컬 변경 확인(`reconcile -n`)은 슬롯 전체를 훑어 1분 넘게 걸릴 수 있다(`refresh`는 편집 확인만이라 더 짧다).
