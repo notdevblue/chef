@@ -237,6 +237,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `slots.prepare[]` | 슬롯 준비·갱신 단계 목록(아래) |
 | `slots.beforeRun[]` | 새 미션 시작·재개 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |
 | `slots.codexProjectDocMaxBytes` | Codex 프로젝트 지침 읽기 한도(바이트). 양의 정수만 허용하며 bool·실수·문자열은 거부. 새 세션과 재개 모두 `-c project_doc_max_bytes=N` 적용. 생략하면 CLI 기본 동작 유지 |
+| `slots.codexAgentConfigs` | Codex native 역할 별칭별 `{configFile, description}` 객체. 선택 설정이며 기본은 빈 객체. 새 시작·재개에 역할 설정 파일과 설명을 명시적으로 등록함(아래) |
 | `slots.refresh` | `refresh`가 다시 돌릴 `prepare[].id` 목록. `refresh --keep-local`을 쓰려면 `sync` 단계가 있어야 한다(그 단계 직후 `resolve`) |
 | `slots.churn` | 엔진·에디터가 스스로 다시 쓰는 추적 파일의 목록(문자열 배열). 스트림 루트(`slots.stream`) 기준 상대 경로이고 p4 와일드카드 `*`(한 단계)·`...`(여러 단계) 허용, 배열이 아니거나 빈 문자열·절대 경로·`..` 구간이 있으면 오류. 로컬 변경 검사에서 빠지고 `refresh` 때 `#have` 내용으로 되돌린다. `slots.vcs`가 `perforce`일 때만 쓴다 |
 | `slots.editor` | 슬롯 에디터를 여는 명령 템플릿. `run --editor`는 사용자가 동시 실행을 명시했을 때만 쓰고, 기본 흐름은 필요 시 실행함. 준비 확인·직접 연 프로세스 식별·정상 종료 절차는 `adapter.md`에 적음 |
@@ -279,6 +280,19 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 `beforeRun.run`에서 실행 문맥을 넘기려면 `--launch-mode "{launchMode}" --session-id "{sessionId}"`처럼 값에
 큰따옴표를 쓴다(JSON 문자열에서는 `\"`로 이스케이프). 빈 `sessionId`도 빈 인자 하나로 전달된다.
 `sessionId`는 새 CLI 세션 ID를 예약하지 않으며, 기존 슬롯·ACTIVE·세션 검사를 대신하지 않는다.
+
+`codexAgentConfigs`의 각 값은 `configFile`·`description` 두 키만 가지며 둘 다 비어 있지 않은 문자열이어야 한다.
+별칭은 영문자·숫자·`_`·`-`만 허용한다. `agents`의 스칼라 설정 이름인 `max_threads`·`max_depth`·
+`job_max_runtime_seconds`·`default_subagent_model`·`default_subagent_reasoning_effort`·`enabled`·
+`interrupt_message`·`max_concurrent_threads_per_session`은 별칭으로 쓰지 않는다.
+등록 필드와 현재 스칼라 키는 [공식 Codex 설정 스키마](https://learn.chatgpt.com/docs/config-schema.json)를 따른다.
+
+`configFile`은 기존 `{slot}`·`vars` 템플릿을 확장한 뒤 절대 경로여야 한다.
+`beforeRun`이 성공한 뒤 에디터·CLI를 열기 전에 파일 존재·읽기 가능 여부를 확인한다. 콜백이 없으면 기존 파일을 확인한다.
+`--dry-run`은 파일이 아직 없어도 매핑 인자를 표시하며 파일을 만들지 않는다. 파일 내용은 Codex가 해석한다.
+각 항목은 별도 argv의 `-c agents.<별칭>.config_file="<경로>"`와 `-c agents.<별칭>.description="<설명>"`으로 전달한다.
+문자열은 TOML 형식으로 이스케이프하며 런타임별 값은 `runtimes.codex.slots.codexAgentConfigs`에 둘 수 있다.
+생략하면 기존 실행 인자를 유지하고, Claude·Grok에는 등록 인자나 파일 검사를 적용하지 않는다.
 
 슬롯 목록과 상태는 메인 프로젝트의 `<stateDir>/slots.tsv`에 둔다. 열은 탭으로 구분한다.
 

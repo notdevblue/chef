@@ -33,6 +33,11 @@ VARIABLE = re.compile(r"\{(\w+)\}")
 BASELINE_LINE = re.compile(r"Change (\d+) on ")
 CLIENT_NAME_LINE = re.compile(r"^Client name:\s*(.+)$", re.M)
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+CODEX_AGENT_NAME = re.compile(r"[A-Za-z0-9_-]+")
+CODEX_AGENT_RESERVED = {
+    "max_threads", "max_depth", "job_max_runtime_seconds", "default_subagent_model",
+    "default_subagent_reasoning_effort", "enabled", "interrupt_message", "max_concurrent_threads_per_session",
+}
 CHURN_TOKEN = re.compile(r"(\.\.\.|\*)")
 CHURN_WILDCARDS = {"...": ".*", "*": "[^/]*"}
 DEPOT_LINE_PATH = re.compile(r"^(//.+?)(?:#\d+)? - ")
@@ -129,6 +134,14 @@ def expand(template, values):
     if missing:
         raise UsageError(f"정의 안 된 변수 {', '.join('{' + key + '}' for key in missing)}: {template}")
     return VARIABLE.sub(lambda m: values[m.group(1)], template)
+
+
+def toml_string(value):
+    try:
+        value.encode("utf-8")
+    except UnicodeError as exc:
+        raise UsageError("Codex 역할 설정 문자열은 유효한 UTF-8이어야 함") from exc
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f").replace(";", "\\u003b")
 
 
 def process_alive(pid):
@@ -698,6 +711,18 @@ class Config:
             if type(limit) is not int or limit <= 0:
                 raise UsageError("slots.codexProjectDocMaxBytes 는 양의 정수여야 함")
             self.codex_project_doc_max_bytes = limit
+        self.codex_agent_configs = slots.get("codexAgentConfigs", {})
+        if not isinstance(self.codex_agent_configs, dict):
+            raise UsageError("slots.codexAgentConfigs 는 역할 이름별 객체여야 함")
+        for alias, role in self.codex_agent_configs.items():
+            if not isinstance(alias, str) or not CODEX_AGENT_NAME.fullmatch(alias) or alias in CODEX_AGENT_RESERVED:
+                raise UsageError(f"slots.codexAgentConfigs 의 역할 이름이 잘못되었거나 예약된 키임: {alias!r}")
+            if not isinstance(role, dict) or set(role) != {"configFile", "description"}:
+                raise UsageError(f"slots.codexAgentConfigs.{alias} 에 configFile·description 만 필요함")
+            for key, value in role.items():
+                if not isinstance(value, str) or not value.strip():
+                    raise UsageError(f"slots.codexAgentConfigs.{alias}.{key} 는 비어 있지 않은 문자열이어야 함")
+                toml_string(value)
         self.stages = [stage for stage in adapter.get("stages") or [] if isinstance(stage, dict) and stage.get("id")]
         self.vcs = build_vcs(slots, self.main)
         self.baseline = ""
@@ -708,6 +733,26 @@ class Config:
 
     def slot_path(self, name):
         return normalize(os.path.join(self.root, name))
+
+    def codex_agent_entries(self, name):
+        entries = []
+        for alias, role in self.codex_agent_configs.items():
+            path = expand(role["configFile"], self.values(name))
+            if not os.path.isabs(path):
+                raise UsageError(f"slots.codexAgentConfigs.{alias}.configFile 은 확장 후 절대 경로여야 함: {path}")
+            entries.append((alias, normalize(path), role["description"]))
+        return entries
+
+    def check_codex_agent_files(self, name):
+        if self.runtime == "codex":
+            for alias, path, _ in self.codex_agent_entries(name):
+                if not os.path.isfile(path):
+                    raise UsageError(f"slots.codexAgentConfigs.{alias}.configFile 파일이 없음: {path}")
+                try:
+                    with open(path, "rb"):
+                        pass
+                except OSError as exc:
+                    raise UsageError(f"slots.codexAgentConfigs.{alias}.configFile 파일을 읽을 수 없음: {path}: {exc}") from exc
 
     def client_of(self, name):
         return self.client_template.replace("{name}", name)
@@ -1418,6 +1463,9 @@ def wt_command(config, name, task, session_task="", resume_session=""):
         options = ["-c", f"model_auto_compact_token_limit={config.autocompact}"]
         if config.codex_project_doc_max_bytes:
             options += ["-c", f"project_doc_max_bytes={config.codex_project_doc_max_bytes}"]
+        for alias, path, description in config.codex_agent_entries(name):
+            options += ["-c", f"agents.{alias}.config_file={toml_string(path)}"]
+            options += ["-c", f"agents.{alias}.description={toml_string(description)}"]
         if resume_session:
             options += ["resume", resume_session]
         return command + options + [escaped]
@@ -1574,6 +1622,7 @@ def cmd_run_resume(config, args, name):
         command = wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
         if not run_before_run(config, name, "resume", session_id):
             return FAILED
+        config.check_codex_agent_files(name)
         if args.editor:
             launch_editor(config, name)
         try:
@@ -1650,6 +1699,7 @@ def cmd_run(config, args):
             return FAILED
         if not run_before_run(config, name, "new", ""):
             return FAILED
+        config.check_codex_agent_files(name)
         if args.editor:
             launch_editor(config, name)
         try:
