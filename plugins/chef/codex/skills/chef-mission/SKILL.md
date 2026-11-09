@@ -38,6 +38,23 @@ PoC가 필요 없는 작업이면 A를 건너뛴다. 확인과 멈춤 질문은 
 - 프로젝트의 AGENTS.md와 실제 설치된 Codex 스킬을 우선 확인한다. Claude용 도구 이름·스킬이
   그대로 있다고 가정하지 않는다. 필요한 PoC·리뷰·Unity MCP가 없으면 해당 단계를 미확인으로 보고하고 멈춘다.
 
+## 미션 진입
+
+새 미션과 이어서 하기는 어댑터 탐색 전에 공통 진입 CLI를 실행한다.
+현재 Codex 세션 id와 새 미션의 후보 id 또는 이어받을 기존 id를 사용한다. 기존 id를 알 수 없으면 임의로 만들지 않는다.
+`--project`에는 다음 마커를 실행할 실제 cwd를 넣는다.
+
+```text
+python "<plugin-root>/codex/skills/chef-mission/scripts/mission_entry.py" --project "<cwd>" --mode <new|resume> --session "<현재 세션 id>" --mission "<미션 id>" --task "<작업>"
+```
+
+`continue`면 반환한 어댑터를 읽고 아래 절차를 진행한다. `delegate`와 `launched: true`면 부모에서 멈추고 슬롯 세션이 이어받는다.
+`needs-input`이나 실패면 미션을 열지 않고 필요한 선택·오류를 알린다. 슬롯으로 도착한 세션도 자기 세션 id로 다시 진입한다.
+open·resume 직전에도 같은 입력의 진입 성공이 필요하며, 등록된 이벤트의 receipt는 10분간 유효하다.
+외부 이벤트·등록·route·receipt 계약은 [공통 진입](references/mission-entry.md)을 따른다.
+등록된 진입의 resume은 기존 미션의 세션 id·런타임을 유지한다. 현재 세션이 다르면 소유권을 바꾸지 않고 멈춘다.
+등록이 없는 환경은 기존 어댑터와 가드 절차를 그대로 쓴다. 중단·닫기만 할 때는 새 진입을 실행하지 않는다.
+
 ## 0. 어댑터 읽기
 
 1. 어댑터를 찾는다. 계약은 `references/adapter-schema.md`의 "어댑터 찾기"이고, 가드 훅과 같은 순서다.
@@ -68,7 +85,7 @@ PoC가 필요 없는 작업이면 A를 건너뛴다. 확인과 멈춤 질문은 
    S면 미션을 열지 않고 사용자에게 "미션 없이 처리" 또는 한 번 파견을 제안한다. 사용자가 그래도 미션을 원할 때만
    `--force-tier`로 연다. `init`이 `--tier S`를 `--force-tier` 없이 거부하고, `--tier`가 없으면 경고한다.
 1. id는 `YYYYMMDD-<짧은-slug>`(영문·숫자·`-`).
-2. 셸 도구로 `echo han-mission open <id>`를 **단독으로** 실행한다. 가드 훅이 `ACTIVE`를 쓰고 이 세션에
+2. 진입 CLI의 `continue`와 같은 id·세션·cwd로 셸 도구에서 `echo han-mission open <id>`를 **단독으로** 실행한다. 가드 훅이 `ACTIVE`를 쓰고 이 세션에
    가드를 건다. 마커는 다른 명령과 한 호출에 잇지 않는다(이으면 훅이 전체를 거부한다). 셸 `echo` 출력만으로는
    훅 실행을 증명할 수 없다.
    다른 미션이 진행 중이라 거부되면 사용자에게 알리고 멈춘다. 이때는 아무 파일도 만들지 않는다.
@@ -542,7 +559,7 @@ chef 플러그인(상태 CLI·가드·스킬)이 대상이고, 이때도 스킬 
 
 - 같은 세션에서 압축만 됐고 `<stateDir>/ACTIVE`의 `session`이 그대로면 가드가 이미 이 세션에 걸려 있으니 마커가
   필요 없다. 재시작·`codex resume`·다른 창처럼 세션이 바뀌었으면 §0의 사용자 확인을 거친 뒤
-  `echo han-mission resume <id>`로 가드를 이 세션에 다시 건다. 셸 출력만으로 성공을 판단하지 않고, 훅 안내와 ACTIVE의 id·현재 세션 id를 확인한다. 세션이 같은지 알 수 없으면 바뀐 것으로 본다.
+  진입 CLI를 `--mode resume`으로 통과한 뒤 `echo han-mission resume <id>`로 가드를 이 세션에 다시 건다. 셸 출력만으로 성공을 판단하지 않고, 훅 안내와 ACTIVE의 id·현재 세션 id를 확인한다. 세션이 같은지 알 수 없으면 바뀐 것으로 본다.
   resume 뒤에도 §1의 3처럼 ACTIVE와 안내를 확인한다.
 - 승인된 확인은 다시 받지 않는다. 대기 중이던 확인은 다시 보여 준다.
 - `doing` 행은 열린 파일과 마지막 `ledger` 판정을 보고 다시 검증부터 한다.

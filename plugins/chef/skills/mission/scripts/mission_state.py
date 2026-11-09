@@ -971,27 +971,40 @@ def cmd_complete(ctx, args):
     return [f"{args.id} 완료 {receipt['grade']}", *cmd_context(ctx, args)]
 
 
-def search_claude(session, home):
+def search_claude(session, home, require_unique=False):
     base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
     projects = os.path.join(base, "projects")
     if not os.path.isdir(projects):
         return ""
+    found = ""
     for name in sorted(os.listdir(projects)):
         candidate = os.path.join(projects, name, f"{session}.jsonl")
         if os.path.isfile(candidate):
-            return candidate
-    return ""
+            if require_unique:
+                if found and os.path.realpath(found) != os.path.realpath(candidate):
+                    raise StateError("ambiguous Claude session transcript fallback")
+                found = candidate
+            else:
+                return candidate
+    return found
 
 
-def search_codex(session, home):
+def search_codex(session, home, require_unique=False):
     base = os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
     # 보관한 세션은 archived_sessions 로 옮겨져서 sessions.tsv 경로가 낡음
+    found = ""
     for root in ("sessions", "archived_sessions"):
         for folder, _, names in os.walk(os.path.join(base, root)):
             for name in sorted(names):
                 if name.startswith("rollout-") and name.endswith(f"-{session}.jsonl"):
-                    return os.path.join(folder, name)
-    return ""
+                    candidate = os.path.join(folder, name)
+                    if require_unique:
+                        if found and os.path.realpath(found) != os.path.realpath(candidate):
+                            raise StateError("ambiguous Codex session transcript fallback")
+                        found = candidate
+                    else:
+                        return candidate
+    return found
 
 
 def cmd_transcripts(ctx, args):

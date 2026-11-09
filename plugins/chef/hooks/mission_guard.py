@@ -111,6 +111,7 @@ class Active(NamedTuple):
     session: str
     opened_at: str
     corrupt: bool = False
+    runtime: str = ""
 
 
 NO_ACTIVE = Active("", "", "")
@@ -449,6 +450,7 @@ def read_active(state_dir):
             str(data.get("id") or "-"),
             str(data.get("session") or ""),
             str(data.get("openedAt") or ""),
+            runtime=str(data.get("runtime") or ""),
         )
     return Active(text.splitlines()[0].strip() if text.strip() else "-", "", "")
 
@@ -458,6 +460,8 @@ def write_active(state_dir, active):
     final = active_path_of(state_dir)
     temp = f"{final}.{os.getpid()}.tmp"
     data = {"id": active.id, "session": active.session, "openedAt": active.opened_at}
+    if active.runtime:
+        data["runtime"] = active.runtime
     try:
         with open(temp, "w", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(data, ensure_ascii=False) + "\n")
@@ -991,29 +995,29 @@ def clear_allow_once(state_dir, mission_id):
                 remove_quietly(os.path.join(folder, name))
 
 
-def open_mission(state_dir, mission_id, session_id, active, outcome):
+def open_mission(state_dir, mission_id, session_id, active, outcome, runtime=""):
     if active.corrupt:
         outcome.deny = corrupt_active_notice(state_dir)
         return
     if active.id and active.id != mission_id:
         outcome.deny = f"다른 미션 {active.id} 진행 중"
         return
-    write_active(state_dir, Active(mission_id, session_id, now_iso()))
+    write_active(state_dir, Active(mission_id, session_id, now_iso(), runtime=runtime or active.runtime))
     outcome.messages.append(f"미션 {mission_id} 가드 켜짐")
 
 
-def resume_mission(state_dir, mission_id, session_id, active, outcome):
+def resume_mission(state_dir, mission_id, session_id, active, outcome, runtime=""):
     if active.corrupt:
         outcome.deny = corrupt_active_notice(state_dir)
         return
     if active.id != mission_id:
         outcome.deny = f"다른 미션 {active.id} 진행 중" if active.id else f"미션 {mission_id} 가 열려 있지 않음"
         return
-    write_active(state_dir, Active(mission_id, session_id, active.opened_at or now_iso()))
+    write_active(state_dir, Active(mission_id, session_id, active.opened_at or now_iso(), runtime=runtime or active.runtime))
     outcome.messages.append(f"미션 {mission_id} 가드 세션 갱신 (이전 session: {active.session or '없음'})")
 
 
-def close_mission(state_dir, mission_id, session_id, active, outcome):
+def close_mission(state_dir, mission_id, session_id, active, outcome, runtime=""):
     if active.corrupt:
         remove_quietly(active_path_of(state_dir))
         clear_allow_once(state_dir, mission_id)
@@ -1037,13 +1041,13 @@ def close_mission(state_dir, mission_id, session_id, active, outcome):
 MARKER_ACTIONS = {"open": open_mission, "resume": resume_mission, "close": close_mission}
 
 
-def handle_marker(marker, state_dir, session_id, outcome, transcript="", stale_hours=STALE_HOURS_DEFAULT):
+def handle_marker(marker, state_dir, session_id, outcome, transcript="", stale_hours=STALE_HOURS_DEFAULT, runtime=""):
     action, mission_id = marker.group(1).lower(), marker.group(2)
     if not valid_mission_id(mission_id):
         outcome.deny = f"미션 id 형식 오류: {mission_id}"
         return
     active = read_active(state_dir)
-    MARKER_ACTIONS[action](state_dir, mission_id, session_id, active, outcome)
+    MARKER_ACTIONS[action](state_dir, mission_id, session_id, active, outcome, runtime)
     if outcome.deny and active.id and not active.corrupt:
         try:
             state = staleness(state_dir, active, stale_hours)
@@ -1263,6 +1267,30 @@ def decide(payload):
     if not isinstance(command, str):
         return outcome
     marker_command = contains_marker(command, tool_name)
+    entry_context = {}
+    entry_marker = MARKER.fullmatch(command.strip())
+    if marker_command and not entry_marker:
+        import mission_entry
+
+        try:
+            if mission_entry.registration(payload.get("cwd") or "", payload.get("han_runtime", "claude")):
+                outcome.deny = MARKER_ALONE_REASON
+                return outcome
+        except (mission_entry.EntryError, GuardOff, OSError, ValueError, TypeError) as exc:
+            outcome.deny = f"미션 진입 확인 실패: {exc}"
+            return outcome
+    if entry_marker and entry_marker.group(1).lower() in SESSION_ACTIONS:
+        import mission_entry
+
+        action = entry_marker.group(1).lower()
+        mode = "new"
+        if action == "resume":
+            mode = "resume"
+        try:
+            entry_context = mission_entry.guard_location(payload, mode, entry_marker.group(2))
+        except (mission_entry.EntryError, GuardOff, OSError, ValueError, TypeError) as exc:
+            outcome.deny = f"미션 진입 확인 실패: {exc}"
+            return outcome
     if not marker_command and payload.get("han_origin_cwd"):
         contexts = question_write_guard.mission_contexts(payload, [], sys.modules[__name__])
         if not contexts:
@@ -1270,7 +1298,10 @@ def decide(payload):
         located, adapter = contexts[0]
     else:
         try:
-            located = find_adapter(payload)
+            if entry_context:
+                located = entry_context["located"]
+            else:
+                located = find_adapter(payload)
         except AdapterNotFound as e:
             if marker_command:
                 outcome.messages.append(f"미션 가드 꺼짐: 어댑터 못 찾음 — {e}")
@@ -1307,14 +1338,20 @@ def decide(payload):
         if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
             outcome.deny = "미션 마커에 소유 session_id가 없음"
             return outcome
-        handle_marker(
-            verdict.marker,
-            state_dir,
-            str(payload.get("session_id") or ""),
-            outcome,
-            str(payload.get("transcript_path") or ""),
-            stale_hours,
-        )
+        if entry_context:
+            try:
+                with mission_entry.active_lock(state_dir):
+                    checked = mission_entry.guard_location(payload, mode, entry_marker.group(2))
+                    checked_state = state_dir_of(checked["located"].project, checked["adapter"])
+                    if mission_entry.path_key(checked_state) != mission_entry.path_key(state_dir):
+                        raise mission_entry.EntryError("mission entry state directory changed before the marker")
+                    handle_marker(verdict.marker, checked_state, payload["session_id"], outcome,
+                                  str(payload.get("transcript_path") or ""), stale_hours, payload.get("han_runtime", "claude"))
+            except (mission_entry.EntryError, GuardOff, OSError, ValueError, TypeError, RuntimeError) as exc:
+                outcome.deny = f"미션 진입 확인 실패: {exc}"
+        else:
+            handle_marker(verdict.marker, state_dir, payload["session_id"], outcome,
+                          str(payload.get("transcript_path") or ""), stale_hours)
     elif verdict.kind == "rule":
         try:
             apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_hours)

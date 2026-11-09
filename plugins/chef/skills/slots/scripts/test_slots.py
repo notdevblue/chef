@@ -1141,6 +1141,34 @@ def test_before_run_requires_an_array(project, value):
     assert code == slots.USAGE and "slots.beforeRun 은 단계 배열" in err
 
 
+def test_before_run_lock_context_matches_canonical_owner(project):
+    project.write_adapter([], beforeRun=[{"id": "lock", "run": 'echo "{slotLockPath}" "{slotLockOwnerPid}"'}])
+    located = slots.locate(str(project.dir))
+    config = slots.Config(located, slots.read_adapter(located.adapter_path))
+    with slots.FileLock(config.slot_lock_path("a"), "sample slot"):
+        step = config.before_run_steps("a", "new", "")[0]
+        owner = Path(config.slot_lock_path("a")).read_text(encoding="utf-8").split("\t")[0]
+        assert owner == str(os.getpid())
+        assert step.command == f'echo "{config.slot_lock_path("a")}" "{owner}"'
+
+
+def test_before_run_lock_context_dry_run_does_not_acquire_lock(project):
+    project.write_adapter([], beforeRun=[{"id": "lock", "run": 'echo "{slotLockPath}" "{slotLockOwnerPid}"'}])
+    seed_slot(project, "a")
+    code, out, _ = project.run("run", "a", "sample task", "--dry-run")
+    assert code == slots.OK
+    assert str(project.lock_path("a")) in out and str(os.getpid()) in out
+    assert not project.lock_path("a").exists()
+
+
+def test_prepare_cannot_use_before_run_lock_context(project):
+    project.write_adapter([{"id": "lock", "run": 'echo "{slotLockPath}" "{slotLockOwnerPid}"'}])
+    located = slots.locate(str(project.dir))
+    config = slots.Config(located, slots.read_adapter(located.adapter_path))
+    with pytest.raises(slots.UsageError, match="정의 안 된 변수"):
+        config.build_steps("a")
+
+
 def test_launch_settings_use_existing_runtime_overlay_precedence(project):
     project.write_adapter([], beforeRun=[project.tick_step("base", 0)], codexProjectDocMaxBytes=32768)
     folder = project.dir / ".claude/orchestrator"

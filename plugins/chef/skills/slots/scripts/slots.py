@@ -810,7 +810,8 @@ class Config:
         return self.convert_steps(name, entries)
 
     def before_run_steps(self, name, launch_mode, session_id):
-        values = {"launchMode": launch_mode, "sessionId": session_id}
+        values = {"launchMode": launch_mode, "sessionId": session_id,
+                  "slotLockPath": os.path.abspath(self.slot_lock_path(name)), "slotLockOwnerPid": str(os.getpid())}
         return self.convert_steps(name, self.step_entries(self.before_run, "beforeRun"), "beforeRun", values)
 
     def convert_steps(self, name, entries, namespace="", extra_values=()):
@@ -1520,7 +1521,7 @@ def resume_refusal(config, name):
     return "", mission_id
 
 
-def session_runtime(folder, session):
+def session_runtime(folder, session, strict=False):
     import mission_state
 
     if not mission_state.SESSION_ID.fullmatch(session):
@@ -1532,7 +1533,16 @@ def session_runtime(folder, session):
     transcript = next((row["transcript"] for row in reversed(rows) if row["session"] == session and os.path.isfile(row["transcript"])), "")
     if not transcript:
         home = os.path.expanduser("~")
-        transcript = mission_state.search_codex(session, home) or mission_state.search_claude(session, home) or grok_transcript.find_transcript(session, home)
+        if strict:
+            candidates = [mission_state.search_codex(session, home, require_unique=True),
+                          mission_state.search_claude(session, home, require_unique=True),
+                          grok_transcript.find_transcript(session, home, require_unique=True)]
+            found = {os.path.normcase(os.path.realpath(path)): path for path in candidates if path}
+            if len(found) > 1:
+                raise UsageError("ambiguous session runtime transcript fallback")
+            transcript = next(iter(found.values()), "")
+        else:
+            transcript = mission_state.search_codex(session, home) or mission_state.search_claude(session, home) or grok_transcript.find_transcript(session, home)
     if not transcript:
         return ""
     if grok_transcript.is_transcript(transcript):

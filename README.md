@@ -42,6 +42,12 @@ Claude·Codex 훅은 규칙 주입·미션 가드·질문 무결성 3종이다. 
 한두 파일짜리 수정이나 하나로 끝나는 작업(티어 S)은 미션 없이 직접 하거나 한 번 파견하고, 통과할 때까지 반복은 루프로 돌린다.
 `init --tier S`는 `--force-tier` 없이 거부된다. 슬롯은 새 어댑터 기준 2~3개로 시작하고 필요할 때 늘린다.
 
+미션 시작·재개는 런타임 스킬의 `mission_entry.py`를 먼저 실행한다. 개인 레지스트리의
+`mission-entry.json`에 명시적으로 신뢰한 외부 이벤트를 등록하면 어댑터가 없어도 준비·선택·등록 슬롯 인계를 처리한다.
+공통 코드는 이벤트 결과와 경로를 다시 검증하며, 해당 root의 open·resume 가드는 10분짜리 진입 receipt를 검사한다.
+슬롯의 실제 실행 준비는 기존 `slots.beforeRun`과 슬롯 잠금을 쓴다. 등록·확장 원본·receipt는 설치 폴더 밖에 둬 업데이트 때 보존한다.
+등록이 없는 환경의 기존 동작은 유지한다. [CLI·등록·JSON 계약](plugins/chef/skills/mission/references/mission-entry.md)을 따른다.
+
 ## Codex CLI에 설치
 
 Claude용과 같은 저장소에서 설치하며, Codex용 진입점은 `plugins/chef/.codex-plugin/plugin.json`이다.

@@ -7,6 +7,9 @@
 
 ## 어댑터 찾기
 
+미션 시작·재개는 [공통 진입 CLI](mission-entry.md)를 먼저 실행한다. 선택적으로 등록한 외부 이벤트는 어댑터가 없어도 준비를 실행할 수 있다.
+이벤트가 적용되는 root의 open·resume은 어댑터 탐색보다 먼저 진입 receipt를 확인한다. 어댑터 없음의 기존 동작은 진입 등록이 없는 환경에 해당한다.
+
 Codex는 훅 payload의 cwd를 시작점으로 삼는다. 명령에 cwd가 있으면 그 폴더를 사용한다.
 `CLAUDE_PROJECT_DIR`와 Claude 플러그인 옵션은 Codex에서 읽지 않는다.
 
@@ -273,12 +276,18 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `{log}` | 이 단계의 로그 파일 경로(`prepare`·`beforeRun` 단계에서 사용) |
 | `{launchMode}` | `beforeRun` 전용. 새 미션 시작은 `new`, 미션 재개는 `resume` |
 | `{sessionId}` | `beforeRun` 전용. CLI 재개 명령과 같은 검증된 기존 세션 UUID. 새 미션·`--new-session`·기존 UUID가 없어 새 세션으로 이어받는 경우 빈 문자열 |
+| `{slotLockPath}` | `beforeRun` 전용. 현재 슬롯의 canonical 잠금 파일 절대 경로 |
+| `{slotLockOwnerPid}` | `beforeRun` 전용. 해당 잠금을 보유한 슬롯 실행 프로세스의 decimal PID |
 | `{baseline}` | 메인 워크스페이스가 받은 CL 번호(Perforce: `slots.mainClient`의 `changes -m1 //<mainClient>/...#have`). `create`는 메인이 지금 받은 CL이고, `refresh`·`run --refresh`는 메인을 먼저 head로 sync한 뒤 조회하므로 head다. 템플릿에 있을 때만 한 번 조회하고, `slots.vcs`가 없으면 쓸 수 없다 |
 | `{memoryDir}` | 슬롯 세션의 Claude 자동 메모리 폴더 |
 | `{mainMemoryDir}` | 메인 세션 쪽 Claude 자동 메모리 폴더 |
 | `{<키>}` | `vars`의 키(예: `{unityExe}`). 정의 안 된 변수를 쓰면 실행 전에 오류 |
 
 `beforeRun`은 슬롯 상태·ACTIVE·재개할 세션 검사를 통과한 뒤, 슬롯 잠금 안에서 에디터·CLI를 열기 전에 한 번 실행한다.
+외부 준비 도구는 `--lock-path "{slotLockPath}" --lock-owner-pid "{slotLockOwnerPid}"`로 기존 잠금 문맥을 받을 수 있다.
+잠금 파일은 UTF-8이며 첫 tab 앞 필드는 decimal owner PID다. tab 뒤 메타데이터 형식은 해석하지 않는다.
+도구는 전달 PID와 파일 owner, 살아 있는 조상 프로세스 소유를 확인하고 잠금을 삭제하거나 다시 획득하지 않는다.
+`--dry-run`의 값은 실행 계획이며 실제 잠금 보유 증거가 아니다. 이 문맥은 `prepare`에는 제공하지 않는다.
 `run --refresh`는 갱신을 먼저 끝낸다. 단계 실패 시 실행을 중단하고 로그를 알리며, 기존 `ready` 상태는 유지한다.
 `--dry-run`은 단계만 표시하고 실행·파일 쓰기는 하지 않는다. 로그와 시간 기록의 단계 이름은 `beforeRun.<id>`이고,
 로그는 `<stateDir>/slots/beforeRun/`에 두어 준비·갱신 로그와 분리한다.

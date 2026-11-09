@@ -264,6 +264,7 @@ def test_installed_codex_hook_uses_config_registry_without_environment(project, 
     (installed / "hooks").mkdir()
     shutil.copy2(PLUGIN / "codex/mission_guard.py", installed / "codex/mission_guard.py")
     shutil.copy2(PLUGIN / "hooks/mission_guard.py", installed / "hooks/mission_guard.py")
+    shutil.copy2(PLUGIN / "hooks/mission_entry.py", installed / "hooks/mission_entry.py")
     shutil.copy2(PLUGIN / "hooks/question_write_guard.py", installed / "hooks/question_write_guard.py")
     shutil.copy2(PLUGIN / "hooks/hook_runtime.py", installed / "hooks/hook_runtime.py")
     registry = tmp_path / "registry"

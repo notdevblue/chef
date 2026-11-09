@@ -21,17 +21,23 @@ def grok_home(home=""):
     return os.environ.get("GROK_HOME") or os.path.join(home or os.path.expanduser("~"), ".grok")
 
 
-def find_transcript(session, home=""):
+def find_transcript(session, home="", require_unique=False):
     if not isinstance(session, str) or not SESSION_ID.fullmatch(session):
         return ""
     root = os.path.join(grok_home(home), "sessions")
     if not os.path.isdir(root):
         return ""
+    found = ""
     for name in sorted(os.listdir(root)):
         candidate = os.path.join(root, name, session, "updates.jsonl")
         if os.path.isfile(candidate) and inside(candidate, root):
-            return candidate
-    return ""
+            if require_unique:
+                if found and os.path.realpath(found) != os.path.realpath(candidate):
+                    raise ValueError("ambiguous Grok session transcript fallback")
+                found = candidate
+            else:
+                return candidate
+    return found
 
 
 def entries(path, tail_bytes=0):

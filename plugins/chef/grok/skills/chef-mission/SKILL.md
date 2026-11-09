@@ -48,6 +48,19 @@ python "<plugin-root>/skills/mission/scripts/mission_state.py" --runtime grok --
 
 ## 시작과 승인
 
+새 미션과 이어서 하기는 어댑터 탐색·상태 조회보다 먼저 현재 Grok 세션 id와 실제 cwd로 공통 진입을 실행한다.
+새 미션은 후보 id, 이어서 하기는 기존 미션 id를 쓴다. 기존 id를 알 수 없으면 임의로 만들지 않는다.
+
+```text
+python "<plugin-root>/grok/scripts/mission_entry.py" --project "<cwd>" --mode <new|resume> --session "<현재 세션 id>" --mission "<미션 id>" --task "<작업>"
+```
+
+`continue`면 반환 어댑터를 읽고 아래 절차로 간다. `delegate`와 `launched: true`면 부모에서 멈추고 슬롯이 이어받는다.
+`needs-input`과 실패는 미션을 열지 않고 선택·오류를 알린다. 슬롯 세션도 자기 세션 id로 진입한다.
+등록된 진입의 resume은 기존 미션의 세션 id·런타임을 유지한다. 현재 세션이 다르면 소유권을 바꾸지 않고 멈춘다.
+open·resume 직전에는 같은 입력의 진입 성공이 필요하다. 등록·route·receipt는 공통
+[`mission-entry.md`](../../../../skills/mission/references/mission-entry.md)를 따른다. 중단·닫기만 하면 진입을 실행하지 않는다.
+
 1. 프로젝트의 `AGENTS.md`·`CLAUDE.md`와 관련 workflow·어댑터를 읽고 진입 티어를 정한다.
    S(한두 파일·단일 수정)는 `chef-run`의 직접 처리 경로다. 사용자가 미션을 명시적으로 원할 때만 `init --tier S --force-tier`로 열고 코디네이터 분리를 유지한다.
    M·L은 공통 절차의 파견 미션으로 진행한다.
