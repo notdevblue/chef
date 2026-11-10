@@ -86,6 +86,22 @@ def test_quality_retains_unknown_counts_and_marks_legacy_time(tmp_path):
     assert old['findingsCount'] == -1 and old['fixedCount'] == -1
 
 
+def test_quality_keeps_closed_low_status_and_ignores_review_start_records(tmp_path):
+    root = tmp_path / 'state'
+    directory = root / 'm1' / 'verification'
+    directory.mkdir(parents=True)
+    (directory / 'M1-review-low.json').write_text(json.dumps({
+        'schema': 1, 'unit': 'M1', 'status': 'closed-low', 'recordedAt': '2026-10-23T05:00:00+09:00',
+        'findingsCount': 0, 'fixedCount': 1, 'findings': [], 'resolvedIds': ['F1']}), encoding='utf-8')
+    (directory / 'M1-reviewstart-abc.json').write_text(json.dumps({
+        'schema': 1, 'unit': 'M1', 'recordedAt': '2026-10-23T05:00:00+09:00', 'snapshot': {}}), encoding='utf-8')
+    (directory / 'M1.review-start.latest.json').write_text(json.dumps({'reviewStart': 'x'}), encoding='utf-8')
+    diagnostics = Counter()
+    quality = report.quality_report([('main', tmp_path)], {'main': root}, START, END, diagnostics)[0]
+    assert [item['status'] for item in quality['reviews']] == ['closed-low']
+    assert quality['verificationAttempts'] == [] and not diagnostics['invalid_review_records']
+
+
 def test_cli_reports_missing_projects_and_does_not_export_content(tmp_path, capsys):
     project = tmp_path / 'game'
     record = row('one')

@@ -11,7 +11,7 @@
 
 **FOLLOW EXISTING CODE** — before writing or diagnosing, match nearby naming and structure and search for code that already solves the same problem; reuse or extend it instead of adding a new pattern or a divergent duplicate.
 **NULLABLE, NULL RETURN IS PROHIBITED** — no nullable fields, parameters, or return types and no `null` returns, except in `Find*` or `TryGet*` methods. Default to `new()` or an empty value.
-**FIX RULE-VIOLATING CODE FIRST** before adding new code — only within the function/block being modified.
+**FIX RULE-VIOLATING CODE FIRST** before adding new code — only within the function/block being modified; in a review-fix round, only within the lines the fix touches.
 **NO COMMENTS** — make the code self-explanatory; fix a name or structure instead of commenting around it. Never narrate what or how the code does, even as rationale. Only a *why* the code can't express (non-obvious intent, external contract, hidden invariant, consequence, workaround reason) is allowed, in one short clause.
 **COMMENT VOICE** — surviving comments are terse notes, not doc prose; in Korean use plain `-함/-음/부름`, not `-한다/-됩니다`.
 **ONE-VALUE CHECKS USE `if`/`else`** — compare against a single value with `if` plus `else`, not `switch`, preferring `==` over `!=`. Keep a do-nothing branch as an empty block with a one-clause reason comment. No ternary; `Math.Min`/`Max`/`Clamp` to pick a value is fine.

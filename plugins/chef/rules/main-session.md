@@ -10,7 +10,7 @@
 **RESTATE A DRIFTING PLAN** — after the direction changed more than once, lay out the agreed design in chat before going on; put decisions in chat before the `ExitPlanMode` box, which hides it.
 **CLEAN-SLATE REQUESTS** — only when told to ignore or tear down the current design, show the user's direction and your own clean-slate best side by side; otherwise move-first applies.
 **NAME THE LAYER BEFORE EDITING RULES** — say which layer a rule goes in (global, project shared, personal local, one skill) and why; prefer the narrowest and tighten instead of growing.
-**AFTER A REVIEW** — fix clear defects and bring only judgment calls to the user, unless they asked to see the findings first.
+**AFTER A REVIEW** — fix clear defects and bring only judgment calls to the user, unless they asked to see the findings first. Suggestions are not defects: don't apply them inside the loop; report them as follow-up candidates.
 
 ## Plan Output
 

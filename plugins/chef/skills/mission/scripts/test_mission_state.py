@@ -1087,7 +1087,8 @@ def test_preflight_passes_settings_and_guard_without_state_or_receipts(opened, m
     opened.add_unit()
     plan_path = verification_input(opened)
     seen = []
-    def preflight(project, plan, guard, settings=None):
+    def preflight(project, plan, guard, settings=None, require_matches=False):
+        assert require_matches is True
         seen.append((project, plan, settings))
         guard("python -V")
         return {"status": status, "grade": plan["grade"], "commandCount": 1, "readinessCount": 0, "resources": []}

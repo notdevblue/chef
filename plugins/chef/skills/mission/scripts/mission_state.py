@@ -832,7 +832,8 @@ def verification_guard(ctx):
 
 def cmd_preflight(ctx, args):
     plan = verification_plan(ctx, args)
-    result = verification.preflight(ctx.project, plan, verification_guard(ctx), settings=ctx.adapter.get("verify"))
+    result = verification.preflight(ctx.project, plan, verification_guard(ctx), settings=ctx.adapter.get("verify"),
+                                    require_matches=True)
     args.exit_code = OK
     if result["status"] == "fail":
         args.exit_code = FAILED
@@ -845,7 +846,7 @@ def cmd_schema(ctx, args):
         "stages": [stage["id"] for stage in ctx.adapter.get("stages", []) if isinstance(stage, dict) and stage.get("id")],
         "unitStatuses": UNIT_STATUSES, "ledgerStatuses": LEDGER_STATUSES, "missionStates": MISSION_STATES,
         "grades": (ctx.adapter.get("verify") or {}).get("grades", []), "humanGrade": NEEDS_HUMAN,
-        "reviewKinds": ["poc", "unit", "integration"], "reviewStatuses": ["clean", "findings"],
+        "reviewKinds": ["poc", "unit", "integration"], "reviewStatuses": ["clean", "findings", "closed-low"],
         "questionItemStatuses": question_records.ITEM_STATUSES,
         "questionApprovalStatuses": question_records.APPROVAL_STATUSES, "runtimes": RUNTIMES,
     }, ensure_ascii=False)]
@@ -935,10 +936,28 @@ def cmd_review(ctx, args):
     return [f"리뷰 {args.id} {args.status} {args.kind} | {path}", *review.get("diagnostics", [])]
 
 
+def cmd_review_start(ctx, args):
+    require_folder(ctx)
+    require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    plan = verification_plan(ctx, args)
+    path = verification.record_review_start(ctx.project, ctx.folder, args.id, plan)
+    return [f"리뷰 시작 {args.id} | {path}"]
+
+
 def cmd_review_scope(ctx, args):
     plan = verification_plan(ctx, args)
-    paths = verification.review_scope(ctx.project, ctx.folder, args.id, plan, settings=ctx.adapter.get("verify") or {})
-    return [f"리뷰 변경 범위 {args.id}: {len(paths)}개", *paths]
+    failure = ""
+    try:
+        paths, diff = verification.review_scope_diff(
+            ctx.project, ctx.folder, args.id, plan, settings=ctx.adapter.get("verify") or {})
+    except verification.ScopeDiffError as error:
+        paths, diff, failure = error.changed, "", str(error)
+    lines = [f"리뷰 변경 범위 {args.id}: {len(paths)}개", *paths]
+    if failure:
+        lines.append(f"diff 쓰기 실패: {failure}")
+    if diff:
+        lines.append(f"리뷰 변경 diff: {diff}")
+    return lines
 
 
 def cmd_complete(ctx, args):
@@ -1213,10 +1232,13 @@ def build_parser():
     for field in ("receipt", "evidence", "reviewer"):
         review.add_argument(f"--{field}", required=True)
     review.add_argument("--kind", required=True, choices=("poc", "unit", "integration"))
-    review.add_argument("--status", required=True, choices=("clean", "findings"))
+    review.add_argument("--status", required=True, choices=("clean", "findings", "closed-low"))
     review.add_argument("--findings-count", type=int, default=-1, help="남은 지적 수. 생략하면 미기록")
     review.add_argument("--fixed-count", type=int, default=-1, help="직전 지적 중 이번에 해소를 확인한 수")
-    review.add_argument("--findings-input", default="", help="지적 id·kind·origin·resolvedIds 를 담은 JSON")
+    review.add_argument("--findings-input", default="", help="지적 id·kind·origin(·severity)·resolvedIds 를 담은 JSON")
+    start = leaf(sub, "review-start", cmd_review_start)
+    start.add_argument("id")
+    start.add_argument("--plan", required=True)
     scope = leaf(sub, "review-scope", cmd_review_scope)
     scope.add_argument("id")
     scope.add_argument("--plan", required=True)

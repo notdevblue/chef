@@ -27,6 +27,14 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 
 모든 항목을 의무 템플릿으로 만들지 않는다. 작은 동작 하나를 UI·locale별로 기계 분할하지 말고 한 담당자가 완결하며, 독립 동작만 나눈다.
 
+지적 수정을 구현자에게 돌리는 브리프에는 아래를 고정으로 넣는다.
+
+- 지적한 줄과 그 직접 영향만 고친다.
+- 바꾼 이름·시그니처·제목·앵커는 저장소 전체에서 모든 참조(분할 클래스의 다른 파일, 문서 참조 포함)를 찾아 함께 맞춘다.
+- 지적 위치 밖에서 바꾼 줄은 목록으로 반환한다.
+- 줄 끝(CRLF 등)을 바꾸는 일괄 치환 편집을 쓰지 않는다.
+- 자기 점검은 이번에 바뀐 줄과 그 줄이 닿는 호출부만 한다. 첫 구현은 변경 함수·블록 전체 또는 문서 전체를 대조한다.
+
 같은 CL이어도 기존 승인 범위와 마일스톤별 검증·receipt를 유지하며, 이미 승인된 마일스톤을 자동 병합하거나 receipt를 공유하지 않는다. 새 계획에서는 목표와 검증이 결합된 소작업을 하나의 마일스톤으로 묶을 수 있지만, 1시간 상한·승인 범위·명확한 완료 조건을 지킨다. medium 구현자가 하위 작업을 나누면 주담당이 전체 파일 소유, 하위 반환, 잔여 작업을 모아 코디네이터에게 보고한다.
 
 ## 실행 준비와 공유 자원
@@ -50,7 +58,7 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
   "inputs": ["src", "tests", "pyproject.toml"],
   "environment": {"python": "3.12", "target": "local-test", "revision": "검증 기준 리비전"},
   "commands": [
-    {"id": "feature-tests", "argv": ["python", "-m", "pytest", "tests/test_feature.py", "-q"], "cwd": ".", "timeoutSeconds": 600, "reusable": true, "outputs": []}
+    {"id": "feature-tests", "argv": ["python", "-m", "pytest", "tests/test_feature.py", "-q"], "cwd": ".", "timeoutSeconds": 600, "reusable": true, "inputs": ["src", "tests/test_feature.py", "tests/conftest.py", "pyproject.toml"], "outputs": []}
   ],
   "results": []
 }
@@ -74,7 +82,15 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
   기존 미션 가드가 막는 submit·sync 등은 검증 실행기에서도 거부한다.
 - 명령의 `reusable: true`는 해당 단계가 같은 입력·계획·환경에서 재사용 가능함을 명시한다. 이때 `outputs` 배열은 필수이며
   순수 검사라 산출물이 없으면 `[]`로 쓴다. 파일을 생성하면 실제 출력 경로를 빠짐없이 지정한다. 생략한 명령은 단계 재사용을 하지 않는다.
-  연속된 유효 단계만 앞에서부터 재사용하며 앞 단계가 다시 실행되면 뒤 단계도 모두 실행한다. 선언 출력이 달라지면 그 단계와 뒤 단계를 다시 실행한다. 외부 상태·부작용을 고정할 수 없으면 재사용 가능으로 선언하지 않는다.
+  단계 키에는 직전 단계 키가 이어지므로 앞에서 한 단계라도 실제로 실행되면 그 뒤 단계는 모두 다시 실행한다. 재사용되는 것은 처음 실제 실행되는 단계보다 앞에 있고 키가 같은 단계뿐이다. 선언 출력이 달라지면 그 단계와 뒤 단계를 다시 실행한다. 외부 상태·부작용을 고정할 수 없으면 재사용 가능으로 선언하지 않는다.
+- 명령의 `inputs`(선택): 계획 `inputs` 안의 경로·글롭. `reusable: true` 단계는 선언한 입력만 재사용 키로 쓰며 그 입력이 그대로면 재사용한다.
+  선언하지 않으면 계획 `inputs` 전체가 기준이다. 자주 바뀌지 않는 입력의 단계를 앞에 두면 수정 뒤 재검증이 짧아진다.
+  명령이 읽는 모든 파일(설정·conftest·import하는 헬퍼)을 선언한다. 확실하지 않으면 `inputs`를 생략한다(전체 snapshot 기준). `-m`·`-c` 실행은 스크립트가 자동으로 지문에 들어가지 않는다.
+  형식은 비어 있지 않은 문자열 배열이다. `*`·`?`·`[`가 있는 항목은 글롭(`*`는 `/` 제외, `**`는 `/` 포함, `?`, `[abc]`, `[!abc]`)으로 프로젝트 기준 `/` 상대 경로의 계획 입력 파일과 맞춘다. `src/*`는 하위 폴더를 포함하지 않으니 `src/**`로 쓴다.
+  글롭이 없는 항목은 경로이며 계획 `inputs` 항목과 같거나 그 안의 파일·폴더(폴더는 하위 전체)여야 한다. 역슬래시는 `/`로 바꾸고 앞 `./`는 뗀다. 절대 경로·드라이브 문자·`..`·제어 문자는 거부한다.
+  글롭은 Windows에서 대소문자를 구분하지 않고(경로 항목이 실제 파일 대소문자에 맞춰지는 것과 같다) 다른 OS에서는 구분한다.
+  각 항목이 계획 입력 파일과 하나 이상 일치하는지는 계획을 쓸 때 `preflight`만 검사하고 아니면 `plan_invalid`로 거부한다. `verify`·`review-start`·`review-scope`는 일치 0건을 허용한다. 수정이 선언한 파일을 모두 지우거나 이름을 바꿔도 같은 계획으로 `verify`할 수 있고, 그 단계의 키가 바뀌어 다시 실행된다. 형식 오류(절대 경로·`..`·계획 `inputs` 밖 경로 등)는 모든 명령에서 거부한다.
+  계획 해시(`planHash`)에는 선언한 `inputs` 목록만 들어가고 snapshot 값은 들어가지 않으므로, 수정 뒤 같은 계획으로 `verify`하면 `review-scope` 비교와 diff가 유지된다.
 - `results`: 실행 명령이 이번 런에 쓴 JSON 결과를 추가 검사한다. 예:
 
 ```json
@@ -106,14 +122,29 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 
 1. `preflight M1 --plan <계획.json>` 통과 뒤 `verify M1 --plan <계획.json>`: 입력·계획·환경·로그·결과가 그대로면 통과 기록 재사용, 아니면 실제 실행.
    실패는 종료 코드 1과 로그·기록 경로를 반환한다. 상태를 알아내려고 같은 검증을 재요청하지 않는다.
-2. 독립 리뷰: 첫 라운드는 단위 전체. 후속은 `review-scope M1 --plan <계획.json>`의 변경 목록,
-   직전 finding, 그 수정이 영향을 주는 계약과 호출자를 본다. 같은 고정 참조 묶음으로 결함과 명시적 규칙 위반을 함께 수집한다.
-   미변경 부분은 실제 결함·규칙·원문 근거가 있을 때만 다시 열고, 이전 해소 근거와 미해결·새 지적·회귀를 구분한다. clean 근거는 실제 파일로 받는다.
+   어댑터가 정한 lint·규약 검사 명령은 계획 `commands[]`에 넣어 여기서 돌린다. 통과 전에는 리뷰를 띄우지 않고 그 출력을 리뷰어에게 준다.
+   수정 뒤에는 같은 전체 계획으로 `verify`한다. 단계별 `inputs`를 선언한 `reusable` 단계는 바뀐 입력에 닿을 때만 실제로 돈다. 그 receipt로 통과 리뷰(clean·closed-low)를 기록한 뒤 `complete`한다. 좁은 계획으로 재검증하면 `review-scope`의 비교 기준이 끊긴다.
+2. 독립 리뷰: 파견 직전에 `review-start M1 --plan <계획.json>`으로 입력 snapshot을 기록하고 리뷰가 돌아올 때까지 그 범위를 고치지 않는다.
+   `review-start`는 그 시점 snapshot과 텍스트 파일 사본(`verification/<단위>.copies/`, 파일명은 내용 sha256)을 남기며 같은 단위의 다음 `review` 한 번에만 연결된다. 이 계획의 `inputs`가 `review`에 쓰는 receipt의 plan `inputs`와 다르면 `review`가 거부한다.
+   리뷰 중 파일이 바뀌면 `verify`를 다시 돌려 새 receipt로 `review`를 기록한다(`review`는 현재 입력이 receipt와 같아야 한다). 이 리뷰에는 `inputChangedDuringReview`가 남고 이 리뷰로는 `complete`가 거부된다.
+   바뀐 파일은 다음 라운드 `review-scope` 범위로 재리뷰한 뒤 완료한다.
+   첫 라운드는 단위 전체이며 같은 고정 참조 묶음으로 결함·규칙 위반·계약·호출부를 한 번에 대조한다.
+   읽지 못한 경로는 검증 공백으로 적고 코디네이터가 그 공백을 같은 라운드 안에서 보강 지시한다.
+   재리뷰는 같은 묶음과 `review-scope M1 --plan <계획.json>`이 주는 바뀐 파일 목록과 `리뷰 변경 diff: <경로>` 한 줄(최신 리뷰 기록의 사본 기준이며 `review-start`를 썼으면 그 시작 시점 사본이다. 추가는 빈 파일 대비, 삭제는 사본 대비 빈 파일. 바이너리·1 MiB 초과·사본이 없거나 읽을 수 없는 파일은 목록에 남기고 diff 안에 비교 불가 한 줄. 사본은 내용 해시 파일명으로 라운드·`review-start` 사이 같은 내용을 한 번만 저장한다. 기록 한 건이 참조하는 사본 합계는 64 MiB 상한이며 넘는 나머지는 `budget`, 쓰기 실패는 `unwritable`로 건너뛰고 리뷰는 계속한다. 사본 없는 옛 기록이면 목록만. diff 파일 쓰기가 실패하면 목록과 `diff 쓰기 실패: <사유>` 한 줄),
+   직전 finding, 그 수정이 영향을 주는 계약과 호출자를 본다. 바뀌지 않은 부분은 실제 결함·규칙·원문 근거가 있는 Medium 이상일 때만 다시 열고 Low는 제안으로 돌린다.
+   이전 해소 근거와 미해결·새 지적·회귀를 구분한다. clean 근거는 실제 파일로 받는다.
 3. `review M1 --receipt <검증.json> --evidence <리뷰.md> --reviewer <독립 에이전트> --kind unit --status clean`.
+   열린 지적이 0건(미해결 포함)이고 제안만 남으면 clean이다. 제안은 루프 안에서 적용하지 않고 보고에 후속 후보로 남겨 사용자 판단에 맡긴다.
    finding이 남으면 `--status findings`로 기록한다. 구현자를 독립 리뷰어라고 기록하지 않는다.
+   `--status closed-low`는 독립 재리뷰 없이 Low를 닫는 기록이다. 직전 리뷰가 `findings`(직전이 closed-low·clean·없음이면 거부)이고, 열린 지적이 전부 `severity: low`(severity 없는 항목이 있으면 거부)이며 회귀가 아니고,
+   수정이 지적한 줄 범위 안에서 시그니처·계약·공개 동작을 바꾸지 않아야 한다. 같은 구현자가 고친 뒤 코디네이터가 `review-scope`의 diff만 보고
+   각 id의 해소를 확인하며, 이번 `--findings-input`은 findings가 비고 `resolvedIds`가 직전 열린 id 전부를 덮는다(예: `{"schema":1,"findings":[],"resolvedIds":["F1"]}`).
+   확인 근거는 존재하는 `--evidence` 파일로 남기고 `--findings-count`는 0이거나 생략한다. 기록에 `closedLowIds`가 남는다.
+   Medium 이상·회귀·계약 변경·범위를 넘는 수정은 독립 재리뷰로 보내며 closed-low는 연속으로 기록하지 않는다.
+   직전 findings 리뷰에 `inputChangedDuringReview`가 있으면 거부한다. 처음 `regression`으로 기록된 id는 이후 라운드에서도 closed-low로 닫을 수 없고, 같은 id의 `severity`를 낮춘 기록도 거부한다.
 4. 완료 조건 확인·체크포인트 후 `complete M1 --receipt <검증.json> --review <리뷰.json> --done-evidence <완료 조건 확인 근거>`.
-   최신 검증 기록과 최신 clean 리뷰 근거가 유효할 때만 ledger·done을 쓰고 현재 상태와 다음 단위를 함께 반환한다.
-   이후 리뷰가 있거나 최신 리뷰 포인터가 없으면 이전 clean 리뷰로 완료할 수 없다.
+   최신 검증 기록과 최신 clean 또는 closed-low 리뷰 근거가 유효할 때만 ledger·done을 쓰고 현재 상태와 다음 단위를 함께 반환한다.
+   이후 리뷰가 있거나 최신 리뷰 포인터가 없으면 이전 통과 리뷰로 완료할 수 없다. 최신 리뷰 snapshot이 최신 검증 receipt snapshot과 다르면 바뀐 파일을 알려 주며 거부한다.
    답이 필요한 `human` 조건은 확인 C에 남긴다. CLI는 사람의 승인·의미 판정을 대신하지 않는다.
 
 기록과 로그는 런마다 별도 파일로 남긴다. `*.latest.json`은 다음 실행·범위 조회용 포인터다.
@@ -128,7 +159,7 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 {
   "schema": 1,
   "findings": [
-    {"id": "F1", "kind": "defect", "origin": "new", "reason": "발생 조건과 영향, 원인, 파일 및 근거"}
+    {"id": "F1", "kind": "defect", "origin": "new", "severity": "medium", "reason": "발생 조건과 영향, 원인, 파일 및 근거"}
   ],
   "suggestions": [],
   "resolvedIds": []
@@ -136,9 +167,13 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 ```
 
 `kind`는 `defect|rule_violation`, `origin`은 `new|unresolved|regression`이다. `reason`은 항상 필요하다.
+`severity`(선택)는 `critical|high|medium|low`이며 `closed-low`는 열린 지적 전부가 `low`일 때만 쓴다.
 `new`는 이전에 없던 id를 쓰고 `relatedId`를 두지 않는다. `unresolved`는 이전 열린 id를 유지한다.
 `regression`은 새 id를 쓰며 이미 해소된 이전 id를 `relatedId`로 연결한다. 이전 해소 근거와 재발 이유를 대조한다.
 `findings`에는 열린 지적만, `resolvedIds`에는 이번에 해소를 확인한 이전 id만 둔다. 제안은 `suggestions`로 분리한다.
-정확한 파일·규칙·원문 근거 없이 제안을 필수 결함으로 올리지 않는다. 원인·소유·참조가 같은 수정은 담당 작성자에게 묶어 맡긴다.
+정확한 파일·규칙·원문 근거 없이 제안을 필수 결함으로 올리지 않으며, 제안은 통과를 막지 않는다. 원인·소유·참조가 같은 수정은 담당 작성자에게 묶어 맡긴다.
 리뷰 기록은 입력 파일 해시와 이전 리뷰 연결을 함께 보존한다. 기존 수치 전용 기록의 지적 정체성은 알 수 없음으로 취급한다.
-3라운드·timebox 상한의 질문에는 미해결 원인·참조 누락·회귀·남은 판단·수정 및 검증 범위를 담고 품질 기준은 유지한다.
+3라운드에서 남은 것이 Low뿐이면 코디네이터가 `closed-low`로 닫는다. closed-low 조건이 안 되면 독립 재리뷰를 하거나 사용자에게 묻는다. 3라운드 진단은 findings 기록에만 붙고 통과(clean·closed-low) 기록에는 붙지 않는다.
+사용자 질문은 Medium 이상이 남았거나 수정끼리 충돌하거나 같은 지적이 재발할 때, timebox를 넘길 때만 하며
+미해결 원인·참조 누락·회귀·남은 판단·수정 및 검증 범위를 담고 품질 기준은 유지한다.
+최종 통합 리뷰는 단위 사이 연결·공유 계약·미검토 변경만 보며 상한은 2라운드다.

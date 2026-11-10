@@ -245,6 +245,8 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
   브리프에는 해당 작업의 파일·CL 소유, 기능 완료 범위와 반례를 넣는다. 같은 CL에 속해도 마일스톤별 검증 기록은 따로 유지한다.
 - 미션 재개는 `context`, 파견 입력은 `reference snapshot`·`brief`, 검증 전에는 읽기 전용 `preflight --plan`을 쓴다.
   실제 검증은 `verify --plan`, 반환 근거는 `handoff`, 독립 리뷰 근거 등록 후 완료는 `complete` 한 호출로 연결한다.
+  리뷰 파견 직전에는 `review-start --plan`으로 입력을 기록하고 후속 범위는 `review-scope`의 파일별 diff로 본다.
+  Low만 남으면 코디네이터가 diff를 확인해 `review --status closed-low`로 닫으며 `complete`는 clean 또는 closed-low를 통과로 인정한다.
   [검증 계획과 결과 재사용](plugins/chef/skills/mission/references/verification-workflow.md)에 계약·예시가 있다.
   기존 ledger 이력은 유지하며 새 완료는 문자열 pass 대신 유효한 검증·리뷰 기록이 필요하다.
 

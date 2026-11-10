@@ -1047,7 +1047,7 @@ def test_structured_reviews_preserve_identity_resolution_regression_and_counts(m
     record = receipt_data(clean)
     assert record["findingsCount"] == 0 and record["fixedCount"] == 1 and record["round"] == 3
     assert record["previousReview"] == str(second) and record["previousReviewHash"] == verification.file_hash(second)
-    assert record["diagnostics"] and receipt_data(first)["newFindingsCount"] == 2
+    assert record["diagnostics"] == [] and receipt_data(first)["newFindingsCount"] == 2
     verification.validate_review(folder, "M1", receipt, clean)
     regression = structured_review(mission, receipt, 4, [finding("F3", origin="regression", relatedId="F1")])
     assert receipt_data(regression)["newFindingsCount"] == 0 and receipt_data(regression)["diagnostics"]
@@ -1104,3 +1104,676 @@ def test_review_cli_accepts_structured_findings_and_rejects_changed_source(missi
     source.write_text('{"findings":[{}]}', encoding="utf-8")
     with pytest.raises(verification.VerificationError, match="원본"):
         verification.validate_review(folder, "M1", receipt, path)
+
+
+def low(identity="F1", kind="defect", **fields):
+    return finding(identity, kind, severity="low", **fields)
+
+
+def with_unit_brief(mission, receipt):
+    _, _, plan = mission
+    return {**plan, "unitBrief": receipt_data(receipt)["plan"]["unitBrief"]}
+
+
+def start_args(mission):
+    root, _, _ = mission
+    return ["review-start", "M1", "--plan", str(root / "plan.json")]
+
+
+def review_with_start(mission, receipt, status="clean"):
+    assert mission_state.main(start_args(mission)) == 0
+    return review(mission, receipt, status)
+
+
+def latest_review_pointer(folder):
+    return (folder / "verification/M1.review.latest.json").read_text(encoding="utf-8")
+
+
+def test_finding_severity_is_optional_and_restricted(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    first = structured_review(mission, receipt, 1, [finding(severity="low"), finding("F2", "rule_violation")])
+    assert [item.get("severity") for item in receipt_data(first)["findings"]] == ["low", None]
+    with pytest.raises(verification.VerificationError, match="severity"):
+        structured_review(mission, receipt, 2, [finding("F3", severity="minor")])
+    assert receipt_data(folder / "verification/M1.review.latest.json")["review"] == str(first)
+
+
+def test_closed_low_closes_low_findings_and_passes_complete(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low(), low("F2", "rule_violation")])
+    closed = structured_review(mission, receipt, 2, [], ["F1", "F2"], "closed-low")
+    record = receipt_data(closed)
+    assert record["status"] == "closed-low" and record["findingsCount"] == 0 and record["closedLowIds"] == ["F1", "F2"]
+    verification.validate_review(folder, "M1", receipt, closed)
+    command = ["complete", "M1", "--receipt", str(receipt), "--review", str(closed), "--done-evidence", "checked fix diff"]
+    assert mission_state.main(command) == 0
+    assert (folder / "units.tsv").read_text(encoding="utf-8").rstrip().endswith("\tdone")
+
+
+@pytest.mark.parametrize("case", [
+    "no-history", "prior-clean", "consecutive", "prior-high", "prior-unlabeled", "prior-regression",
+    "findings-left", "resolved-partial", "count", "unstructured-prior"])
+def test_closed_low_rejects_when_conditions_fail(mission, case):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    resolved, data, counts = ["F1"], [], {}
+    if case == "prior-clean":
+        structured_review(mission, receipt, 1, [], [], "clean")
+    elif case == "consecutive":
+        structured_review(mission, receipt, 1, [low()])
+        structured_review(mission, receipt, 2, [], ["F1"], "closed-low")
+    elif case == "prior-high":
+        structured_review(mission, receipt, 1, [finding(severity="high")])
+    elif case == "prior-unlabeled":
+        structured_review(mission, receipt, 1, [low(), finding("F2")])
+        resolved = ["F1", "F2"]
+    elif case == "prior-regression":
+        structured_review(mission, receipt, 1, [low()])
+        structured_review(mission, receipt, 2, [], ["F1"], "clean")
+        structured_review(mission, receipt, 3, [low("F3", origin="regression", relatedId="F1")])
+        resolved = ["F3"]
+    elif case == "findings-left":
+        structured_review(mission, receipt, 1, [low(), low("F2")])
+        data = [low("F2", origin="unresolved")]
+    elif case == "resolved-partial":
+        structured_review(mission, receipt, 1, [low(), low("F2")])
+    elif case == "count":
+        structured_review(mission, receipt, 1, [low()])
+        counts["findings_count"] = 1
+    elif case == "unstructured-prior":
+        review(mission, receipt, "findings")
+    pointer = ""
+    if case != "no-history":
+        pointer = latest_review_pointer(folder)
+    with pytest.raises(verification.VerificationError):
+        structured_review(mission, receipt, 9, data, resolved, "closed-low", **counts)
+    if pointer:
+        assert latest_review_pointer(folder) == pointer
+
+
+def test_closed_low_requires_findings_input_and_existing_evidence(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low()])
+    with pytest.raises(verification.VerificationError, match="findings-input"):
+        verification.record_review(root, folder, "M1", receipt, root / "review-1.md", "reviewer", "unit", "closed-low")
+    source = root / "closing.json"
+    source.write_text(json.dumps({"findings": [], "resolvedIds": ["F1"]}), encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="리뷰 결과 파일"):
+        verification.record_review(root, folder, "M1", receipt, root / "absent.md", "reviewer", "unit", "closed-low",
+                                   findings_input=source)
+
+
+def test_closed_low_cli_and_schema(mission, capsys):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low()])
+    source = root / "closing.json"
+    source.write_text(json.dumps({"findings": [], "resolvedIds": ["F1"]}), encoding="utf-8")
+    args = ["review", "M1", "--receipt", str(receipt), "--evidence", str(root / "review-1.md"), "--reviewer", "lead",
+            "--kind", "unit", "--status", "closed-low"]
+    assert mission_state.main(args) == 1
+    assert mission_state.main([*args, "--findings-input", str(source)]) == 0
+    assert mission_state.main([*args, "--findings-input", str(source)]) == 1
+    capsys.readouterr()
+    assert mission_state.main(["schema"]) == 0
+    assert json.loads(capsys.readouterr().out)["reviewStatuses"] == ["clean", "findings", "closed-low"]
+
+
+def test_third_round_diagnostic_points_to_closed_low_or_question(mission):
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low()])
+    structured_review(mission, receipt, 2, [low(origin="unresolved")])
+    third = structured_review(mission, receipt, 3, [low(origin="unresolved")])
+    text = " ".join(receipt_data(third)["diagnostics"])
+    assert "closed-low" in text and "질문" in text
+
+
+def test_complete_rejects_closed_low_record_with_forged_open_findings(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low()])
+    closed = structured_review(mission, receipt, 2, [], ["F1"], "closed-low")
+    data = receipt_data(closed)
+    data["findings"] = [low()]
+    closed.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="미해소 지적"):
+        verification.validate_review(folder, "M1", receipt, closed)
+
+
+def test_review_start_records_snapshot_copies_and_links_next_review(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    assert mission_state.main(start_args(mission)) == 0
+    start_path = Path(receipt_data(folder / "verification/M1.review-start.latest.json")["reviewStart"])
+    start = receipt_data(start_path)
+    assert start["snapshot"] == receipt_data(receipt)["snapshot"] and start["previousReview"] == ""
+    assert sorted(start["copies"]["files"]) == ["check.py", "src.py"]
+    copy = Path(start["copies"]["dir"]) / start["snapshot"]["src.py"]
+    assert copy.read_text(encoding="utf-8") == "value = 1\n"
+    checked = receipt_data(review(mission, receipt))
+    assert checked["reviewStart"] == str(start_path) and checked["reviewStartHash"] == verification.file_hash(start_path)
+    assert checked["snapshot"] == start["snapshot"] and "inputChangedDuringReview" not in checked
+    again = receipt_data(review(mission, receipt))
+    assert "reviewStart" not in again
+    assert (Path(again["copies"]["dir"]) / again["snapshot"]["src.py"]).is_file()
+    assert Path(again["copies"]["dir"]) == Path(start["copies"]["dir"])
+
+
+def test_review_without_start_keeps_legacy_flow_and_copies_at_review(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    path = review(mission, receipt)
+    record = receipt_data(path)
+    assert "reviewStart" not in record and "inputChangedDuringReview" not in record
+    assert record["snapshot"] == receipt_data(receipt)["snapshot"]
+    assert Path(record["copies"]["dir"]).parent == (folder / "verification").resolve()
+    verification.validate_review(folder, "M1", receipt, path)
+
+
+def test_input_change_during_review_is_recorded_and_blocks_complete_until_rereview(mission):
+    root, folder, _ = mission
+    _, first = verify(mission)
+    assert mission_state.main(start_args(mission)) == 0
+    (root / "src.py").write_text("value = 2\n", encoding="utf-8")
+    _, second = verify(mission)
+    assert second != first
+    path = review(mission, second)
+    record = receipt_data(path)
+    assert record["inputChangedDuringReview"] == ["src.py"]
+    assert any("src.py" in line for line in record["diagnostics"])
+    assert record["snapshot"]["src.py"] != receipt_data(second)["snapshot"]["src.py"]
+    command = ["complete", "M1", "--receipt", str(second), "--review", str(path), "--done-evidence", "checked"]
+    assert mission_state.main(command) == 1
+    with pytest.raises(verification.VerificationError, match="src.py"):
+        verification.validate_review(folder, "M1", second, path)
+    assert verification.review_scope(root, folder, "M1", with_unit_brief(mission, second)) == ["src.py"]
+    rereview = review(mission, second)
+    assert "inputChangedDuringReview" not in receipt_data(rereview)
+    assert mission_state.main(["complete", "M1", "--receipt", str(second), "--review", str(rereview),
+                               "--done-evidence", "checked"]) == 0
+
+
+def test_review_start_inputs_must_match_the_verified_plan(mission):
+    root, folder, plan = mission
+    _, receipt = verify(mission)
+    (root / "other.json").write_text(json.dumps({**plan, "inputs": ["src.py"]}), encoding="utf-8")
+    (root / "review.md").write_text("Fictional independent review", encoding="utf-8")
+    assert mission_state.main(["review-start", "M1", "--plan", str(root / "other.json")]) == 0
+    with pytest.raises(verification.VerificationError, match="inputs"):
+        verification.record_review(root, folder, "M1", receipt, root / "review.md", "reviewer", "unit", "clean")
+
+
+def test_changed_review_start_record_is_rejected(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    path = review_with_start(mission, receipt)
+    start = Path(receipt_data(path)["reviewStart"])
+    start.write_text(start.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="시작 기록"):
+        verification.validate_review(folder, "M1", receipt, path)
+
+
+def test_review_scope_diff_covers_add_modify_delete_and_skips_binary_and_large(mission):
+    root, folder, plan = mission
+    source = root / "src"
+    source.mkdir()
+    (source / "keep.txt").write_bytes(b"one\ntwo\nthree\n")
+    (source / "gone.txt").write_text("bye\n", encoding="utf-8")
+    (source / "data.bin").write_bytes(b"\0\1\2")
+    (source / "huge.txt").write_text("x" * (verification.COPY_LIMIT + 1), encoding="utf-8")
+    plan["inputs"] = ["src"]
+    (root / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    _, receipt = verify(mission)
+    assert mission_state.main(start_args(mission)) == 0
+    start = receipt_data(Path(receipt_data(folder / "verification/M1.review-start.latest.json")["reviewStart"]))
+    assert start["copies"]["skipped"] == {"src/data.bin": "binary", "src/huge.txt": "large"}
+    (source / "keep.txt").write_bytes(b"one\n2\nthree\nfour")
+    (source / "gone.txt").unlink()
+    (source / "new.txt").write_text("fresh\n", encoding="utf-8")
+    (source / "data.bin").write_bytes(b"\0\3")
+    _, receipt = verify(mission)
+    review(mission, receipt)
+    changed, diff = verification.review_scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
+    assert changed == ["src/data.bin", "src/gone.txt", "src/keep.txt", "src/new.txt"]
+    text = Path(diff).read_text(encoding="utf-8")
+    assert "--- a/src/gone.txt\n+++ /dev/null\n" in text and "-bye\n" in text
+    assert "--- /dev/null\n+++ b/src/new.txt\n" in text and "+fresh\n" in text
+    assert "-two\n+2\n" in text and "+four\n\\ No newline at end of file\n" in text
+    assert "비교 불가" in text and "src/data.bin" in text and "huge.txt" not in text
+
+
+def test_review_scope_diff_compares_only_lines_changed_since_first_review(mission):
+    root, folder, plan = mission
+    source = root / "src"
+    source.mkdir()
+    (source / "a.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    plan["inputs"] = ["src"]
+    (root / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    _, receipt = verify(mission)
+    review_with_start(mission, receipt)
+    (source / "a.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    changed, diff = verification.review_scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
+    assert changed == ["src/a.txt"]
+    text = Path(diff).read_text(encoding="utf-8")
+    assert "+gamma\n" in text and "-alpha" not in text and "+alpha" not in text
+
+
+def test_review_scope_cli_prints_diff_path_and_old_records_get_list_only(mission, capsys):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    path = review(mission, receipt)
+    (root / "src.py").write_text("value = 3\n", encoding="utf-8")
+    capsys.readouterr()
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].endswith(": 1개") and lines[1] == "src.py" and lines[2].startswith("리뷰 변경 diff: ")
+    assert "-value = 1" in Path(lines[2].split(": ", 1)[1]).read_text(encoding="utf-8")
+    legacy = receipt_data(path)
+    del legacy["copies"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
+    assert capsys.readouterr().out.splitlines() == [lines[0], "src.py"]
+
+
+def test_review_scope_diff_marks_only_unreadable_copy_and_keeps_list_and_other_diffs(mission):
+    root, folder, plan = mission
+    (root / "data.txt").write_text("d1\n", encoding="utf-8")
+    plan["inputs"].append("data.txt")
+    save_plan(mission)
+    _, receipt = verify(mission)
+    path = review(mission, receipt)
+    record = receipt_data(path)
+    (Path(record["copies"]["dir"]) / record["snapshot"]["src.py"]).write_text("tampered\n", encoding="utf-8")
+    (root / "src.py").write_text("value = 4\n", encoding="utf-8")
+    (root / "data.txt").write_text("d2\n", encoding="utf-8")
+    plan = with_unit_brief(mission, receipt)
+    changed, diff = verification.review_scope_diff(root, folder, "M1", plan)
+    assert changed == ["data.txt", "src.py"]
+    text = Path(diff).read_text(encoding="utf-8")
+    assert "# 비교 불가(리뷰 시점 사본이 없거나 바뀜): src.py\n" in text
+    assert "-d1\n+d2\n" in text and "-value = 1" not in text
+    (Path(record["copies"]["dir"]) / record["snapshot"]["data.txt"]).unlink()
+    changed, other = verification.review_scope_diff(root, folder, "M1", plan)
+    assert changed == ["data.txt", "src.py"] and other != diff
+    assert "# 비교 불가(리뷰 시점 사본이 없거나 바뀜): data.txt\n" in Path(other).read_text(encoding="utf-8")
+
+
+def test_review_scope_diff_marks_unreadable_current_file(mission, monkeypatch):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    review(mission, receipt)
+    (root / "src.py").write_text("value = 5\n", encoding="utf-8")
+    real = Path.read_bytes
+
+    def failing(self):
+        if self.name == "src.py":
+            raise PermissionError("denied")
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", failing)
+    changed, diff = verification.review_scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
+    assert changed == ["src.py"]
+    assert "# 비교 불가(" in Path(diff).read_text(encoding="utf-8")
+
+
+def test_review_copy_skips_changed_and_non_text_files(mission):
+    root, folder, _ = mission
+    (root / "latin.txt").write_bytes("caf\xe9".encode("latin-1"))
+    files = {"latin.txt": verification.file_hash(root / "latin.txt"), "src.py": "0" * 64, "absent.txt": "missing"}
+    copies = verification.copy_snapshot_files(root, files, folder / "verification" / "copies")
+    assert copies["files"] == [] and copies["skipped"] == {"latin.txt": "binary", "src.py": "changed"}
+
+
+def findings_after_input_change(mission):
+    root, folder, _ = mission
+    _, first = verify(mission)
+    assert mission_state.main(start_args(mission)) == 0
+    (root / "src.py").write_text("value = 2\n", encoding="utf-8")
+    _, second = verify(mission)
+    findings = structured_review(mission, second, 1, [low()])
+    assert receipt_data(findings)["inputChangedDuringReview"] == ["src.py"]
+    return second
+
+
+def test_closed_low_is_rejected_when_the_previous_review_saw_inputs_change(mission):
+    root, folder, _ = mission
+    second = findings_after_input_change(mission)
+    pointer = latest_review_pointer(folder)
+    with pytest.raises(verification.VerificationError, match="독립 재리뷰"):
+        structured_review(mission, second, 2, [], ["F1"], "closed-low")
+    assert latest_review_pointer(folder) == pointer
+    clean = structured_review(mission, second, 3, [], ["F1"], "clean")
+    verification.validate_review(folder, "M1", second, clean)
+
+
+def test_complete_rejects_closed_low_after_a_review_that_saw_inputs_change(mission, monkeypatch):
+    root, folder, _ = mission
+    second = findings_after_input_change(mission)
+    monkeypatch.setattr(verification, "require_closed_low", lambda *args: None)
+    forged = structured_review(mission, second, 2, [], ["F1"], "closed-low")
+    with pytest.raises(verification.VerificationError, match="독립 재리뷰"):
+        verification.validate_review(folder, "M1", second, forged)
+    assert mission_state.main(["complete", "M1", "--receipt", str(second), "--review", str(forged),
+                               "--done-evidence", "checked"]) == 1
+
+
+def test_closed_low_is_rejected_for_a_finding_first_recorded_as_regression(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low()])
+    structured_review(mission, receipt, 2, [], ["F1"], "clean")
+    structured_review(mission, receipt, 3, [low("F3", origin="regression", relatedId="F1")])
+    structured_review(mission, receipt, 4, [low("F3", origin="unresolved")])
+    pointer = latest_review_pointer(folder)
+    with pytest.raises(verification.VerificationError, match="회귀가 아닌"):
+        structured_review(mission, receipt, 5, [], ["F3"], "closed-low")
+    assert latest_review_pointer(folder) == pointer
+
+
+@pytest.mark.parametrize("later", [{"severity": "low"}, {"severity": "medium"}, {}])
+def test_same_finding_id_cannot_lower_or_drop_severity_between_rounds(mission, later):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [finding(severity="high")])
+    pointer = latest_review_pointer(folder)
+    with pytest.raises(verification.VerificationError, match="severity"):
+        structured_review(mission, receipt, 2, [finding(origin="unresolved", **later)])
+    assert latest_review_pointer(folder) == pointer
+    kept = structured_review(mission, receipt, 3, [finding(origin="unresolved", severity="high")])
+    raised = structured_review(mission, receipt, 4, [finding(origin="unresolved", severity="critical")])
+    assert receipt_data(kept)["findings"][0]["severity"] == "high"
+    assert receipt_data(raised)["findings"][0]["severity"] == "critical"
+
+
+def test_round_three_diagnostic_is_not_attached_to_passing_reviews(mission):
+    _, receipt = verify(mission)
+    structured_review(mission, receipt, 1, [low()])
+    structured_review(mission, receipt, 2, [low(origin="unresolved")])
+    closed = structured_review(mission, receipt, 3, [], ["F1"], "closed-low")
+    assert receipt_data(closed)["round"] == 3 and receipt_data(closed)["diagnostics"] == []
+    again = structured_review(mission, receipt, 4, [low("F4", origin="new")])
+    assert any("closed-low" in line for line in receipt_data(again)["diagnostics"])
+
+
+@pytest.mark.parametrize("failure", ["write", "mkdir"])
+def test_unwritable_review_copies_are_skipped_instead_of_failing_the_review(mission, monkeypatch, failure):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    real_write, real_mkdir = Path.write_bytes, Path.mkdir
+
+    def guarded_write(self, data):
+        if failure == "write" and ".copies" in str(self):
+            raise OSError(36, "File name too long")
+        return real_write(self, data)
+
+    def guarded_mkdir(self, *args, **kwargs):
+        if failure == "mkdir" and self.name.endswith(".copies"):
+            raise OSError(36, "File name too long")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_bytes", guarded_write)
+    monkeypatch.setattr(Path, "mkdir", guarded_mkdir)
+    assert mission_state.main(start_args(mission)) == 0
+    start = receipt_data(Path(receipt_data(folder / "verification/M1.review-start.latest.json")["reviewStart"]))
+    expected = {"check.py": "unwritable", "src.py": "unwritable"}
+    assert start["copies"]["files"] == [] and start["copies"]["skipped"] == expected
+    checked = receipt_data(review(mission, receipt))
+    assert checked["copies"]["files"] == [] and checked["copies"]["skipped"] == expected
+    store = folder / "verification" / "M1.copies"
+    assert not store.exists() or list(store.iterdir()) == []
+
+
+def test_review_copies_are_deduplicated_by_content_across_rounds_and_keys(mission):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    assert mission_state.main(start_args(mission)) == 0
+    review(mission, receipt)
+    review(mission, receipt)
+    store = folder / "verification" / "M1.copies"
+    assert sorted(path.name for path in store.iterdir()) == sorted(set(receipt_data(receipt)["snapshot"].values()))
+    (root / "twin-a.txt").write_text("same\n", encoding="utf-8")
+    (root / "twin-b.txt").write_text("same\n", encoding="utf-8")
+    files = {name: verification.file_hash(root / name) for name in ("twin-a.txt", "twin-b.txt")}
+    copies = verification.copy_snapshot_files(root, files, folder / "verification" / "twins")
+    assert copies["files"] == ["twin-a.txt", "twin-b.txt"] and len(list(Path(copies["dir"]).iterdir())) == 1
+
+
+def test_review_copy_total_is_capped_and_the_rest_is_marked_budget(mission):
+    root, folder, _ = mission
+    assert verification.COPY_BUDGET == 64 * 1024 * 1024
+    for name in ("one.txt", "two.txt"):
+        (root / name).write_text("123456", encoding="utf-8")
+    (root / "two.txt").write_text("654321", encoding="utf-8")
+    files = {name: verification.file_hash(root / name) for name in ("one.txt", "two.txt")}
+    copies = verification.copy_snapshot_files(root, files, folder / "verification" / "capped", budget=10)
+    assert copies["files"] == ["one.txt"] and copies["skipped"] == {"two.txt": "budget"}
+
+
+def inputs_plan(mission):
+    root, _, plan = mission
+    (root / "a.txt").write_text("a1\n", encoding="utf-8")
+    (root / "b.txt").write_text("b1\n", encoding="utf-8")
+    (root / "step.py").write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "name = sys.argv[1]\n"
+        "counter = Path('runs_' + name)\n"
+        "counter.write_text(counter.read_text() + 'x' if counter.exists() else 'x')\n"
+        "Path('out_' + name).mkdir(exist_ok=True)\n"
+        "Path('out_' + name, 'result.json').write_text('{\"status\":\"passed\"}')\n", encoding="utf-8")
+    plan.update(inputs=["a.txt", "b.txt"], commands=[
+        {"id": name, "argv": [sys.executable, "step.py", name], "reusable": True, "outputs": [f"out_{name}"],
+         "inputs": [f"{name}.txt"]} for name in ("a", "b")
+    ], results=[{"path": f"out_{name}/result.json", "command": name, "equals": {"status": "passed"}}
+                for name in ("a", "b")])
+    save_plan(mission)
+    return plan
+
+
+def step_statuses(path):
+    return [step["status"] for step in receipt_data(path)["steps"]]
+
+
+def runs(root, name):
+    return (root / f"runs_{name}").read_text(encoding="utf-8")
+
+
+def test_declared_step_inputs_reuse_untouched_steps_and_rerun_later_steps_after_an_earlier_rerun(mission):
+    root, _, _ = mission
+    inputs_plan(mission)
+    _, first = verify(mission)
+    assert step_statuses(first) == ["passed", "passed"]
+    (root / "b.txt").write_text("b2\n", encoding="utf-8")
+    _, second = verify(mission)
+    assert step_statuses(second) == ["reused", "passed"]
+    assert runs(root, "a") == "x" and runs(root, "b") == "xx"
+    (root / "a.txt").write_text("a2\n", encoding="utf-8")
+    _, third = verify(mission)
+    assert step_statuses(third) == ["passed", "passed"]
+    assert runs(root, "a") == "xx" and runs(root, "b") == "xxx"
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_step_without_inputs_keeps_the_whole_snapshot_in_its_key(mission, declared):
+    root, _, _ = mission
+    plan = inputs_plan(mission)
+    plan["commands"].reverse()
+    if not declared:
+        del plan["commands"][0]["inputs"]
+    save_plan(mission)
+    verify(mission)
+    (root / "a.txt").write_text("a2\n", encoding="utf-8")
+    _, second = verify(mission)
+    expected = ["reused", "passed"]
+    if not declared:
+        expected = ["passed", "passed"]
+    assert step_statuses(second) == expected
+
+
+def test_step_inputs_accept_folder_and_glob_declarations(mission):
+    root, _, _ = mission
+    plan = inputs_plan(mission)
+    (root / "data/deep").mkdir(parents=True)
+    (root / "data/deep/x.txt").write_text("x\n", encoding="utf-8")
+    (root / "data/y.md").write_text("y\n", encoding="utf-8")
+    plan["inputs"] = ["a.txt", "b.txt", "data"]
+    for inputs in (["data"], ["data/**/*.txt", "data/*.md"], ["a.txt", "**/x.txt"]):
+        plan["commands"][0]["inputs"] = inputs
+        verification.validate_plan(root, plan, ["pytest-pass"])
+    before = verification.snapshot(root, plan["inputs"])
+    plan["commands"][0]["inputs"] = ["data/**/*.txt"]
+    assert sorted(verification.step_inputs(root, plan["commands"][0], before)) == ["data/deep/x.txt"]
+    plan["commands"][0]["inputs"] = ["data"]
+    assert sorted(verification.step_inputs(root, plan["commands"][0], before)) == ["data/deep/x.txt", "data/y.md"]
+    del plan["commands"][0]["inputs"]
+    assert verification.step_inputs(root, plan["commands"][0], before) == before
+
+
+@pytest.mark.parametrize("declared", [
+    [], "a.txt", [""], [1], ["other.txt"], ["../a.txt"], ["/abs/a.txt"], ["C:/a.txt"], ["."], ["a.txt\n"],
+])
+def test_malformed_or_outside_command_inputs_are_rejected_on_every_load(mission, declared):
+    root, _, _ = mission
+    plan = inputs_plan(mission)
+    (root / "other.txt").write_text("outside\n", encoding="utf-8")
+    plan["commands"][0]["inputs"] = declared
+    with pytest.raises(verification.VerificationError):
+        verification.validate_plan(root, plan, ["pytest-pass"])
+    save_plan(mission)
+    code, path = verify(mission)
+    assert code == 1 and receipt_data(path)["failure"]["category"] == "plan_invalid"
+    assert mission_state.main(start_args(mission)) == 1
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 1
+
+
+@pytest.mark.parametrize("declared", [["missing/**"], ["*.md"], ["a.txt", "nested/*.txt"]])
+def test_command_inputs_matching_no_plan_input_file_fail_only_the_preflight(mission, declared):
+    root, _, _ = mission
+    plan = inputs_plan(mission)
+    plan["commands"][0]["inputs"] = declared
+    save_plan(mission)
+    assert verification.validate_plan(root, plan, ["pytest-pass"]) is plan
+    with pytest.raises(verification.VerificationError, match="일치하지 않음"):
+        verification.validate_plan(root, plan, ["pytest-pass"], require_matches=True)
+    checked = verification.preflight(root, plan, allow_command, require_matches=True)
+    assert checked["status"] == "fail" and checked["failure"]["category"] == "plan_invalid"
+    assert verification.preflight(root, plan, allow_command)["status"] == "pass"
+    assert mission_state.main(["preflight", "M1", "--plan", str(root / "plan.json")]) == 1
+    assert verify(mission)[0] == 0
+
+
+def declared_data_plan(mission, declared):
+    root, _, plan = mission
+    inputs_plan(mission)
+    (root / "data/deep").mkdir(parents=True)
+    (root / "data/deep/x.txt").write_text("x\n", encoding="utf-8")
+    plan["inputs"] = ["a.txt", "b.txt", "data"]
+    plan["commands"][0]["inputs"] = declared
+    save_plan(mission)
+
+
+def test_deleting_every_file_a_step_declares_keeps_the_same_plan_verifiable_and_the_scope_diff(mission, capsys):
+    root, _, _ = mission
+    declared_data_plan(mission, ["data/**/*.txt", "data/*.md"])
+    _, first = verify(mission)
+    assert step_statuses(first) == ["passed", "passed"]
+    review_with_start(mission, first)
+    (root / "data/deep/x.txt").unlink()
+    code, second = verify(mission)
+    assert code == 0 and step_statuses(second) == ["passed", "passed"]
+    assert runs(root, "a") == "xx"
+    plan_path = str(root / "plan.json")
+    capsys.readouterr()
+    assert mission_state.main(["review-scope", "M1", "--plan", plan_path]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].endswith(": 1개") and lines[1] == "data/deep/x.txt" and lines[2].startswith("리뷰 변경 diff: ")
+    assert "-x\n" in Path(lines[2].split(": ", 1)[1]).read_text(encoding="utf-8")
+    assert mission_state.main(["review-start", "M1", "--plan", plan_path]) == 0
+    assert mission_state.main(["preflight", "M1", "--plan", plan_path]) == 1
+
+
+@pytest.mark.parametrize("declared", [["data"], ["data/**/*.txt"]])
+def test_adding_or_deleting_files_under_a_declared_folder_or_glob_reruns_the_step(mission, declared):
+    root, _, _ = mission
+    declared_data_plan(mission, declared)
+    verify(mission)
+    (root / "data/deep/new.txt").write_text("n\n", encoding="utf-8")
+    assert step_statuses(verify(mission)[1]) == ["passed", "passed"]
+    assert runs(root, "a") == "xx"
+    (root / "data/deep/new.txt").unlink()
+    assert step_statuses(verify(mission)[1]) == ["passed", "passed"]
+    assert runs(root, "a") == "xxx"
+
+
+def test_adding_a_file_outside_the_declared_glob_reuses_the_step(mission):
+    root, _, _ = mission
+    declared_data_plan(mission, ["data/**/*.txt"])
+    verify(mission)
+    (root / "data/y.md").write_text("y\n", encoding="utf-8")
+    assert step_statuses(verify(mission)[1]) == ["reused", "reused"]
+    assert runs(root, "a") == "x"
+
+
+def test_glob_matching_ignores_case_only_where_path_inputs_do(monkeypatch):
+    monkeypatch.setattr(verification, "glob_ignores_case", lambda: True)
+    assert verification.input_matcher("glob", "src/**/*.cs")("src/A/Foo.CS") is True
+    monkeypatch.setattr(verification, "glob_ignores_case", lambda: False)
+    assert verification.input_matcher("glob", "src/**/*.cs")("src/A/Foo.CS") is False
+    assert verification.input_matcher("glob", "src/**/*.cs")("src/A/Foo.cs") is True
+
+
+def test_review_scope_keeps_the_list_when_the_diff_cannot_be_written(mission, capsys, monkeypatch):
+    root, _, _ = mission
+    _, receipt = verify(mission)
+    review(mission, receipt)
+    (root / "src.py").write_text("value = 3\n", encoding="utf-8")
+    real = Path.write_bytes
+
+    def failing(self, data):
+        if self.suffix == ".diff":
+            raise PermissionError("denied")
+        return real(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", failing)
+    capsys.readouterr()
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1:] == ["src.py", "diff 쓰기 실패: denied"] and lines[0].endswith(": 1개")
+
+
+@pytest.mark.parametrize("pattern,key,expected", [
+    ("src/**/*.py", "src/a.py", True), ("src/**/*.py", "src/x/y/a.py", True), ("src/**/*.py", "src/a.txt", False),
+    ("src/*.py", "src/x/a.py", False), ("data/?.txt", "data/a.txt", True), ("data/?.txt", "data/ab.txt", False),
+    ("data/[ab].txt", "data/b.txt", True), ("data/[!ab].txt", "data/b.txt", False),
+    ("data/[!ab].txt", "data/c.txt", True), ("**", "any/thing.txt", True), ("src/**", "src/a/b", True),
+    ("a.*", "a.b", True), ("a.*", "aXb", False), ("a[", "a[", True),
+])
+def test_input_glob_matching_follows_path_segments(pattern, key, expected):
+    assert verification.input_matcher("glob", pattern)(key) is expected
+
+
+def test_fix_round_reuses_untouched_steps_keeps_scope_and_completes_through_closed_low(mission, capsys):
+    root, folder, _ = mission
+    inputs_plan(mission)
+    _, first = verify(mission)
+    assert mission_state.main(start_args(mission)) == 0
+    findings = structured_review(mission, first, 1, [low()])
+    assert "inputChangedDuringReview" not in receipt_data(findings)
+    (root / "b.txt").write_text("b2\n", encoding="utf-8")
+    code, second = verify(mission)
+    assert code == 0 and step_statuses(second) == ["reused", "passed"]
+    assert receipt_data(second)["executionCounts"] == {"executed": 1, "reused": 1}
+    capsys.readouterr()
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].endswith(": 1개") and lines[1] == "b.txt" and lines[2].startswith("리뷰 변경 diff: ")
+    diff = Path(lines[2].split(": ", 1)[1]).read_text(encoding="utf-8")
+    assert "-b1\n" in diff and "+b2\n" in diff
+    closed = structured_review(mission, second, 2, [], ["F1"], "closed-low")
+    assert receipt_data(closed)["status"] == "closed-low"
+    assert mission_state.main(["complete", "M1", "--receipt", str(second), "--review", str(closed),
+                               "--done-evidence", "checked fix diff"]) == 0
+    assert (folder / "units.tsv").read_text(encoding="utf-8").rstrip().endswith("\tdone")

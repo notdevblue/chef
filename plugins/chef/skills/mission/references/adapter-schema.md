@@ -177,6 +177,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `verify.resourceDir` | 공유 검증 잠금 폴더. 절대 경로 또는 프로젝트 기준 상대 경로. `resources`에 자원을 선언하면 필수이며 같은 자원을 쓰는 프로젝트·슬롯은 같은 폴더 사용 |
 | `verify.resources` | 선택 등급별 자원 이름 배열. 예: `{"compile-only": ["preview-editor"]}`. 이름은 영숫자로 시작하는 1~64자의 영숫자·`_`·`-`; 중복·대소문자 충돌 금지. 등급 키는 정확히 일치하며 wildcard 없음 |
 | `verify.readiness` | 선택 등급별 준비 확인 명령 배열. 예: `{"compile-only": [{"argv": ["python", "tools/check_editor.py", "--project", "{project}"], "cwd": ".", "timeoutSeconds": 30}]}`. timeout 1~60초, argv의 `{project}`만 치환. 자원 잠금 뒤 receipt 재사용 전 실행. 읽기 전용 preflight는 명령을 실행하지 않음 |
+| 리뷰 전 기계 검사 | 새 필드를 두지 않는다. `adapter.md`가 정한 lint·규약 검사 명령을 검증 계획의 `commands[]`에 넣어 리뷰 파견 전에 통과시키고 그 출력을 리뷰어에게 준다 |
 | `report.push` | 마일스톤마다 푸시 알림을 보낼지 |
 | `slots.autocompact` | 슬롯 세션 압축 예산(100000~1000000 토큰, 기본 Claude 500000, Codex 200000). Claude와 Codex 실행 옵션에 적용 |
 | `slots.*` | 에이전트 슬롯 워크스페이스(아래 "슬롯"). 없거나 `enabled: false`면 슬롯을 안 쓴다 |
