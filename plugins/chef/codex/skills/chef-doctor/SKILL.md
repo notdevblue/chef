@@ -17,3 +17,4 @@ python "<plugin-root>/codex/skills/chef-doctor/scripts/doctor.py"
   닫기(`--force-close-stale`)는 사용자가 그 미션을 지정해 승인했을 때만 `chef-mission` 절차로 한다.
 - `version` WARN은 설치본이 저장소보다 오래됐다는 뜻이다. 업데이트는 저장소 AGENTS.md의 배포 절차를 따른다.
 - `guard-cases` FAIL은 `python "<plugin-root>/codex/skills/chef-adapter-init/scripts/check_guard.py" <어댑터>`로 어긋난 표본을 본다.
+- `codex-agents` WARN은 `$CODEX_HOME/agents`(없으면 `~/.codex/agents/`)에 등록한 chef 역할 사본이 플러그인 `codex/agents/`와 내용이 다르거나(낡은 등록), 일부 역할이 빠졌거나, 플러그인에 없는 chef 역할 파일이 있다는 뜻이다. 사본을 고치지 말고 플러그인의 chef 역할을 모두 다시 복사한다. 등록이 없으면 OK(선택 사항)다.

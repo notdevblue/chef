@@ -2,7 +2,8 @@
 
 사용: python doctor.py [--runtime claude|codex|grok] [--json]
   점검: python 스텁, 레지스트리(HAN_ADAPTERS_DIR), 어댑터+local.json 읽기 문제, guard-cases,
-        ACTIVE 끊김 의심(닫기 명령은 제안만), local.json vars.unityExe, 저장소 버전과 설치본 버전.
+        ACTIVE 끊김 의심(닫기 명령은 제안만), local.json vars.unityExe, 저장소 버전과 설치본 버전,
+        ~/.codex/agents 에 등록한 chef 역할 사본이 플러그인과 같은지.
   줄 형식: OK|WARN|FAIL <영역>: <내용>. 종료 코드: FAIL 이 있으면 1, 아니면 0.
 """
 import argparse
@@ -11,6 +12,7 @@ import glob
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -246,6 +248,99 @@ def check_versions(report):
         report.add(level, "version", f"Codex chef 저장소 {repo['codex']} / 설치 캐시 {', '.join(codex) or '없음'}")
 
 
+CODEX_ROLE_NAME = re.compile(r"""^name\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')""", re.MULTILINE)
+TOML_TABLE_LINE = re.compile(r"^\s*\[", re.MULTILINE)
+
+
+def codex_home():
+    return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+
+
+def read_role_text(path):
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return f.read()
+    except (OSError, ValueError):
+        return ""
+
+
+def role_name_by_pattern(text):
+    table = TOML_TABLE_LINE.search(text)
+    top_level = text[:table.start()] if table else text
+    found = CODEX_ROLE_NAME.search(top_level)
+    if not found:
+        return ""
+    return found.group(1) or found.group(2) or ""
+
+
+def role_name(text):
+    try:
+        import tomllib
+    except ImportError:
+        return role_name_by_pattern(text)
+    try:
+        name = tomllib.loads(text).get("name")
+    except tomllib.TOMLDecodeError:
+        return role_name_by_pattern(text)
+    if isinstance(name, str):
+        return name
+    return ""
+
+
+def role_files(folder):
+    if not os.path.isdir(folder):
+        return []
+    return sorted(name for name in os.listdir(folder) if name.endswith(".toml") and os.path.isfile(os.path.join(folder, name)))
+
+
+def find_shipped_role(shipped, name, file):
+    if name:
+        if name in shipped:
+            return name
+        return None
+    for key, (shipped_file, _) in shipped.items():
+        if shipped_file == file:
+            return key
+    return None
+
+
+def check_codex_agents(report):
+    registered_dir = os.path.join(codex_home(), "agents")
+    source_dir = os.path.join(PLUGIN, "codex", "agents")
+    shipped = {}
+    for file in role_files(source_dir):
+        text = read_role_text(os.path.join(source_dir, file))
+        shipped[role_name(text) or file] = (file, text)
+    stale, extra, registered = [], [], set()
+    for file in role_files(registered_dir):
+        text = read_role_text(os.path.join(registered_dir, file))
+        name = role_name(text)
+        if not file.startswith("chef-") and not name.startswith("chef_"):
+            continue
+        key = find_shipped_role(shipped, name, file)
+        if key is None:
+            extra.append(file)
+        else:
+            registered.add(key)
+            if shipped[key][1] != text:
+                stale.append(file)
+    where = f"{registered_dir} (비교 기준 {source_dir})"
+    if not (extra or registered):
+        report.add("OK", "codex-agents", f"{where}: chef 역할 등록 없음(선택 사항, 미등록이면 스킬이 지시를 새 서브에이전트에 넘김)")
+        return
+    missing = sorted(key for key in shipped if key not in registered)
+    detail = f"{where}: 플러그인 역할 {len(shipped)}개 중 {len(registered)}개 등록"
+    if stale:
+        detail += f" — 낡은 등록(플러그인 사본과 내용이 다름): {', '.join(stale)}"
+    if missing:
+        detail += f" — 빠진 역할: {', '.join(missing)}"
+    if extra:
+        detail += f" — 플러그인에 없는 chef 역할 파일: {', '.join(extra)}"
+    if stale or missing:
+        detail += " — 플러그인 codex/agents 의 chef 역할을 모두 다시 복사해 갱신"
+    report.add("WARN" if stale or extra or missing else "OK", "codex-agents", detail)
+
+
 def grok_han_hook(entry):
     source = entry.get("source")
     source_path = ""
@@ -373,6 +468,10 @@ def run(runtime):
     except Exception as e:  # 점검 도구는 끝까지 출력
         report.add("FAIL", "registry", f"내부 오류 {type(e).__name__}: {e}")
     check_versions(report)
+    try:
+        check_codex_agents(report)
+    except OSError as e:
+        report.add("WARN", "codex-agents", f"점검 실패 {type(e).__name__}: {e}")
     if runtime == "grok":
         check_grok(report)
     return report

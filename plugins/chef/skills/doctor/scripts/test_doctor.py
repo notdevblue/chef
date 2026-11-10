@@ -10,6 +10,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import doctor  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_codex_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+
 def make_registry(tmp_path, cases=True, unity=None):
     adapters = tmp_path / "adapters"
     project_adapter = adapters / "t"
@@ -303,3 +308,109 @@ def test_grok_doctor_does_not_use_registration_directory_count_as_role_count():
     assert levels(report, "grok-agents") == ["OK"]
     assert levels(report, "grok-native") == ["OK"]
     assert any("파견·모델·effort 실행 검증이 아님" in row["text"] for row in report.rows)
+
+
+def shipped_role(name):
+    return os.path.join(doctor.PLUGIN, "codex", "agents", name)
+
+
+def shipped_text(name):
+    with open(shipped_role(name), encoding="utf-8") as f:
+        return f.read()
+
+
+def codex_agent_rows(report):
+    return [(row["level"], row["text"]) for row in report.rows if row["area"] == "codex-agents"]
+
+
+def shipped_files():
+    folder = os.path.join(doctor.PLUGIN, "codex", "agents")
+    return sorted(name for name in os.listdir(folder) if name.endswith(".toml"))
+
+
+def register_codex_role(tmp_path, name, text):
+    folder = tmp_path / "codex-home" / "agents"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(text.encode("utf-8"))
+    return folder / name
+
+
+def test_doctor_codex_agents_none_registered_is_info_only(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    report = doctor.run("codex")
+    rows = codex_agent_rows(report)
+    assert [level for level, _ in rows] == ["OK"] and "등록 없음" in rows[0][1]
+    assert not report.failed
+
+
+def test_doctor_codex_agents_full_matching_copy_is_ok_even_with_crlf(tmp_path):
+    for name in shipped_files():
+        register_codex_role(tmp_path, name, shipped_text(name).replace("\n", "\r\n"))
+    report = doctor.Report()
+    doctor.check_codex_agents(report)
+    ((level, detail),) = codex_agent_rows(report)
+    assert level == "OK" and "낡은" not in detail and "빠진" not in detail
+    assert os.path.join(doctor.PLUGIN, "codex", "agents") in detail
+
+
+def test_doctor_codex_agents_partial_registration_names_missing_roles(tmp_path):
+    register_codex_role(tmp_path, "chef-researcher.toml", shipped_text("chef-researcher.toml"))
+    report = doctor.Report()
+    doctor.check_codex_agents(report)
+    ((level, detail),) = codex_agent_rows(report)
+    assert level == "WARN"
+    assert "빠진 역할" in detail and "chef_verifier" in detail and "chef_researcher" not in detail.split("빠진 역할")[1]
+
+
+def test_doctor_codex_agents_compares_by_role_name_not_file_name(tmp_path):
+    for name in shipped_files():
+        if name != "chef-verifier.toml":
+            register_codex_role(tmp_path, name, shipped_text(name))
+    register_codex_role(tmp_path, "my-verifier.toml", shipped_text("chef-verifier.toml").replace("\"chef_verifier\"", "'chef_verifier'") + "\n# 오래된 사본\n")
+    report = doctor.Report()
+    doctor.check_codex_agents(report)
+    ((level, detail),) = codex_agent_rows(report)
+    assert level == "WARN" and "my-verifier.toml" in detail and "낡은 등록" in detail
+    assert "빠진 역할" not in detail
+
+
+def test_doctor_codex_agents_role_name_ignores_nested_tables_and_reads_literal_strings():
+    assert doctor.role_name_by_pattern("name = 'chef_a'\n") == "chef_a"
+    assert doctor.role_name_by_pattern("[x]\nname = \"chef_b\"\n") == ""
+    assert doctor.role_name("name = 'chef_c'\n") == "chef_c"
+    assert doctor.role_name("broken = [\nname = \"chef_d\"\n") == "chef_d"
+
+
+def test_doctor_codex_agents_os_error_is_reported_and_doctor_finishes(tmp_path, monkeypatch):
+    registered = os.path.join(str(tmp_path / "codex-home"), "agents")
+    (tmp_path / "codex-home" / "agents").mkdir(parents=True)
+    real_listdir = os.listdir
+
+    def listdir(path="."):
+        if os.fspath(path) == registered:
+            raise PermissionError("denied")
+        return real_listdir(path)
+
+    monkeypatch.setattr(doctor.os, "listdir", listdir)
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(tmp_path / "none"))
+    report = doctor.run("codex")
+    ((level, detail),) = codex_agent_rows(report)
+    assert level == "WARN" and "PermissionError" in detail
+    assert levels(report, "registry") == ["FAIL"]
+
+
+def test_doctor_codex_agents_reports_stale_and_unknown_chef_roles(tmp_path):
+    stale = register_codex_role(tmp_path, "chef-verifier.toml", shipped_text("chef-verifier.toml") + "\n# 오래된 사본\n")
+    register_codex_role(tmp_path, "chef-retired.toml", 'name = "chef_retired"\n')
+    register_codex_role(tmp_path, "renamed.toml", 'name = "chef_renamed"\n')
+    other = register_codex_role(tmp_path, "my-reviewer.toml", 'name = "my_reviewer"\n')
+    report = doctor.Report()
+    doctor.check_codex_agents(report)
+    ((level, detail),) = codex_agent_rows(report)
+    assert level == "WARN"
+    assert "낡은 등록" in detail and "chef-verifier.toml" in detail
+    assert "chef-retired.toml" in detail and "renamed.toml" in detail
+    assert "my-reviewer" not in detail
+    assert stale.exists() and other.exists()
+    assert not report.failed
