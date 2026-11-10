@@ -240,8 +240,8 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
   검증자는 코드·검증 범위·모델을 바꾸지 않고 실패·예상 밖 상태·미확인 증거를 메인에 반환한다.
   공유 Unity 순서와 에디터 수명, 최종 완료 판정은 코디네이터가 맡고 독립 리뷰는 별도로 받는다.
 - 어댑터 `rolePolicy`(`{"model": "definition"|"inherit", "subagents": true|false}`)는 mission 스킬이 역할을 파견할 때만 적용한다. 없으면 `definition`·`true`로 위 고정을 따른다. `inherit`면 Claude는 코디네이터 모델 별칭을 Agent `model` 인자로 넘기고 Codex는 미등록 파견의 `model`·`reasoning_effort`를 생략해 부모를 상속하며, 이때 위 고정보다 정책이 우선한다. `subagents: false`면 `dev-medium`류 브리프에 하위 파견 금지·분할안 반환을 넣는다(도구 차단 아님). Grok은 이미 충족된다. Claude는 최상위, Codex·Grok은 `runtimes.<런타임>.rolePolicy`에 둔다.
-- 승인된 계약과 파일 소유가 독립적인 구현은 병렬로 진행한다. 관련 하위 작업까지 반환을 모으고 필요한
-  `.meta`·생성물·CL 정리를 마친 뒤 검증 입력을 고정한다. Unity 검증은 하나씩 실행하고, 검증 중 입력을 바꾸지 않는다.
+- 승인된 계약과 파일 소유가 독립적인 구현은 같은 턴에 파견한다. 관련 하위 작업까지 반환을 모으고 필요한
+  `.meta`·생성물·CL 정리를 마친 뒤 검증 입력을 고정한다. 검증 자원이 다르면 단위마다 검증하고, 공유 Unity는 관련 구현이 돌아온 뒤 한 명만 실행한다. 검증 중 그 입력을 바꾸지 않는다.
   브리프에는 해당 작업의 파일·CL 소유, 기능 완료 범위와 반례를 넣는다. 같은 CL에 속해도 마일스톤별 검증 기록은 따로 유지한다.
 - 미션 재개는 `context`, 파견 입력은 `reference snapshot`·`brief`, 검증 전에는 읽기 전용 `preflight --plan`을 쓴다.
   실제 검증은 `verify --plan`, 반환 근거는 `handoff`, 독립 리뷰 근거 등록 후 완료는 `complete` 한 호출로 연결한다.
