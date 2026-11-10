@@ -705,6 +705,12 @@ class Config:
         self.autocompact = slots.get("autocompact", default_autocompact)
         if type(self.autocompact) is not int or not 100000 <= self.autocompact <= 1000000:
             raise UsageError("slots.autocompact 는 100000~1000000 정수여야 함")
+        self.codex_sandbox_mode = ""
+        if runtime == "codex" and "sandboxMode" in slots:
+            sandbox_mode = slots["sandboxMode"]
+            if not isinstance(sandbox_mode, str) or sandbox_mode not in ("read-only", "workspace-write", "danger-full-access"):
+                raise UsageError("slots.sandboxMode 는 read-only·workspace-write·danger-full-access 중 하나여야 함")
+            self.codex_sandbox_mode = sandbox_mode
         self.codex_project_doc_max_bytes = 0
         if "codexProjectDocMaxBytes" in slots:
             limit = slots["codexProjectDocMaxBytes"]
@@ -1452,16 +1458,28 @@ def cmd_refresh(config, args):
 SESSION_NAME_LIMIT = 40
 
 
+def wt_argument(value):
+    encoded = subprocess.list2cmdline([value])
+    if " " in value:
+        return encoded[1:-1]
+    return encoded
+
+
+def wt_child_command(executable, arguments):
+    return [wt_argument(value) for value in [executable, *arguments]]
+
+
 def wt_command(config, name, task, session_task="", resume_session=""):
     prompts = {"claude": "/chef:mission", "codex": "$chef:chef-mission", "grok": "/chef-mission"}
     prompt = f"{prompts[config.runtime]} {task}"
     escaped = prompt.replace(";", "\\;")
     title = f"{config.project_name}:{name}"
-    # wt.exe 는 .exe 만 찾아서 npm shim(codex.cmd) 은 전체 경로로 넘겨야 뜸
     executable = shutil.which(config.runtime) or config.runtime
-    command = ["wt.exe", "-w", "0", "nt", "--title", title, "-d", config.slot_path(name), executable]
+    command = ["wt.exe", "-w", "0", "nt", "--title", title, "-d", config.slot_path(name)]
     if config.runtime == "codex":
         options = ["-c", f"model_auto_compact_token_limit={config.autocompact}"]
+        if config.codex_sandbox_mode:
+            options += ["--sandbox", config.codex_sandbox_mode]
         if config.codex_project_doc_max_bytes:
             options += ["-c", f"project_doc_max_bytes={config.codex_project_doc_max_bytes}"]
         for alias, path, description in config.codex_agent_entries(name):
@@ -1469,14 +1487,14 @@ def wt_command(config, name, task, session_task="", resume_session=""):
             options += ["-c", f"agents.{alias}.description={toml_string(description)}"]
         if resume_session:
             options += ["resume", resume_session]
-        return command + options + [escaped]
+        return command + wt_child_command(executable, options + [escaped])
     if config.runtime == "grok":
         options = ["--cwd", config.slot_path(name)]
         if resume_session:
             options += ["--resume", resume_session]
         else:
             options += ["--session-id", str(uuid.uuid4())]
-        return command + options + ["--", escaped]
+        return command + wt_child_command(executable, options + ["--", escaped])
     session_name = f"{name}: {session_task or task}"
     if len(session_name) > SESSION_NAME_LIMIT:
         session_name = session_name[: SESSION_NAME_LIMIT - 1] + "…"
@@ -1484,9 +1502,10 @@ def wt_command(config, name, task, session_task="", resume_session=""):
     session_option = "--session-id"
     if resume_session:
         session_option = "--resume"
-    return command + ["--autocompact", str(config.autocompact), "-n", session_name.replace(";", "\\;"),
-                      session_option, session,
-                      "--", escaped]
+    return command + wt_child_command(executable, [
+        "--autocompact", str(config.autocompact), "-n", session_name.replace(";", "\\;"),
+        session_option, session, "--", escaped,
+    ])
 
 
 def launch_mission(config, name, command):

@@ -719,6 +719,43 @@ def test_run_dry_run_prints_wt_command_with_escaped_semicolon(project):
     assert "editor:" in out and "a-one" in out
 
 
+def windows_terminal_child_arguments(command):
+    import ctypes
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    parts = []
+    for value in command:
+        if " " in value:
+            parts.append('"' + value + '"')
+        else:
+            parts.append(value)
+    count = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW("probe.exe " + " ".join(parts), ctypes.byref(count))
+    assert argv
+    try:
+        return [argv[index] for index in range(1, count.value)]
+    finally:
+        kernel32.LocalFree(argv)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows command-line parser")
+@pytest.mark.parametrize("executable", [r"C:\Apps\tool.exe", r"C:\Program Files\tool.cmd"])
+def test_wt_child_arguments_survive_terminal_reserialization(executable):
+    arguments = [
+        "", "plain", "two words", "tab\tvalue", 'a"b', 'a\\"b', 'a\\\\"b',
+        "trailing space\\", "two words\\\\", '"quoted value"',
+        'agents.helper.config_file="C:\\\\Role Files\\\\helper.toml"',
+        'agents.helper.description="Synthetic role \\\"archive\\\" helper"', "moon🚀",
+    ]
+    command = slots.wt_child_command(executable, arguments)
+    assert windows_terminal_child_arguments(command) == [executable, *arguments]
+
+
 def test_run_session_name_is_cut_to_limit(project):
     project.write_adapter([project.tick_step("one", 1)])
     seed_slot(project, "a")
@@ -1219,6 +1256,82 @@ def test_codex_document_limit_option_for_new_and_recorded_resume(recorded_sessio
         assert limits == []
 
 
+@pytest.mark.parametrize("mode", ["", "read-only", "workspace-write", "danger-full-access"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_sandbox_mode_is_optional_for_new_and_resume(project, mode, resume):
+    project.write_adapter([])
+    located = slots.locate(str(project.dir), "codex")
+    adapter = slots.read_adapter(located.adapter_path, "codex")
+    if mode:
+        adapter["slots"]["sandboxMode"] = mode
+    config = slots.Config(located, adapter, "codex")
+    session = ""
+    if resume:
+        session = "12345678-1234-1234-1234-123456789012"
+    command = slots.wt_command(config, "a", "task", resume_session=session)
+    if mode:
+        index = command.index("--sandbox")
+        assert command.count("--sandbox") == 1 and command[index + 1] == mode
+        if resume:
+            assert index < command.index("resume")
+    else:
+        assert "--sandbox" not in command
+    assert "--ask-for-approval" not in command and "--dangerously-bypass-approvals-and-sandbox" not in command
+
+
+@pytest.mark.parametrize("mode", [None, "", "full-access", True, 0, [], {}])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_sandbox_mode_rejects_unsupported_values(project, mode, resume):
+    project.write_adapter([], sandboxMode=mode)
+    args = ["task"]
+    if resume:
+        args = ["--resume"]
+    code, _, err = project.run("--runtime", "codex", "run", "a", *args, "--dry-run")
+    assert code == slots.USAGE and "slots.sandboxMode" in err
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_sandbox_mode_uses_runtime_and_local_slot_overrides(project, resume):
+    project.write_adapter([], sandboxMode="read-only")
+    seed_slot(project, "a")
+    located = slots.locate(str(project.dir), "codex")
+    path = Path(located.adapter_path)
+    adapter = json.loads(path.read_text(encoding="utf-8"))
+    adapter["runtimes"] = {"codex": {"slots": {"sandboxMode": "workspace-write"}}}
+    path.write_text(json.dumps(adapter), encoding="utf-8")
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, "codex"), "codex")
+    assert config.codex_sandbox_mode == "workspace-write"
+    local_path = path.parent / "local.json"
+    local = json.loads(local_path.read_text(encoding="utf-8"))
+    local["runtimes"] = {"codex": {"slots": {"sandboxMode": "danger-full-access"}}}
+    local_path.write_text(json.dumps(local), encoding="utf-8")
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, "codex"), "codex")
+    session = ""
+    if resume:
+        session = "12345678-1234-1234-1234-123456789012"
+    command = slots.wt_command(config, "a", "task", resume_session=session)
+    assert command[command.index("--sandbox") + 1] == "danger-full-access"
+
+
+@pytest.mark.parametrize("runtime", ["claude", "grok"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_codex_sandbox_mode_does_not_change_other_runtimes(project, runtime, resume):
+    project.write_adapter([])
+    located = slots.locate(str(project.dir), runtime)
+    adapter = slots.read_adapter(located.adapter_path, runtime)
+    session = ""
+    if resume:
+        session = "12345678-1234-1234-1234-123456789012"
+    command = slots.wt_command(slots.Config(located, adapter, runtime), "a", "task", resume_session=session)
+    adapter["slots"]["sandboxMode"] = {"invalid": "ignored outside Codex"}
+    configured = slots.wt_command(slots.Config(located, adapter, runtime), "a", "task", resume_session=session)
+    if "--session-id" in command:
+        index = command.index("--session-id") + 1
+        command[index] = "generated-session"
+        configured[index] = "generated-session"
+    assert configured == command and "--sandbox" not in configured
+
+
 @pytest.mark.parametrize("limit", [0, -1, True, False, 32768.0, "65536", None, [], {}])
 @pytest.mark.parametrize("resume", [False, True])
 def test_codex_document_limit_rejects_invalid_config_for_both_launch_modes(project, limit, resume):
@@ -1314,10 +1427,46 @@ def test_codex_agent_configs_expand_into_discrete_new_and_resume_options(project
     agent_options = [option for option in options if option.startswith("agents.")]
     assert len(agent_options) == 2
     assert all(";" not in option for option in command)
-    parsed = tomllib.loads("\n".join(agent_options))["agents"]["archive-helper"]
-    assert parsed == {"config_file": os.path.normpath(str(project.slot_root / "a/roles/archive;🚀.toml")), "description": description}
+    expected_path = os.path.normpath(str(project.slot_root / "a/roles/archive;🚀.toml"))
+    expected_options = [
+        "agents.archive-helper.config_file=" + slots.toml_string(expected_path),
+        "agents.archive-helper.description=" + slots.toml_string(description),
+    ]
+    assert agent_options == [slots.wt_argument(option) for option in expected_options]
+    parsed = tomllib.loads("\n".join(expected_options))["agents"]["archive-helper"]
+    assert parsed == {"config_file": expected_path, "description": description}
     if resume:
         assert command.index(agent_options[-1]) < command.index("resume")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows command-line parser")
+@pytest.mark.parametrize("runtime", ["claude", "codex", "grok"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_wt_runtime_arguments_preserve_values_after_terminal_parsing(project, monkeypatch, runtime, resume):
+    import tomllib
+
+    project.write_adapter([])
+    located = slots.locate(str(project.dir), runtime)
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+    config.codex_agent_configs = {"archive-helper": {
+        "configFile": "{slot}/Role Files/archive.toml", "description": 'Synthetic "archive" helper',
+    }}
+    executable = r"C:\Program Files\runtime.cmd"
+    monkeypatch.setattr(slots.shutil, "which", lambda name: executable)
+    session = ""
+    if resume:
+        session = "12345678-1234-1234-1234-123456789012"
+    command = slots.wt_command(config, "a", "archive task", resume_session=session)
+    assert command[:8] == ["wt.exe", "-w", "0", "nt", "--title", "FAKE:a", "-d", config.slot_path("a")]
+    actual = windows_terminal_child_arguments(command[8:])
+    assert actual[0] == executable
+    assert actual[-1] == {"claude": "/chef:mission", "codex": "$chef:chef-mission", "grok": "/chef-mission"}[runtime] + " archive task"
+    if resume:
+        assert session in actual
+    if runtime == "codex":
+        options = [actual[index + 1] for index, value in enumerate(actual[:-1]) if value == "-c"]
+        roles = tomllib.loads("\n".join(options))["agents"]["archive-helper"]
+        assert roles == {"config_file": config.codex_agent_entries("a")[0][1], "description": 'Synthetic "archive" helper'}
 
 
 @pytest.mark.parametrize("resume", [False, True])
@@ -1487,7 +1636,12 @@ def test_preexisting_codex_agent_file_can_launch_without_before_run_or_content_p
     assert code == slots.OK and len(calls) == 1
     options = [part for part in calls[0] if part.startswith("agents.")]
     assert len(options) == 2 and all(";" not in part for part in calls[0])
-    assert tomllib.loads("\n".join(options))["agents"]["archive-helper"] == {
+    expected_options = [
+        "agents.archive-helper.config_file=" + slots.toml_string(os.path.normpath(str(role))),
+        "agents.archive-helper.description=" + slots.toml_string(description),
+    ]
+    assert options == [slots.wt_argument(option) for option in expected_options]
+    assert tomllib.loads("\n".join(expected_options))["agents"]["archive-helper"] == {
         "config_file": os.path.normpath(str(role)), "description": description,
     }
     assert slots.Rows(project.rows_path).find("a")["state"] == slots.STATE_READY
