@@ -3,9 +3,10 @@
 ## 역할과 입력
 
 Claude는 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium,
-`chef:verifier`는 low, `chef:dev-medium`은 high로 시작한다. 첫 심층 리뷰·설계 판단은 Opus / high를 명시한다.
+`chef:verifier`는 low, `chef:dev-medium`은 high로 시작한다. 첫 심층 리뷰·기록 감사의 기본 역할은 `chef:code-reviewer`(Opus / high)이고,
+설계 판단은 Opus / high를 명시한다.
 모델·effort를 지정할 수 없으면 실제 설정을 미확인으로 보고하고 역할 이름만으로 적용됐다고 말하지 않는다.
-Claude의 편집 역할과 좁은 리뷰는 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고
+Claude의 편집 역할과 리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고
 ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속이나 검색을 확인하지 못하면 검증 가능으로 보고하지 않는다.
 도구 축소가 실제 사용량을 얼마나 줄였는지는 측정 전 미확인으로 남긴다.
 Codex의 역할·모델 배정은 `../../../codex/skills/chef-mission/references/codex-roles.md`를 유지한다.

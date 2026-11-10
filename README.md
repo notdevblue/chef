@@ -11,7 +11,7 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 | 구성 | 위치 | 하는 일 |
 | --- | --- | --- |
 | 개인 규칙 | `plugins/chef/rules/` | 플러그인 설정 `inject_rules`가 `on`이거나 `shared`일 때만(`shared`는 `personal-rules.md`를 뺀 나머지), 세션 시작·재개·압축 때 `SessionStart` 훅이, 서브에이전트 시작 때 `SubagentStart` 훅이 컨텍스트에 넣는다(예전 `~/.claude/CLAUDE.md`) |
-| 에이전트 | `plugins/chef/agents/` | `chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:reviewer-small` |
+| 에이전트 | `plugins/chef/agents/` | `chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:code-reviewer`, `chef:reviewer-small` |
 | `/chef:mission` | `plugins/chef/skills/mission/` | 컨텐츠 확인 → PoC → 구현 → 검토, 사람 확인 A·B·C. 상태 파일은 `scripts/mission_state.py`로만 쓰고, 끝에 기록 감사 |
 | `/chef:distill` | `plugins/chef/skills/distill/` | 대화 기록에서 사용자 피드백을 뽑아 가이드·메모리·개인 규칙·플러그인 반영 후보로 분류, 고른 것만 반영. 미션은 확인 C 직전에 자동 |
 | `/chef:adapter-init` | `plugins/chef/skills/adapter-init/` | 프로젝트 조사해 어댑터 초안, 슬롯 폴더 묻기 |
@@ -124,7 +124,7 @@ Codex 프로젝트 지침 읽기 한도는 선택 설정 `slots.codexProjectDocM
 새 세션·재개 모두 준비 단계가 끝난 뒤 파일을 확인하고, 역할 파일 경로와 설명을 Codex 설정 인자로 전달한다.
 
 `codex/agents/*.toml`은 역할별 지시다. 등록된 Codex 에이전트가 없으면 스킬이 그 지시를
-새 서브에이전트에게 전달한다. research와 review는 부모 모델·추론 수준을 상속한다. 중간 구현 역할은 `gpt-6.1-sol` / high,
+새 서브에이전트에게 전달한다. research와 review(`chef_code_reviewer`)는 부모 모델·추론 수준을 상속한다. 중간 구현 역할은 `gpt-6.1-sol` / high,
 작은 구현 역할은 `gpt-6-luna` / high로 고정한다.
 검증 역할 `chef_verifier`는 `gpt-6-luna` / high로 고정하며, 미등록이면 같은 모델·추론 수준을 명시해 새 에이전트로 파견한다.
 선택적으로 `~/.codex/agents/`에 복사해 이름을 등록할 수 있으며 기존 파일을 덮어쓰지 않는다.
@@ -233,6 +233,7 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
 - 구현 역할은 `dev-small`(승인된 문서·정해진 소규모 수정)과 `dev-medium`(복잡한 구현, high effort)이다.
   `dev-small`은 Claude Sonnet 5.5 / medium, Codex GPT-6 Luna / high로 고정한다.
   Claude `dev-medium`은 기존 Sonnet / high, `researcher`와 `reviewer-small`은 기존 Sonnet / medium을 쓴다.
+  첫 심층 리뷰·기록 감사의 기본 역할 `chef:code-reviewer`는 Opus / high이며 프로젝트 리뷰어(예: `code-reviewer`)가 없을 때 쓴다. Codex `chef_code_reviewer`는 모델을 고정하지 않고 부모를 상속한다.
   Codex `dev-medium`은 GPT-6.1 Sol / high로 고정한다.
   코디네이터가 직접 편집하지 않는 미션 경계와 독립 리뷰는 유지한다.
 - 테스트·Unity Play 실행은 `roles.verify` 하나가 맡는다. Claude는 `chef:verifier`(Sonnet 5.5 / low),

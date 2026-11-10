@@ -525,3 +525,27 @@ def test_shared_references_are_copies_of_claude_source():
     assert len(files) >= 10
     assert any(t.endswith("human-writing.md") for _, t in files)
     assert sync.differing() == [], "python codex/sync_shared.py --write"
+
+
+def test_codex_role_definitions_are_listed_and_review_inherits_the_model():
+    import tomllib
+
+    roles = (PLUGIN / "codex/skills/chef-mission/references/codex-roles.md").read_text(encoding="utf-8")
+    for path in sorted((PLUGIN / "codex/agents").glob("*.toml")):
+        definition = tomllib.loads(path.read_text(encoding="utf-8"))
+        assert definition["name"].startswith("chef_")
+        assert definition["description"] and definition["developer_instructions"].strip()
+        assert f"codex/agents/{path.name}" in roles
+    reviewer = tomllib.loads((PLUGIN / "codex/agents/chef-code-reviewer.toml").read_text(encoding="utf-8"))
+    assert reviewer["name"] == "chef_code_reviewer"
+    assert "model" not in reviewer and "model_reasoning_effort" not in reviewer
+    assert "읽기 전용" in reviewer["description"]
+
+
+def test_claude_code_reviewer_is_read_only_deep_reviewer():
+    text = (PLUGIN / "agents/code-reviewer.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    fields = dict(line.split(": ", 1) for line in text.split("---", 2)[1].strip().splitlines())
+    assert fields["name"] == "code-reviewer"
+    assert fields["model"] == "claude-opus-5-5" and fields["effort"] == "high"
+    assert {tool.strip() for tool in fields["tools"].split(",")} == {"Read", "Grep", "Glob", "Bash", "PowerShell"}
+    assert "reviewer-small" in fields["description"]

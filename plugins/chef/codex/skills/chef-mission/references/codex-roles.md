@@ -9,10 +9,11 @@ Codex는 플러그인의 이 폴더를 사용자 에이전트 폴더로 자동 �
 | implement, 기존 chef:dev-medium | `codex/agents/chef-developer-medium.toml`의 developer_instructions, GPT-6.1 Sol / high 고정 |
 | implementSmall | `codex/agents/chef-developer-small.toml`의 developer_instructions, GPT-6 Luna / high 고정 |
 | verify | `codex/agents/chef-verifier.toml`의 developer_instructions, GPT-6 Luna / high 고정 |
-| review | 변경 범위·명세·완료 조건을 받아 결함과 근거만 보고한다. 파일을 편집하지 않는다. |
+| review, audit | `codex/agents/chef-code-reviewer.toml`의 developer_instructions, 모델·추론 수준은 부모 상속 |
 
 등록된 에이전트가 있으면 사용한다. 없으면 해당 TOML의 developer_instructions와 마일스톤 브리프를
 새 서브에이전트의 프롬프트로 넘긴다. 이름만으로 Claude 에이전트를 실행할 수 있다고 가정하지 않는다.
+어댑터 `roles.review`가 없거나 `chef:code-reviewer`이거나, `code-reviewer`인데 그 이름으로 등록된 에이전트가 없으면 `chef_code_reviewer`를 쓴다. `roles.audit`가 없으면 `roles.review`를 따른다.
 사용자·프로젝트가 지정한 다른 역할은 실제 정의를 읽는다. 필수 정의를 찾지 못하면 알리고 멈춘다.
 리뷰는 구현 에이전트를 재사용하거나 구현 대화 내역을 fork하지 않고 새 에이전트로 실행한다.
 
@@ -28,6 +29,7 @@ Low만 남으면 코디네이터가 `verification-workflow.md`의 closed-low 조
 
 research와 review의 모델·추론 수준은 부모 설정을 상속한다. implement는 `gpt-6.1-sol`과 high,
 implementSmall과 verify는 `gpt-6-luna`와 high로 고정한다(어댑터 `rolePolicy.model`이 `inherit`면 아래 역할 정책이 우선).
+등록된 `chef_code_reviewer`가 없으면 해당 역할의 지시·브리프와 `fork_turns: "none"`만 넘기고 `model`·`reasoning_effort`는 생략한다.
 등록된 `chef_developer_small` 또는 `chef_verifier`가 없으면 해당 역할의 지시·브리프와
 `model: "gpt-6-luna"`, `reasoning_effort: "high"`, `fork_turns: "none"`을 넘긴다.
 등록된 `chef_developer_medium`이 없으면 해당 역할의 지시·브리프와 `model: "gpt-6.1-sol"`,
