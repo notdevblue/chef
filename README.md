@@ -234,7 +234,7 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
 - 구현 역할은 `dev-small`(승인된 문서·정해진 소규모 수정)과 `dev-medium`(복잡한 구현, high effort)이다.
   `dev-small`은 Claude Sonnet 5.5 / medium, Codex GPT-6 Luna / high로 고정한다.
   Claude `dev-medium`은 기존 Sonnet / high, `researcher`와 `reviewer-small`은 기존 Sonnet / medium을 쓴다.
-  첫 심층 리뷰·기록 감사의 기본 역할 `chef:code-reviewer`는 Opus / high이며 프로젝트 리뷰어(예: `code-reviewer`)가 없을 때 쓴다. Codex `chef_code_reviewer`는 모델을 고정하지 않고 부모를 상속한다.
+  첫 심층 리뷰·기록 감사의 기본 역할 `chef:code-reviewer`는 Opus / high이며 프로젝트 리뷰어(예: `code-reviewer`)가 없을 때 쓴다. 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)은 첫 리뷰도 `reviewer-small`이 맡는다. Codex `chef_code_reviewer`는 모델을 고정하지 않고 부모를 상속한다.
   Codex `dev-medium`은 GPT-6.1 Sol / high로 고정한다.
   코디네이터가 직접 편집하지 않는 미션 경계와 독립 리뷰는 유지한다.
 - 테스트·Unity Play 실행은 `roles.verify` 하나가 맡는다. Claude는 `chef:verifier`(Sonnet 5.5 / low),

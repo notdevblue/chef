@@ -5,6 +5,8 @@
 Claude는 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium,
 `chef:verifier`는 low, `chef:dev-medium`은 high로 시작한다. 첫 심층 리뷰·기록 감사의 기본 역할은 `chef:code-reviewer`(Opus / high)이고,
 설계 판단은 Opus / high를 명시한다.
+문서 변경이 문구·양식이나 한 파일의 몇 절에 그치고 규칙의 뜻과 승인 범위가 그대로면 첫 리뷰도 `chef:reviewer-small`로 하고, 그 브리프에는 변경 전 본 대비 diff를 넣는다.
+새 규칙·규칙 관계 변경과 사람이 결정에 쓰는 문서(질문·보고)의 첫 리뷰는 심층 리뷰를 유지한다.
 모델·effort를 지정할 수 없으면 실제 설정을 미확인으로 보고하고 역할 이름만으로 적용됐다고 말하지 않는다.
 Claude의 편집 역할과 리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고
 ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속이나 검색을 확인하지 못하면 검증 가능으로 보고하지 않는다.
@@ -12,7 +14,7 @@ ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속이나 �
 Codex의 역할·모델 배정은 `../../../codex/skills/chef-mission/references/codex-roles.md`를 유지한다.
 Sonnet 설정을 Codex 역할에 복사하지 않는다.
 어댑터 `rolePolicy.model`이 `inherit`면 이 배정보다 그 정책이 우선한다(Claude는 코디네이터 모델 별칭, Codex는 부모 상속).
-공통 계약·구조 변경·원인 불명·판단 충돌이면 근거와 남은 범위를 메인에 반환하고 더 깊은 검토로 확대한다.
+공통 계약·구조 변경·원인 불명·판단 충돌, reviewer-small이 돌려준 뜻·승인 범위 변경이면 근거와 남은 범위를 메인에 반환하고 더 깊은 검토로 확대한다.
 테스트 실행자는 원인 분석이나 모델 전환을 직접 하지 않는다.
 
 코디네이터는 방향·최신 답·승인 원문·적용 규칙·양식의 실제 경로를 정하고

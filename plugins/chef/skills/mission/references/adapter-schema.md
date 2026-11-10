@@ -168,7 +168,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `roles.*` | 역할별 실제 에이전트·스킬 이름. 없는 역할은 아래 행의 기본값을 쓰고, 기본값이 없으면 `general-purpose` |
 | `roles.implementSmall` | 승인된 문서·정해진 소규모 수정 담당. 없으면 implement. 구현과 독립 리뷰 분리는 유지 |
 | `roles.verify` | 테스트·Unity Play 실행 전담. 없으면 `chef:verifier`. Sonnet 5.5 / low 고정(`rolePolicy.model`이 `inherit`면 정책 우선), 코드 수정·모델 전환·완료 판정 금지 |
-| `roles.review` | 첫 심층 리뷰를 맡을 읽기 전용 에이전트. 프로젝트 리뷰어 이름(예시의 `code-reviewer`)을 쓰고, 없으면 `chef:code-reviewer`(Opus / high, `rolePolicy.model`이 `inherit`면 정책 우선). 좁은 재리뷰는 `chef:reviewer-small` |
+| `roles.review` | 첫 심층 리뷰를 맡을 읽기 전용 에이전트. 프로젝트 리뷰어 이름(예시의 `code-reviewer`)을 쓰고, 없으면 `chef:code-reviewer`(Opus / high, `rolePolicy.model`이 `inherit`면 정책 우선). 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 `chef:reviewer-small` |
 | `roles.audit` | 미션 끝 기록 감사(SKILL §6의 4)를 맡을 읽기 전용 에이전트. 없으면 `roles.review`. 구현 역할과 다른 모델이면 더 좋다 |
 | `rolePolicy` | 선택. 이 플러그인 스킬이 역할을 파견할 때의 정책 `{"model": "definition" 또는 "inherit", "subagents": true 또는 false}`. 없거나 키가 없으면 `model: "definition"`, `subagents: true`(기존 동작). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.rolePolicy`·`runtimes.grok.rolePolicy`가 기존 깊은 병합으로 최상위 값을 덮는다. `roles`의 이름 매핑은 바꾸지 않는다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다 |
 | `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex에서 미등록 파견의 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |

@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: 첫 심층 리뷰와 기록 감사를 구현과 분리된 새 맥락에서 읽기 전용으로 한다. 직전 리뷰 이후의 좁은 재리뷰는 reviewer-small이 맡는다.
+description: 첫 심층 리뷰와 기록 감사를 구현과 분리된 새 맥락에서 읽기 전용으로 한다. 직전 리뷰 이후의 좁은 재리뷰와 뜻이 그대로인 작은 문서 변경은 reviewer-small이 맡는다.
 model: claude-opus-5-5
 effort: high
 tools: Read, Grep, Glob, Bash, PowerShell
