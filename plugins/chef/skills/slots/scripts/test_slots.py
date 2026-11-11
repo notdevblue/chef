@@ -2774,3 +2774,26 @@ def test_session_runtime_keeps_claude_metadata_headers(recorded_session, kind):
     _, folder, session, transcript = recorded_session
     transcript.write_text(json.dumps({"type": kind}) + "\n", encoding="utf-8")
     assert slots.session_runtime(str(folder), session) == "claude"
+
+
+def claude_meta_lines(session, kinds):
+    return "".join(json.dumps({"type": kind, "sessionId": session}) + "\n" for kind in kinds)
+
+
+def test_session_runtime_skips_claude_session_meta_lines(recorded_session):
+    _, folder, session, transcript = recorded_session
+    transcript.write_text(claude_meta_lines(session, ["last-prompt", "custom-title", "agent-name", "session-owner"]), encoding="utf-8")
+    assert slots.session_runtime(str(folder), session) == "claude"
+
+
+def test_session_runtime_skips_blank_and_non_dict_lines_before_codex_meta(recorded_session):
+    _, folder, session, transcript = recorded_session
+    transcript.write_text("\n[]\n" + json.dumps({"type": "session_meta", "payload": {"id": session}}) + "\n", encoding="utf-8")
+    assert slots.session_runtime(str(folder), session) == "codex"
+
+
+def test_session_runtime_refuses_meta_only_transcript(recorded_session):
+    _, folder, session, transcript = recorded_session
+    lines = [{"type": "custom-title"}, {"type": "agent-name", "sessionId": "other"}]
+    transcript.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    assert slots.session_runtime(str(folder), session) == ""

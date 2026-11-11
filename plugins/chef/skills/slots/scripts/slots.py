@@ -1540,6 +1540,10 @@ def resume_refusal(config, name):
     return "", mission_id
 
 
+RUNTIME_PROBE_LINES = 50
+CLAUDE_ENTRY_TYPES = ("user", "assistant", "system", "summary", "file-history-snapshot", "queue-operation", "progress")
+
+
 def session_runtime(folder, session, strict=False):
     import mission_state
 
@@ -1567,13 +1571,16 @@ def session_runtime(folder, session, strict=False):
     if grok_transcript.is_transcript(transcript):
         return "grok"
     with open(transcript, encoding="utf-8-sig") as stream:
-        first = json.loads(stream.readline())
-    if not isinstance(first, dict):
-        return ""
-    if first.get("type") == "session_meta":
-        return "codex"
-    if first.get("type") in ("user", "assistant", "system", "summary", "file-history-snapshot", "queue-operation", "progress"):
-        return "claude"
+        for _, line in zip(range(RUNTIME_PROBE_LINES), stream):
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") == "session_meta":
+                return "codex"
+            if entry.get("type") in CLAUDE_ENTRY_TYPES or entry.get("sessionId") == session:
+                return "claude"
     return ""
 
 
