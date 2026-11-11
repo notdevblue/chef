@@ -953,6 +953,10 @@ def cmd_review_scope(ctx, args):
         lines.append(f"직전 리뷰를 비교 기준에서 제외함({scope['excluded']}): 범위는 모든 입력임")
         lines.append(f"직전 리뷰 이후 내용 변경 {len(scope['contentChanged'])}개")
         lines.extend(f"  {path}" for path in scope["contentChanged"])
+        for key, title in (("scopeAdded", "리뷰 범위에 새로 든 파일"), ("scopeRemoved", "리뷰 범위에서 빠진 파일")):
+            if scope[key]:
+                lines.append(f"{title} {len(scope[key])}개")
+                lines.extend(f"  {path}" for path in scope[key])
     lines.extend(scope["changed"])
     if scope["failure"]:
         lines.append(f"diff 쓰기 실패: {scope['failure']}")

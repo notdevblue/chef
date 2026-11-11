@@ -167,11 +167,15 @@ def project_path(project, value):
     return rooted_path(Path(project).resolve(), value)
 
 
+def require_no_control(text):
+    if any(ord(char) < 32 or 127 <= ord(char) < 160 for char in text):
+        raise VerificationError("경로에 제어 문자를 쓸 수 없음")
+
+
 def rooted_path(root, value):
     if not isinstance(value, str) or not value:
         raise VerificationError("비어 있지 않은 문자열 경로가 필요함")
-    if any(ord(char) < 32 or 127 <= ord(char) < 160 for char in value):
-        raise VerificationError("경로에 제어 문자를 쓸 수 없음")
+    require_no_control(value)
     path = (root / value).resolve()
     if not path.is_relative_to(root):
         raise VerificationError(f"프로젝트 밖 경로: {value}")
@@ -183,6 +187,7 @@ def snapshot(project, inputs):
         raise VerificationError("inputs 에 검증에 영향을 주는 파일·폴더를 지정할 것")
     files = {}
     root = Path(project).resolve()
+    require_no_control(str(root))
     for value in inputs:
         path = rooted_path(root, value)
         if path.is_dir():
@@ -193,6 +198,7 @@ def snapshot(project, inputs):
             if resolved.is_dir():
                 continue
             key = candidate.relative_to(root).as_posix()
+            require_no_control(key)
             files[key] = file_hash(resolved) if resolved.is_file() else "missing"
     if not files or all(value == "missing" for value in files.values()):
         raise VerificationError("검증 inputs 에 실제 파일이 없음")
@@ -1364,9 +1370,13 @@ def review_scope(project, folder, unit, plan, settings=None):
 def review_scope_diff(project, folder, unit, plan, settings=None, write=True):
     current = snapshot(project, plan["inputs"])
     review, excluded = prior_review(project, folder, unit, plan, settings)
-    scope = {"changed": [], "diff": "", "failure": "", "excluded": excluded, "contentChanged": []}
+    scope = {"changed": [], "diff": "", "failure": "", "excluded": excluded,
+             "contentChanged": [], "scopeAdded": [], "scopeRemoved": []}
     if excluded:
-        scope["contentChanged"] = changed_files(review.get("snapshot", {}), current)
+        reviewed = review.get("snapshot", {})
+        scope["contentChanged"] = [name for name in sorted(set(reviewed) & set(current)) if reviewed[name] != current[name]]
+        scope["scopeAdded"] = sorted(set(current) - set(reviewed))
+        scope["scopeRemoved"] = sorted(set(reviewed) - set(current))
         review = {}
     prior = review.get("snapshot", {})
     scope["changed"] = changed_files(prior, current)

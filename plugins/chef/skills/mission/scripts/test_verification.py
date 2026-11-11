@@ -1914,13 +1914,62 @@ def test_review_scope_keeps_the_reuse_rule_and_reports_each_exclusion(mission, c
         (root / "review.md").write_text("바뀐 리뷰 결과\n", encoding="utf-8")
     scope = verification.review_scope_diff(root, folder, "M1", plan)
     assert scope["excluded"] == excluded and scope["contentChanged"] == [] and scope["failure"] == ""
+    assert scope["scopeAdded"] == [] and scope["scopeRemoved"] == []
     assert scope["changed"] == (["check.py", "src.py"] if excluded else [])
 
 
 def test_review_scope_without_a_prior_review_reports_no_exclusion(mission):
     root, folder, plan = mission
     scope = verification.review_scope_diff(root, folder, "M1", plan)
-    assert scope == {"changed": ["check.py", "src.py"], "diff": "", "failure": "", "excluded": "", "contentChanged": []}
+    assert scope == {"changed": ["check.py", "src.py"], "diff": "", "failure": "", "excluded": "",
+                     "contentChanged": [], "scopeAdded": [], "scopeRemoved": []}
+
+
+def test_review_scope_separates_files_entering_or_leaving_the_inputs_from_content_changes(mission, capsys):
+    root, _, plan = mission
+    _, receipt = verify(mission)
+    review(mission, receipt)
+    (root / "extra.txt").write_text("extra\n", encoding="utf-8")
+    (root / "src.py").write_text("value = 7\n", encoding="utf-8")
+    plan["inputs"] = ["src.py", "extra.txt"]
+    save_plan(mission)
+    capsys.readouterr()
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "리뷰 변경 범위 M1: 2개",
+        "직전 리뷰를 비교 기준에서 제외함(계획·브리프 변경): 범위는 모든 입력임",
+        "직전 리뷰 이후 내용 변경 1개",
+        "  src.py",
+        "리뷰 범위에 새로 든 파일 1개",
+        "  extra.txt",
+        "리뷰 범위에서 빠진 파일 1개",
+        "  check.py",
+        "extra.txt",
+        "src.py",
+    ]
+
+
+@pytest.mark.parametrize("declared", ["src.py", "src"])
+def test_snapshot_rejects_a_project_root_with_control_characters_for_file_and_folder_inputs(tmp_path, declared):
+    root = tmp_path / "pro\x7fject"
+    try:
+        (root / "src").mkdir(parents=True)
+    except OSError:
+        pytest.skip("filesystem rejects DEL in folder names")
+    (root / "src.py").write_text("value = 1\n", encoding="utf-8")
+    (root / "src/a.txt").write_text("a\n", encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="경로에 제어 문자를 쓸 수 없음"):
+        verification.snapshot(root, [declared])
+
+
+def test_snapshot_rejects_a_file_input_that_resolves_to_a_name_with_control_characters(tmp_path):
+    (tmp_path / "ta\x7frget.txt").write_text("t\n", encoding="utf-8")
+    try:
+        (tmp_path / "link.txt").symlink_to(tmp_path / "ta\x7frget.txt")
+    except OSError:
+        pytest.skip("symlink permission unavailable")
+    with pytest.raises(verification.VerificationError, match="경로에 제어 문자를 쓸 수 없음"):
+        verification.snapshot(tmp_path, ["link.txt"])
 
 
 @pytest.mark.parametrize("pattern,key,expected", [
