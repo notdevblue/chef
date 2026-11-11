@@ -36,12 +36,6 @@ class VerificationError(Exception):
         self.category = category
 
 
-class ScopeDiffError(VerificationError):
-    def __init__(self, message, changed):
-        super().__init__(message)
-        self.changed = changed
-
-
 def read_json(path):
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -1346,29 +1340,44 @@ def validate_review(folder, unit, receipt_path, review_path):
 
 def prior_review(project, folder, unit, plan, settings=None):
     latest = Path(folder) / "verification" / f"{unit}.review.latest.json"
-    if latest.exists():
-        review = read_json(read_json(latest)["review"])
-        evidence = Path(review.get("evidence", ""))
-        if (review.get("planHash") == digest(plan) and review.get("runner") == runtime_key(project, plan, settings)
-                and evidence.is_file()
-                and file_hash(evidence) == review.get("evidenceHash")):
-            return review
-    return {}
+    if not latest.exists():
+        return {}, ""
+    review = read_json(read_json(latest)["review"])
+    return review, review_exclusion(project, plan, settings, review)
+
+
+def review_exclusion(project, plan, settings, review):
+    if review.get("planHash") != digest(plan):
+        return "계획·브리프 변경"
+    if review.get("runner") != runtime_key(project, plan, settings):
+        return "실행 환경 변경"
+    evidence = Path(review.get("evidence", ""))
+    if not evidence.is_file() or file_hash(evidence) != review.get("evidenceHash"):
+        return "리뷰 근거 파일 변경"
+    return ""
 
 
 def review_scope(project, folder, unit, plan, settings=None):
-    return review_scope_diff(project, folder, unit, plan, settings, write=False)[0]
+    return review_scope_diff(project, folder, unit, plan, settings, write=False)["changed"]
 
 
 def review_scope_diff(project, folder, unit, plan, settings=None, write=True):
     current = snapshot(project, plan["inputs"])
-    review = prior_review(project, folder, unit, plan, settings)
+    review, excluded = prior_review(project, folder, unit, plan, settings)
+    scope = {"changed": [], "diff": "", "failure": "", "excluded": excluded, "contentChanged": []}
+    if excluded:
+        scope["contentChanged"] = changed_files(review.get("snapshot", {}), current)
+        review = {}
     prior = review.get("snapshot", {})
-    changed = changed_files(prior, current)
+    scope["changed"] = changed_files(prior, current)
     copies = review.get("copies")
-    if not write or not changed or not isinstance(copies, dict):
-        return changed, ""
-    return changed, write_scope_diff(project, folder, unit, prior, current, copies, changed)
+    if not write or not scope["changed"] or not isinstance(copies, dict):
+        return scope
+    try:
+        scope["diff"] = write_scope_diff(project, folder, unit, prior, current, copies, scope["changed"])
+    except OSError as error:
+        scope["failure"] = str(error)
+    return scope
 
 
 def read_copy(copies, expected):
@@ -1416,8 +1425,5 @@ def write_scope_diff(project, folder, unit, prior, current, copies, changed):
             else:
                 lines.append(line + "\n\\ No newline at end of file\n")
     path = Path(folder) / "verification" / f"{unit}-reviewdiff-{uuid.uuid4().hex}.diff"
-    try:
-        path.write_bytes("".join(lines).encode("utf-8"))
-    except OSError as error:
-        raise ScopeDiffError(str(error), changed) from error
+    path.write_bytes("".join(lines).encode("utf-8"))
     return str(path)

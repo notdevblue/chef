@@ -946,17 +946,18 @@ def cmd_review_start(ctx, args):
 
 def cmd_review_scope(ctx, args):
     plan = verification_plan(ctx, args)
-    failure = ""
-    try:
-        paths, diff = verification.review_scope_diff(
-            ctx.project, ctx.folder, args.id, plan, settings=ctx.adapter.get("verify") or {})
-    except verification.ScopeDiffError as error:
-        paths, diff, failure = error.changed, "", str(error)
-    lines = [f"리뷰 변경 범위 {args.id}: {len(paths)}개", *paths]
-    if failure:
-        lines.append(f"diff 쓰기 실패: {failure}")
-    if diff:
-        lines.append(f"리뷰 변경 diff: {diff}")
+    scope = verification.review_scope_diff(
+        ctx.project, ctx.folder, args.id, plan, settings=ctx.adapter.get("verify") or {})
+    lines = [f"리뷰 변경 범위 {args.id}: {len(scope['changed'])}개"]
+    if scope["excluded"]:
+        lines.append(f"직전 리뷰를 비교 기준에서 제외함({scope['excluded']}): 범위는 모든 입력임")
+        lines.append(f"직전 리뷰 이후 내용 변경 {len(scope['contentChanged'])}개")
+        lines.extend(f"  {path}" for path in scope["contentChanged"])
+    lines.extend(scope["changed"])
+    if scope["failure"]:
+        lines.append(f"diff 쓰기 실패: {scope['failure']}")
+    if scope["diff"]:
+        lines.append(f"리뷰 변경 diff: {scope['diff']}")
     return lines
 
 

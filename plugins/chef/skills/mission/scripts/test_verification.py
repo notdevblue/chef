@@ -1115,6 +1115,11 @@ def with_unit_brief(mission, receipt):
     return {**plan, "unitBrief": receipt_data(receipt)["plan"]["unitBrief"]}
 
 
+def scope_diff(*args):
+    scope = verification.review_scope_diff(*args)
+    return scope["changed"], scope["diff"]
+
+
 def start_args(mission):
     root, _, _ = mission
     return ["review-start", "M1", "--plan", str(root / "plan.json")]
@@ -1336,7 +1341,7 @@ def test_review_scope_diff_covers_add_modify_delete_and_skips_binary_and_large(m
     (source / "data.bin").write_bytes(b"\0\3")
     _, receipt = verify(mission)
     review(mission, receipt)
-    changed, diff = verification.review_scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
+    changed, diff = scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
     assert changed == ["src/data.bin", "src/gone.txt", "src/keep.txt", "src/new.txt"]
     text = Path(diff).read_text(encoding="utf-8")
     assert "--- a/src/gone.txt\n+++ /dev/null\n" in text and "-bye\n" in text
@@ -1355,7 +1360,7 @@ def test_review_scope_diff_compares_only_lines_changed_since_first_review(missio
     _, receipt = verify(mission)
     review_with_start(mission, receipt)
     (source / "a.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
-    changed, diff = verification.review_scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
+    changed, diff = scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
     assert changed == ["src/a.txt"]
     text = Path(diff).read_text(encoding="utf-8")
     assert "+gamma\n" in text and "-alpha" not in text and "+alpha" not in text
@@ -1390,13 +1395,13 @@ def test_review_scope_diff_marks_only_unreadable_copy_and_keeps_list_and_other_d
     (root / "src.py").write_text("value = 4\n", encoding="utf-8")
     (root / "data.txt").write_text("d2\n", encoding="utf-8")
     plan = with_unit_brief(mission, receipt)
-    changed, diff = verification.review_scope_diff(root, folder, "M1", plan)
+    changed, diff = scope_diff(root, folder, "M1", plan)
     assert changed == ["data.txt", "src.py"]
     text = Path(diff).read_text(encoding="utf-8")
     assert "# 비교 불가(리뷰 시점 사본이 없거나 바뀜): src.py\n" in text
     assert "-d1\n+d2\n" in text and "-value = 1" not in text
     (Path(record["copies"]["dir"]) / record["snapshot"]["data.txt"]).unlink()
-    changed, other = verification.review_scope_diff(root, folder, "M1", plan)
+    changed, other = scope_diff(root, folder, "M1", plan)
     assert changed == ["data.txt", "src.py"] and other != diff
     assert "# 비교 불가(리뷰 시점 사본이 없거나 바뀜): data.txt\n" in Path(other).read_text(encoding="utf-8")
 
@@ -1414,7 +1419,7 @@ def test_review_scope_diff_marks_unreadable_current_file(mission, monkeypatch):
         return real(self)
 
     monkeypatch.setattr(Path, "read_bytes", failing)
-    changed, diff = verification.review_scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
+    changed, diff = scope_diff(root, folder, "M1", with_unit_brief(mission, receipt))
     assert changed == ["src.py"]
     assert "# 비교 불가(" in Path(diff).read_text(encoding="utf-8")
 
@@ -1873,6 +1878,49 @@ def test_review_scope_keeps_the_list_when_the_diff_cannot_be_written(mission, ca
     assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[1:] == ["src.py", "diff 쓰기 실패: denied"] and lines[0].endswith(": 1개")
+
+
+def test_review_scope_names_why_the_last_review_is_not_the_baseline_and_lists_real_changes(mission, capsys):
+    root, _, _ = mission
+    _, receipt = verify(mission)
+    review(mission, receipt)
+    assert mission_state.main(["unit", "set", "M1", "--done", "새 완료 조건"]) == 0
+    (root / "src.py").write_text("value = 6\n", encoding="utf-8")
+    capsys.readouterr()
+    assert mission_state.main(["review-scope", "M1", "--plan", str(root / "plan.json")]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "리뷰 변경 범위 M1: 2개",
+        "직전 리뷰를 비교 기준에서 제외함(계획·브리프 변경): 범위는 모든 입력임",
+        "직전 리뷰 이후 내용 변경 1개",
+        "  src.py",
+        "check.py",
+        "src.py",
+    ]
+
+
+@pytest.mark.parametrize("change,excluded", [
+    ("none", ""), ("plan", "계획·브리프 변경"), ("runner", "실행 환경 변경"), ("evidence", "리뷰 근거 파일 변경"),
+])
+def test_review_scope_keeps_the_reuse_rule_and_reports_each_exclusion(mission, change, excluded):
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    path = review(mission, receipt)
+    plan = with_unit_brief(mission, receipt)
+    if change == "plan":
+        del plan["unitBrief"]
+    elif change == "runner":
+        path.write_text(json.dumps({**receipt_data(path), "runner": "other"}), encoding="utf-8")
+    elif change == "evidence":
+        (root / "review.md").write_text("바뀐 리뷰 결과\n", encoding="utf-8")
+    scope = verification.review_scope_diff(root, folder, "M1", plan)
+    assert scope["excluded"] == excluded and scope["contentChanged"] == [] and scope["failure"] == ""
+    assert scope["changed"] == (["check.py", "src.py"] if excluded else [])
+
+
+def test_review_scope_without_a_prior_review_reports_no_exclusion(mission):
+    root, folder, plan = mission
+    scope = verification.review_scope_diff(root, folder, "M1", plan)
+    assert scope == {"changed": ["check.py", "src.py"], "diff": "", "failure": "", "excluded": "", "contentChanged": []}
 
 
 @pytest.mark.parametrize("pattern,key,expected", [

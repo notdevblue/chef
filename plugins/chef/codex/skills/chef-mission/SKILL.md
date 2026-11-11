@@ -164,7 +164,7 @@ python "<plugin-root>/codex/skills/chef-mission/scripts/mission_state.py" <명�
 | `handoff <id> --summary <결과> --detail <상세> [--evidence <근거>]…` | 기존 상세·증거 파일을 해시와 함께 읽기 전용 반환. 상태·완료·승인 불변 |
 | `preflight <id> --plan <json>` | 명령 실행 없이 계획·입력·실행 준비·참조 검사 |
 | `verify <id> --plan <json> [--force]` | 검증 실행·결과 수집, 유효한 같은 입력 결과 재사용 |
-| `review-scope <id> --plan <json>` | 직전 리뷰 이후 바뀐 입력 파일과 파일별 diff 경로(최신 리뷰 기록의 사본 기준, `review-start`를 썼으면 그 시작 시점 사본 대비, 새 파일 포함) |
+| `review-scope <id> --plan <json>` | 직전 리뷰 이후 바뀐 입력 파일과 파일별 diff 경로(최신 리뷰 기록의 사본 기준, `review-start`를 썼으면 그 시작 시점 사본 대비, 새 파일 포함). 계획·브리프·실행 환경·근거 변경으로 직전 리뷰를 기준에서 빼면 제외 사유와 실제 내용 변경 목록을 따로 줌 |
 | `review-start <id> --plan <json>` | 리뷰 파견 직전 입력 snapshot 기록. 리뷰 중 바뀐 파일은 다음 `review-scope` 범위로 넘어감 |
 | `review <id> --receipt <json> --evidence <파일> --reviewer <이름> --kind poc\|unit\|integration --status clean\|findings\|closed-low` | 독립 리뷰 근거와 검증 입력 상태 연결. `closed-low`는 Low만 남았을 때 코디네이터가 diff를 확인해 닫는 기록 |
 | `complete <id> --receipt <json> --review <json> --done-evidence <근거>` | 검증·리뷰(clean 또는 closed-low) 유효성 확인 → 판정·done·다음 단위 요약을 한 호출로 처리 |
