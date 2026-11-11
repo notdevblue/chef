@@ -305,7 +305,7 @@ PoC 명세와의 일치로 쓴다.
 - `model: "inherit"` — 이 스킬의 모든 역할 파견에서 Agent 호출 `model` 인자에 내 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘긴다.
   호출 인자는 별칭만 받으며 `inherit`나 전체 모델 ID는 줄 수 없다. 내 모델이 별칭에 대응하지 않으면 정의 모델로 두고 그 사실을 보고한다.
   effort 지시는 그대로다. 아래 Sonnet·Opus 배정과 verifier 고정보다 이 정책이 우선한다.
-- `model: "definition"` — 아래 모델 지시를 그대로 따른다.
+- `model: "definition"` — 아래 모델 지시를 그대로 따른다. Claude 리뷰·검증 파견은 그 별칭을 Agent 호출 `model` 인자에 넣는다. 인자를 비우면 역할 파일의 `inherit`가 코디네이터 모델이 되므로 리뷰·검증에서는 비우지 않는다.
 - `subagents: false` — `chef:dev-medium`(어댑터 `roles`가 가리키는 같은 계열 역할 포함)에 파견할 때 브리프에
   "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다.
   역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막지는 않는다. 반환된 분할안으로 새 단위를 파견하는 것은 내 몫이다.
@@ -322,7 +322,7 @@ PoC 명세와의 일치로 쓴다.
 3. **검증 파견** — 브리프의 타깃 명령·입력·환경과 `referenceBundle`로 계획 JSON을 한 번 만들고
    `preflight <id> --plan …`을 먼저 실행한다. 통과 뒤 그 단위의 `roles.verify` 하나에 `verify <id> --plan …` 실행과 결과 수집을 맡긴다. 역할이 없으면 `chef:verifier`를 쓴다.
    검증 자원이 다른 단위는 구현이 돌아오는 대로 각각 파견한다. 같은 자원을 쓰는 단위만 그 구현이 모두 돌아온 뒤 verifier 한 명에게 모은다.
-   - Claude Sonnet 5.5 / low로 고정한다(어댑터 `rolePolicy.model`이 `inherit`면 역할 정책이 우선). 역할이 없거나 모델을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
+   - Claude 검증 파견은 Agent 호출 `model` 인자에 `sonnet`을 넣는다(Sonnet 5.5 / low. `rolePolicy.model`이 `inherit`면 역할 정책이 우선). 역할이 없거나 모델을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
    - Unity Refresh·컴파일·EditMode·Play 순서와 입력 동결은 `references/verification-workflow.md`를 따른다.
    - Play 브리프에는 대상 프로젝트·조작 순서·기대 결과·증거 경로를 넣는다. 실패·예상 밖 상태는 증거와 미완료 이유를 메인에 반환한다.
    - 검증자는 코드·테스트·설정·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 원인 분석·수정·독립 리뷰·완료 판정은 분리한다.
@@ -332,16 +332,17 @@ PoC 명세와의 일치로 쓴다.
    - 에디터 준비·검증·결과 수집·정리는 어댑터 실행 명령에 묶는다. 프로젝트 경로·양수 테스트 수·결과 상태를 검사하고 이번에 연 에디터만 정리한다.
    - 어댑터가 정한 lint·규약 검사 명령은 계획 `commands[]`에 넣어 리뷰 파견 전에 돌린다. 통과 전에는 리뷰를 띄우지 않고 그 출력을 리뷰어에게 준다.
    - 리뷰 수정 뒤에는 같은 전체 계획으로 `verify`한다. 단계별 `inputs`를 선언한 `reusable` 단계는 바뀐 입력에 닿을 때만 실제로 돈다. 그 receipt로 통과 리뷰(clean·closed-low)를 기록한 뒤 `complete`한다(좁은 계획으로 재검증하면 `review-scope` 비교 기준이 끊긴다).
-4. **마일스톤 리뷰** — 검증이 끝난 단위부터 진행한다. 파일 소유가 겹치지 않으면 그 리뷰를 같은 턴에 파견한다. fresh `roles.review`(없으면 `chef:code-reviewer`) 하나로 첫 라운드는 단위 전체를 Opus / high로 본다(아래 작은 문서 변경은 예외, `rolePolicy.model`이 `inherit`면 역할 정책이 우선). fork는 쓰지 않는다.
-   좁은 수정 확인과 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 라운드는 `chef:reviewer-small`(Sonnet / medium)로 시작하고, 그 첫 리뷰 브리프에는 변경 전 본 대비 diff를 넣는다(`references/usage-policy.md`). 공통 계약·구조 변경, 불명확한 원인, 뜻·승인 범위 변경이 나오면
-   근거와 남은 범위를 반환받아 Opus / high 리뷰어(`roles.review`, 없으면 `chef:code-reviewer`)로 확대한다. 프로젝트 리뷰 규약은 두 역할 모두 지킨다.
+4. **마일스톤 리뷰** — 검증이 끝난 단위부터 진행한다. 파일 소유가 겹치지 않으면 그 리뷰를 같은 턴에 파견한다. `rolePolicy.model`이 `definition`이면 리뷰 파견의 Agent 호출 `model` 인자에 별칭만 넣는다(`opus` 또는 `sonnet`). 역할 이름이나 역할 파일의 `model: inherit`로 모델을 정하지 않는다. `inherit`면 그 정책이 우선한다. fork는 쓰지 않는다.
+   첫 심층 리뷰는 fresh `roles.review`(없으면 `chef:code-reviewer`)에 `model: "opus"`다(아래 작은 문서 변경은 예외).
+   직전 finding의 수정 확인은 같은 `roles.review`에 `model: "sonnet"`이다. 서버 체크리스트처럼 그 역할만 읽는 규약이 있으면 `chef:reviewer-small`로 바꾸지 않는다. 그 규약이 없는 좁은 확인과, 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 라운드만 `chef:reviewer-small`에 `model: "sonnet"`을 넣고, 그 브리프에는 변경 전 본 대비 diff를 넣는다(`references/usage-policy.md`).
+   원인 불명, 공통 계약·구조 변경, 판단 충돌일 때만 그 근거를 브리프에 적고 같은 역할에 `model: "opus"`로 확대한다. 독립 재리뷰는 이 Sonnet 재리뷰이거나 그 확대이며, 첫 라운드 Opus 호출을 반복하는 뜻이 아니다. 프로젝트 리뷰 규약은 두 역할 모두 지킨다.
    리뷰 파견 직전에 `review-start <id> --plan …`로 입력 snapshot을 기록하고 리뷰가 돌아올 때까지 그 범위를 고치지 않는다. 리뷰 중 바뀐 파일은 리뷰 기록에 남아 다음 `review-scope` 범위로 넘어가며 그 리뷰를 다시 하지 않는다.
    첫 리뷰는 같은 고정 참조 묶음으로 결함·규칙 위반·계약·호출부를 한 번에 대조하고 제안은 분리한다. 읽지 못한 경로는 검증 공백으로 적게 하고, 코디네이터가 그 공백을 같은 라운드 안에서 보강 지시한다.
    재리뷰는 같은 묶음과 `review-scope`의 파일별 diff·직전 finding·영향받는 계약만 본다. 바뀌지 않은 부분은 실제 결함·규칙·원문 근거가 있는 Medium 이상일 때만 다시 열고 Low는 제안으로 돌린다.
    finding은 고정 id·`severity`·원인·이전 해소 근거로 연결하고 미해결·새 지적·회귀를 구분한다. 같은 소유·원인·참조의 수정은 묶는다.
    고칠 방법이 정해진 finding은 담당 구현자에게 짧은 수정 브리프로 돌려 관련 승인 수정의 맥락을 재사용할 수 있다(고정 항목은 `references/verification-workflow.md`). PoC 원본 스킬의 새 에이전트 요구는 유지한다. 판단이 갈리면 멈춤 규칙을 따른다.
    열린 지적 0건(미해결 포함)에 제안만 남으면 clean이다. 제안은 루프 안에서 적용하지 않고 보고에 후속 후보로 남겨 사용자 판단에 맡긴다.
-   열린 지적이 전부 Low이고 회귀가 아니며 수정이 지적한 줄 범위 안에서 시그니처·계약·공개 동작을 바꾸지 않으면, 같은 구현자가 고친 뒤 코디네이터가 `review-scope`의 diff만 보고 각 id의 해소를 확인해 `review --status closed-low`로 기록하고 닫는다. 새 리뷰어를 띄우지 않는다. 그 밖(Medium 이상, 회귀, 계약 변경, 범위를 넘는 수정)은 독립 재리뷰이며 closed-low는 연속으로 쓰지 않는다(조건은 `references/verification-workflow.md`).
+   열린 지적이 전부 Low이고 회귀가 아니며 수정이 지적한 줄 범위 안에서 시그니처·계약·공개 동작을 바꾸지 않으면, 같은 구현자가 고친 뒤 코디네이터가 `review-scope`의 diff만 보고 각 id의 해소를 확인해 `review --status closed-low`로 기록하고 닫는다. 새 리뷰어를 띄우지 않는다. 그 밖(Medium 이상, 회귀, 계약 변경, 범위를 넘는 수정)은 위의 Sonnet 재리뷰다. Opus는 원인 불명·공통 계약·구조 변경·판단 충돌일 때만 쓴다. closed-low는 연속으로 쓰지 않는다(조건은 `references/verification-workflow.md`).
    clean·findings·closed-low 모두 실제 결과 파일을 `review`로 기록한다. clean과 findings는 `--findings-count`(남은 지적 수)와
    `--fixed-count`(이번 리뷰에서 해소를 확인한 직전 지적 수)를 함께 남기고 closed-low는 `--findings-count`를 0이거나 생략한다. 구조화 지적은 검증 절차의 `--findings-input` 계약을 따른다. 최대 3라운드이며 PoC는 §3의 한 라운드 규칙이 우선한다.
 5. **체크포인트와 완료** — 완료 조건을 확인하고 어댑터 절차로 shelve(또는 커밋)한 뒤
