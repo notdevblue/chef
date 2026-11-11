@@ -92,6 +92,19 @@ name	path	client	created	synced	state
   **사용자에게 그 자리에서 확인받은 뒤에만 `--yes`**를 붙인다. `ACTIVE`·열린 파일·shelve·pending CL이 있으면
   목록을 보이고 거부한다. 기록되지 않은 로컬 변경(새 파일·편집·삭제)이 있어도 목록을 보이고 거부하며, 사용자가
   버려도 된다고 한 뒤에만 `--discard-local`을 붙인다. `creating` 슬롯은 지우지 않는다(먼저 `create --resume`).
+- `inject <이름> (--text <답> | --file <파일>) [--session <id>] [--wait [--timeout 초] [--poll 초]] [--dry-run]` — Grok 슬롯 세션에
+  답을 넣는다(Grok 전용). 세션 id 를 안 주면 슬롯 `ACTIVE.session`이다. **세션이 쉬는 중일 때만** 넣는다: 마지막 턴이 `turn_completed`로
+  끝났고, 끝나지 않은 도구 호출·실행 중인 서브에이전트(백그라운드 포함)·백그라운드 작업이 없고, 서브에이전트 깨우기(`will_wake`)로
+  곧 시작될 턴도 없어야 한다(`~/.grok/sessions/<cwd>/<id>/updates.jsonl`·`events.jsonl`·`subagents/*/meta.json`으로 판정).
+  아니면 이유를 보이고 종료 코드 3으로 거부한다(전역 `follow_up_behavior = "steer"`라 턴 중에 넣으면 진행 중 작업을 가로챔).
+  `--wait`는 쉬는 중이 될 때까지 `--poll`초마다 보다가 `--timeout`초(기본 1800)가 지나면 거부한다.
+  슬롯 리더가 살아 있으면 ACP 클라이언트로 그 리더에 붙어 넣어 열린 TUI 화면에 새 턴이 보인다. 리더가 없으면
+  `grok --cwd <슬롯> -r <id> -p <답>`으로 넣되, 그 세션 TUI 가 열려 있으면(`~/.grok/active_sessions.json`·명령줄) 거부한다.
+  새 턴이 기록되면 성공(0)이다. 넣는 프로세스는 백그라운드로 턴 끝까지 돌고 로그는 `<stateDir>/slots/inject/`에 남는다.
+  세션 cwd 가 슬롯 폴더가 아니면 거부한다.
+- `--runtime grok`의 `run`(새 세션·`--resume` 모두)은 TUI 를 리더 모드(`grok --leader --leader-socket ~/.grok/leader-<프로젝트>-<이름>.sock`)로
+  띄우고 소켓 경로를 `<stateDir>/slots/<이름>-grok-leader.json`에 남긴다. 리더는 TUI 가 처음 뜰 때 스스로 띄우고 창을 닫아도 남는다.
+  이 변경 전에 띄운 Grok 슬롯 창은 리더 모드가 아니라 `inject`가 TUI 화면에 못 보이므로, 다음 재개 때 `run --resume`으로 다시 열면 붙는다.
 - 모든 명령의 `--dry-run`은 실행할 명령과 거부 사유만 출력한다(읽기 전용 VCS 조회만 한다).
 
 ## 흐름

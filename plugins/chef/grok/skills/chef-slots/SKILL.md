@@ -25,6 +25,7 @@ python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --proj
 python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" refresh <이름> --dry-run
 python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" run <이름> "<목표>" --dry-run
 python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" remove <이름> --yes
+python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" inject <이름> --file <답.txt> --dry-run
 ```
 
 - `create`·`refresh`는 먼저 `--dry-run`으로 기준과 거부 사유를 본다. 사용자가 그 실행을 승인한 뒤에만 본명령을 돌린다.
@@ -41,3 +42,14 @@ Grok CLI가 이미 등록된 슬롯 경로에서 실행 중이면 `chef-run`으�
 Codex 세션은 사용자가 그 런타임을 지정할 때만 `<repo>/plugins/chef/codex/skills/chef-slots/scripts/slots.py`의 `run`이다.
 
 대시보드가 필요하면 `<repo>/plugins/chef/skills/slots/scripts/dashboard.py`를 읽기 전용으로 띄운다. 답과 승인은 대시보드에 쓰지 않는다.
+
+## 답 넣기 (inject)
+
+슬롯 Grok 세션에 사용자 답을 넣을 때는 `inject`만 쓴다. `grok -r -p`를 손으로 부르지 않는다.
+
+```text
+python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" inject <이름> --file <답.txt> [--session <id>] [--wait]
+```
+
+- 세션이 쉬는 중(턴 끝, 도구 호출·서브에이전트·백그라운드 작업 없음)일 때만 넣는다. 아니면 종료 코드 3과 이유가 나온다. 턴 중에 넣으면 진행 중 작업을 가로채므로 우회하지 않는다.
+- `run --runtime grok`으로 띄운 창은 리더 모드라 넣은 답이 열린 TUI 화면에 그대로 보인다. 리더 없이 열린 창이면 거부하니 창을 닫거나 `run <이름> --resume`으로 다시 연다(그 세션이 쉬는 중일 때만).

@@ -2797,3 +2797,66 @@ def test_session_runtime_refuses_meta_only_transcript(recorded_session):
     lines = [{"type": "custom-title"}, {"type": "agent-name", "sessionId": "other"}]
     transcript.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
     assert slots.session_runtime(str(folder), session) == ""
+
+
+def grok_session_file(tmp_path, session, *kinds):
+    path = tmp_path / "grok" / "sessions" / "workspace-hash" / session / "updates.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps({"params": {"sessionId": session, "update": {"sessionUpdate": kind}}}) + "\n" for kind in kinds), encoding="utf-8")
+    return path
+
+
+def test_run_grok_launches_leader_mode_with_stable_slot_socket(project, tmp_path, monkeypatch):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grok"))
+    project.write_adapter([])
+    seed_slot(project, "a")
+    code, out, err = project.run("--runtime", "grok", "run", "a", "task", "--dry-run")
+    assert code == slots.OK, err
+    socket = str(tmp_path / "grok" / "leader-fake-a.sock")
+    assert "--leader --leader-socket" in out and socket in out
+    located = slots.locate(str(project.dir))
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, "grok"), "grok")
+    assert slots.read_grok_leader_socket(config, "a") == socket
+    monkeypatch.setattr(slots.subprocess, "Popen", lambda *args, **kwargs: None)
+    slots.launch_mission(config, "a", slots.wt_command(config, "a", "task"))
+    record = json.loads(Path(slots.grok_leader_record_path(config, "a")).read_text(encoding="utf-8"))
+    assert record["socket"] == socket and record["slot"] == config.slot_path("a")
+
+
+def test_inject_refuses_busy_session(project, tmp_path, monkeypatch):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grok"))
+    project.write_adapter([])
+    seed_slot(project, "a")
+    session = str(uuid.uuid4())
+    grok_session_file(tmp_path, session, "turn_completed", "user_message_chunk", "agent_message_chunk")
+    monkeypatch.setattr(slots.grok_inject, "grok_processes", lambda: pytest.fail("busy session must be refused before routing"))
+    code, out, err = project.run("--runtime", "grok", "inject", "a", "--session", session, "--text", "answer")
+    assert code == slots.BUSY, err
+    assert "쉬는 중이 아님" in out
+
+
+def test_inject_refuses_open_tui_without_leader(project, tmp_path, monkeypatch):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grok"))
+    project.write_adapter([])
+    seed_slot(project, "a")
+    session = str(uuid.uuid4())
+    grok_session_file(tmp_path, session, "user_message_chunk", "turn_completed")
+    (tmp_path / "grok" / "active_sessions.json").write_text(json.dumps([{"session_id": session, "pid": 4242}]), encoding="utf-8")
+    monkeypatch.setattr(slots.grok_inject, "grok_processes", lambda: {4242: "grok.exe -r"})
+    monkeypatch.setattr(slots.grok_inject, "spawn_detached", lambda *args: pytest.fail("must not inject"))
+    code, out, _ = project.run("--runtime", "grok", "inject", "a", "--session", session, "--text", "answer")
+    assert code == slots.FAILED
+    assert "TUI" in out and "4242" in out
+
+
+def test_inject_dry_run_picks_live_leader(project, tmp_path, monkeypatch):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grok"))
+    project.write_adapter([])
+    seed_slot(project, "a")
+    session = str(uuid.uuid4())
+    grok_session_file(tmp_path, session, "user_message_chunk", "turn_completed")
+    (tmp_path / "grok" / "leader-fake-a.lock").write_text("777", encoding="utf-8")
+    monkeypatch.setattr(slots.grok_inject, "grok_processes", lambda: {777: "grok.exe agent leader --no-exit-on-disconnect"})
+    code, out, _ = project.run("--runtime", "grok", "inject", "a", "--session", session, "--text", "answer", "--dry-run")
+    assert code == slots.OK
+    assert "리더 777" in out

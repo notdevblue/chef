@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
@@ -270,3 +271,136 @@ def merge_subagent_record(lifecycle, metadata):
     if lifecycle["completed_at"] and metadata["completed_at"] and metadata["completed_at"] > lifecycle["completed_at"]:
         return metadata
     return lifecycle
+
+
+TERMINAL_TOOL_STATUSES = {"completed", "failed", "cancelled", "canceled", "error"}
+WAKE_GRACE_SECONDS = 180
+
+
+def entry_seconds(entry, params):
+    meta = params.get("_meta")
+    value = meta.get("agentTimestampMs") if isinstance(meta, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value / 1000
+    value = entry.get("timestamp")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return 0.0
+
+
+def turn_events_busy(path):
+    # events.jsonl 은 turn_started·turn_ended 를 따로 남김. 끝 없는 시작이 마지막이면 턴이 도는 중
+    events = os.path.join(os.path.dirname(os.path.abspath(path)), "events.jsonl")
+    if not os.path.isfile(events):
+        return False
+    state = False
+    with open(events, "rb") as handle:
+        for line in handle:
+            try:
+                entry = json.loads(line.decode("utf-8-sig", errors="replace"))
+            except ValueError:
+                continue
+            if isinstance(entry, dict) and entry.get("type") == "turn_started":
+                state = True
+            elif isinstance(entry, dict) and entry.get("type") == "turn_ended":
+                state = False
+    return state
+
+
+def first_line(value, limit=60):
+    text = str(value or "").strip().splitlines()
+    return text[0][:limit] if text else ""
+
+
+def busy_reasons(path, home="", now=None):
+    """세션이 쉬는 중이 아니면 이유 목록, 쉬는 중이면 빈 목록.
+
+    쉬는 중 = 마지막 턴이 turn_completed 로 끝났고, 그 턴에 끝나지 않은 도구 호출이 없고,
+    실행 중인 서브에이전트·백그라운드 작업이 없고, 서브에이전트 깨우기(will_wake)로 곧 시작될 턴도 없음.
+    """
+    parent = session_id(path)
+    now = time.time() if now is None else now
+    in_turn = False
+    seen_turn = False
+    tools = {}
+    background = {}
+    subagents = {}
+    wakes = []
+    for entry in entries(path):
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            continue
+        if parent and params.get("sessionId") not in (None, parent):
+            continue
+        update = params.get("update")
+        if not isinstance(update, dict) or not isinstance(update.get("sessionUpdate"), str):
+            continue
+        kind = update["sessionUpdate"]
+        if kind in ACTIVE_UPDATES:
+            if not in_turn:
+                tools = {}
+                wakes = []
+            in_turn = seen_turn = True
+        call = update.get("toolCallId")
+        if kind == "tool_call" and isinstance(call, str):
+            tools[call] = (update.get("status") or "pending", update.get("title") or "")
+        elif kind == "tool_call_update" and isinstance(call, str):
+            status, title = tools.get(call, ("pending", ""))
+            tools[call] = (update.get("status") or status, update.get("title") or title)
+        elif kind == "turn_completed":
+            in_turn = False
+            seen_turn = True
+            tools = {}
+        elif kind == "background_tasks" and isinstance(update.get("tasks"), list):
+            background = {
+                str(task.get("task_id")): task.get("description") or task.get("command")
+                for task in update["tasks"]
+                if isinstance(task, dict) and task.get("status", "running") == "running"
+            }
+        elif kind == "task_backgrounded" and (update.get("task_id") or update.get("tool_call_id")):
+            background[str(update.get("task_id") or update.get("tool_call_id"))] = update.get("description") or update.get("command")
+        elif kind == "task_completed":
+            snapshot = update.get("task_snapshot")
+            task = snapshot.get("task_id") if isinstance(snapshot, dict) else update.get("task_id")
+            background.pop(str(task), None)
+        elif kind == "subagent_spawned" and update.get("subagent_id"):
+            subagents[str(update["subagent_id"])] = update.get("description") or ""
+        elif kind == "subagent_finished":
+            subagents.pop(str(update.get("subagent_id")), None)
+            if update.get("will_wake") and not in_turn:
+                wakes.append((entry_seconds(entry, params), str(update.get("subagent_id") or "")))
+    # subagents/<id>/meta.json 의 status 가 더 늦게 갱신될 수 있어 같이 봄 (attempt_id 형식은 따지지 않음)
+    root = os.path.join(os.path.dirname(os.path.abspath(path)), "subagents")
+    if os.path.isdir(root):
+        for name in sorted(os.listdir(root)):
+            try:
+                with open(os.path.join(root, name, "meta.json"), encoding="utf-8-sig") as handle:
+                    meta = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(meta, dict) or (parent and meta.get("parent_session_id") not in (None, parent)):
+                continue
+            if meta.get("status") == "running":
+                subagents.setdefault(name, meta.get("description") or "")
+            elif meta.get("status") in SUBAGENT_STATUSES:
+                subagents.pop(name, None)
+    reasons = []
+    if in_turn:
+        reasons.append("마지막 턴이 아직 안 끝남 (turn_completed 없음)")
+    elif not seen_turn:
+        reasons.append("끝난 턴 기록이 없음")
+    elif turn_events_busy(path):
+        reasons.append("events.jsonl 에 끝나지 않은 turn_started 가 있음")
+    pending = [f"{call} {first_line(title)}".strip() for call, (status, title) in tools.items() if status not in TERMINAL_TOOL_STATUSES]
+    if pending:
+        reasons.append(f"끝나지 않은 도구 호출 {len(pending)}개: " + ", ".join(pending[:5]))
+    if subagents:
+        texts = [f"{subagent} {first_line(text)}".strip() for subagent, text in subagents.items()]
+        reasons.append(f"실행 중인 서브에이전트 {len(texts)}개: " + ", ".join(texts[:5]))
+    if background:
+        texts = [f"{task} {first_line(text)}".strip() for task, text in background.items()]
+        reasons.append(f"실행 중인 백그라운드 작업 {len(texts)}개: " + ", ".join(texts[:5]))
+    waking = [subagent for stamp, subagent in wakes if now - stamp < WAKE_GRACE_SECONDS]
+    if waking:
+        reasons.append("서브에이전트가 끝나며 메인을 깨우는 중 (will_wake): " + ", ".join(waking))
+    return reasons

@@ -22,10 +22,12 @@ sys.path.insert(0, os.path.normpath(os.path.join(HOOKS_DIR, "..", "grok", "scrip
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mission", "scripts")))
 import mission_guard  # noqa: E402
 import grok_transcript
+import grok_inject  # noqa: E402
 
 OK = 0
 FAILED = 1
 USAGE = 2
+BUSY = 3
 RUNTIMES = ("claude", "codex", "grok")
 
 ROW_FIELDS = ("name", "path", "client", "created", "synced", "state")
@@ -1489,7 +1491,8 @@ def wt_command(config, name, task, session_task="", resume_session=""):
             options += ["resume", resume_session]
         return command + wt_child_command(executable, options + [escaped])
     if config.runtime == "grok":
-        options = ["--cwd", config.slot_path(name)]
+        # 리더 모드로 띄워야 inject 가 같은 리더에 붙어 열린 TUI 화면에 새 턴을 보여 줌
+        options = ["--leader", "--leader-socket", grok_leader_socket(config, name), "--cwd", config.slot_path(name)]
         if resume_session:
             options += ["--resume", resume_session]
         else:
@@ -1508,7 +1511,36 @@ def wt_command(config, name, task, session_task="", resume_session=""):
     ])
 
 
+def grok_leader_socket(config, name):
+    # 슬롯마다 고정 경로. ~/.grok/leader-*.sock 이름이라 grok leader list/kill 도 찾음
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", f"{config.project_name}-{name}").strip("-").lower()
+    return os.path.join(grok_transcript.grok_home(), f"leader-{slug}.sock")
+
+
+def grok_leader_record_path(config, name):
+    return normalize(os.path.join(config.state_dir, "slots", f"{name}-grok-leader.json"))
+
+
+def write_grok_leader_record(config, name):
+    path = grok_leader_record_path(config, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    record = {"socket": grok_leader_socket(config, name), "slot": config.slot_path(name), "launched": datetime.now().isoformat(timespec="seconds")}
+    with open(path, "w", encoding="utf-8") as stream:
+        json.dump(record, stream, ensure_ascii=False, indent=2)
+
+
+def read_grok_leader_socket(config, name):
+    try:
+        with open(grok_leader_record_path(config, name), encoding="utf-8-sig") as stream:
+            socket = json.load(stream).get("socket")
+    except (OSError, ValueError, AttributeError):
+        socket = ""
+    return socket if isinstance(socket, str) and socket else grok_leader_socket(config, name)
+
+
 def launch_mission(config, name, command):
+    if config.runtime == "grok" and "--leader" in command:
+        write_grok_leader_record(config, name)
     subprocess.Popen(command, env=launch_env())
 
 
@@ -1876,6 +1908,34 @@ def cmd_status(config, args):
     return OK
 
 
+def cmd_inject(config, args):
+    name = config.check_name(args.name)
+    if args.file:
+        try:
+            with open(args.file, encoding="utf-8-sig") as stream:
+                text = stream.read()
+        except OSError as e:
+            raise UsageError(f"--file 을 못 읽음: {e}") from e
+    else:
+        text = args.text or ""
+    if not text.strip():
+        raise UsageError("넣을 내용이 비어 있음 (--text 또는 --file)")
+    session = args.session or active_of(config, name).session
+    if not session:
+        raise UsageError(f"슬롯 {name} 에 ACTIVE 세션이 없음 — --session 으로 줄 것")
+    if not os.path.isdir(config.slot_path(name)):
+        raise UsageError(f"슬롯 폴더 없음: {config.slot_path(name)}")
+    try:
+        return grok_inject.inject(
+            config.slot_path(name), session, text, read_grok_leader_socket(config, name),
+            log_dir=os.path.join(config.state_dir, "slots", "inject"), wait=args.wait, timeout=args.timeout,
+            poll=args.poll, dry_run=args.dry_run, env=launch_env(),
+        )
+    except grok_inject.InjectError as e:
+        print(f"실패: {e}")
+        return FAILED
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="slots.py", description="슬롯 워크스페이스 관리")
     parser.add_argument("--project", help="어댑터를 찾기 시작할 폴더 (기본: 현재 폴더)")
@@ -1916,6 +1976,17 @@ def build_parser():
     remove.add_argument("names", nargs="*")
     remove.add_argument("--yes", action="store_true")
     remove.add_argument("--discard-local", action="store_true")
+
+    inject = sub.add_parser("inject", parents=[common])
+    inject.add_argument("name")
+    inject.add_argument("--session", default="")
+    text = inject.add_mutually_exclusive_group(required=True)
+    text.add_argument("--text")
+    text.add_argument("--file")
+    inject.add_argument("--wait", action="store_true")
+    inject.add_argument("--timeout", type=int, default=1800)
+    inject.add_argument("--poll", type=int, default=15)
+    inject.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -1925,6 +1996,7 @@ COMMANDS = {
     "refresh": cmd_refresh,
     "run": cmd_run,
     "remove": cmd_remove,
+    "inject": cmd_inject,
 }
 
 

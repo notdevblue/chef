@@ -316,3 +316,71 @@ def test_summary_parent_references_do_not_invent_subagent_relationships(tmp_path
     child = write(tmp_path / "sessions/child/forked-session/updates.jsonl", update("turn_completed", session="forked-session"))
     child.with_name("summary.json").write_text(json.dumps({"parent_session_id": "sample-session"}), encoding="utf-8")
     assert grok_transcript.subagent_records(parent) == []
+
+
+def busy_update(kind, timestamp=1800000000, **fields):
+    return {"timestamp": timestamp, "params": {"sessionId": "sample-session", "update": {"sessionUpdate": kind, **fields}}}
+
+
+def busy_path(tmp_path, *events):
+    return write(tmp_path / "sample-session" / "updates.jsonl", *events)
+
+
+def test_busy_reasons_idle_after_completed_turn(tmp_path):
+    path = busy_path(tmp_path, busy_update("user_message_chunk"), busy_update("tool_call", toolCallId="t1"),
+                     busy_update("tool_call_update", toolCallId="t1", status="completed"), busy_update("turn_completed"))
+    assert grok_transcript.busy_reasons(str(path), now=1800000000) == []
+
+
+def test_busy_reasons_running_turn_and_open_tool(tmp_path):
+    path = busy_path(tmp_path, busy_update("turn_completed"), busy_update("user_message_chunk"),
+                     busy_update("tool_call", toolCallId="t2", title="run_terminal_command"))
+    reasons = grok_transcript.busy_reasons(str(path), now=1800000000)
+    assert any("turn_completed" in reason for reason in reasons)
+    assert any("t2" in reason for reason in reasons)
+
+
+def test_busy_reasons_interrupted_turn_tools_do_not_linger(tmp_path):
+    path = busy_path(tmp_path, busy_update("user_message_chunk"), busy_update("tool_call", toolCallId="t3"),
+                     busy_update("turn_completed", stop_reason="interrupted"))
+    assert grok_transcript.busy_reasons(str(path), now=1800000000) == []
+
+
+def test_busy_reasons_background_task_until_completed(tmp_path):
+    events = [busy_update("user_message_chunk"),
+              busy_update("task_backgrounded", task_id="bg1", tool_call_id="c1", command="Start-Sleep 75"),
+              busy_update("background_tasks", tasks=[{"task_id": "bg1", "status": "running", "description": "sleep"}]),
+              busy_update("turn_completed")]
+    path = busy_path(tmp_path, *events)
+    assert any("bg1" in reason for reason in grok_transcript.busy_reasons(str(path), now=1800000000))
+    path = busy_path(tmp_path, *events, busy_update("task_completed", task_snapshot={"task_id": "bg1", "status": "completed"}),
+                     busy_update("background_tasks", tasks=[]))
+    assert grok_transcript.busy_reasons(str(path), now=1800000000) == []
+
+
+def test_busy_reasons_background_subagent_and_wake(tmp_path):
+    spawned = busy_update("subagent_spawned", subagent_id="sub1", attempt_id="at1.abc", parent_session_id="sample-session",
+                          child_session_id="sub1", description="sleep then reply")
+    path = busy_path(tmp_path, busy_update("user_message_chunk"), spawned, busy_update("turn_completed"))
+    assert any("sub1" in reason for reason in grok_transcript.busy_reasons(str(path), now=1800000000))
+    finished = busy_update("subagent_finished", timestamp=1800000100, subagent_id="sub1", attempt_id="at1.abc",
+                           child_session_id="sub1", status="completed", will_wake=True)
+    path = busy_path(tmp_path, busy_update("user_message_chunk"), spawned, busy_update("turn_completed"), finished)
+    assert any("will_wake" in reason for reason in grok_transcript.busy_reasons(str(path), now=1800000110))
+    assert grok_transcript.busy_reasons(str(path), now=1800000100 + grok_transcript.WAKE_GRACE_SECONDS + 1) == []
+
+
+def test_busy_reasons_reads_subagent_meta_status(tmp_path):
+    path = busy_path(tmp_path, busy_update("user_message_chunk"), busy_update("turn_completed"))
+    meta = path.parent / "subagents" / "sub9" / "meta.json"
+    meta.parent.mkdir(parents=True)
+    meta.write_text(json.dumps({"subagent_id": "sub9", "parent_session_id": "sample-session", "status": "running"}), encoding="utf-8")
+    assert any("sub9" in reason for reason in grok_transcript.busy_reasons(str(path), now=1800000000))
+    meta.write_text(json.dumps({"subagent_id": "sub9", "parent_session_id": "sample-session", "status": "completed"}), encoding="utf-8")
+    assert grok_transcript.busy_reasons(str(path), now=1800000000) == []
+
+
+def test_busy_reasons_events_jsonl_open_turn(tmp_path):
+    path = busy_path(tmp_path, busy_update("user_message_chunk"), busy_update("turn_completed"))
+    (path.parent / "events.jsonl").write_text(json.dumps({"type": "turn_ended"}) + "\n" + json.dumps({"type": "turn_started"}) + "\n", encoding="utf-8")
+    assert any("events.jsonl" in reason for reason in grok_transcript.busy_reasons(str(path), now=1800000000))
