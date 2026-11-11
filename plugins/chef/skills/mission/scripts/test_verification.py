@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -1723,6 +1724,97 @@ def test_glob_matching_ignores_case_only_where_path_inputs_do(monkeypatch):
     monkeypatch.setattr(verification, "glob_ignores_case", lambda: False)
     assert verification.input_matcher("glob", "src/**/*.cs")("src/A/Foo.CS") is False
     assert verification.input_matcher("glob", "src/**/*.cs")("src/A/Foo.cs") is True
+
+
+def many_inputs_plan(root, count):
+    names = [f"src/g{index % 10}/f{index}.txt" for index in range(count)]
+    for name in names + ["docs/a.md", "docs/deep/b.md"]:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(name, encoding="utf-8")
+    commands = [{"argv": [sys.executable, "-c", "pass"], "inputs": list(names)} for _ in range(3)]
+    commands.append({"argv": [sys.executable, "-c", "pass"], "inputs": ["docs", "docs/deep", "src/g1/*.txt"]})
+    plan = {"grade": "pytest-pass", "environment": {"os": "fictional"}, "inputs": names + ["docs"],
+            "commands": commands}
+    return names, plan
+
+
+def matcher_selection(root, command, before):
+    matchers = [verification.input_matcher(*verification.parse_input_entry(root, value))
+                for value in command["inputs"]]
+    return sorted(key for key in before if any(matcher(key) for matcher in matchers))
+
+
+def test_many_declared_inputs_resolve_linearly_and_select_what_the_matchers_select(tmp_path, monkeypatch):
+    count = 400
+    names, plan = many_inputs_plan(tmp_path, count)
+    before = verification.snapshot(tmp_path, plan["inputs"])
+    expected = [matcher_selection(tmp_path, command, before) for command in plan["commands"]]
+    real, calls = Path.resolve, []
+
+    def counted(self, *args, **kwargs):
+        calls.append(self)
+        if len(calls) > 40 * count:
+            pytest.fail("Path.resolve 호출이 선언 입력 수에 비례하지 않음")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    assert verification.validate_plan(tmp_path, plan, ["pytest-pass"], require_matches=True) is plan
+    assert [sorted(verification.step_inputs(tmp_path, command, before)) for command in plan["commands"]] == expected
+    assert expected[0] == sorted(names)
+    assert expected[3] == sorted(["docs/a.md", "docs/deep/b.md"] + [name for name in names if name.startswith("src/g1/")])
+
+
+def test_step_input_selection_does_not_compare_every_file_with_every_declaration(monkeypatch):
+    keys = [f"src/g{index % 10}/f{index}.txt" for index in range(5000)]
+    before = dict.fromkeys(keys, "hash")
+    monkeypatch.setattr(verification, "parse_input_entry", lambda project, value: ("path", value))
+    start = time.perf_counter()
+    selected = verification.step_inputs("unused", {"inputs": keys[::2] + ["src/g1"]}, before)
+    assert time.perf_counter() - start < 1
+    assert list(selected) == [key for index, key in enumerate(keys) if index % 2 == 0 or key.startswith("src/g1/")]
+
+
+@pytest.mark.parametrize("declared,message", [
+    ("docs/a", "일치하지 않음"), ("src/g1", "계획 inputs 안의 경로여야 함"),
+    ("src/g1/f1", "계획 inputs 안의 경로여야 함"), ("docs/deep", ""), ("gone/x.txt", "case"),
+])
+def test_declared_path_checks_keep_containment_and_match_results(tmp_path, declared, message):
+    _, plan = many_inputs_plan(tmp_path, 20)
+    plan["inputs"].append("Gone")
+    plan["commands"][3]["inputs"] = [declared]
+    files = verification.snapshot(tmp_path, plan["inputs"])
+    _, text = verification.parse_input_entry(tmp_path, declared)
+    target = (tmp_path.resolve() / text).resolve()
+    inside = any(target.is_relative_to(verification.project_path(tmp_path, value)) for value in plan["inputs"])
+    matched = any(verification.input_matcher("path", text)(key) for key in files)
+    expected = ""
+    if not inside:
+        expected = "계획 inputs 안의 경로여야 함"
+    elif not matched:
+        expected = "일치하지 않음"
+    if message != "case":
+        assert expected == message
+    if expected:
+        with pytest.raises(verification.VerificationError, match=f"{expected}: {declared}"):
+            verification.validate_command_inputs(tmp_path, plan, files, require_matches=True)
+    else:
+        verification.validate_command_inputs(tmp_path, plan, files, require_matches=True)
+
+
+def test_declared_path_through_a_symlink_is_checked_against_the_resolved_plan_input(tmp_path):
+    _, plan = many_inputs_plan(tmp_path, 20)
+    try:
+        (tmp_path / "linked").symlink_to(tmp_path / "docs", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink permission unavailable")
+    plan["commands"][3]["inputs"] = ["linked/deep"]
+    files = verification.snapshot(tmp_path, plan["inputs"])
+    verification.validate_command_inputs(tmp_path, plan, files, require_matches=True)
+    assert sorted(verification.step_inputs(tmp_path, plan["commands"][3], files)) == ["docs/deep/b.md"]
+    plan["inputs"] = [name for name in plan["inputs"] if name != "docs"] + ["linked/a.md"]
+    plan["commands"][3]["inputs"] = ["docs/deep"]
+    with pytest.raises(verification.VerificationError, match="계획 inputs 안의 경로여야 함: docs/deep"):
+        verification.validate_command_inputs(tmp_path, plan, verification.snapshot(tmp_path, plan["inputs"]))
 
 
 def test_review_scope_keeps_the_list_when_the_diff_cannot_be_written(mission, capsys, monkeypatch):

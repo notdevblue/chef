@@ -333,16 +333,31 @@ def input_matcher(kind, text):
     return lambda key: key == text or key.startswith(text + "/")
 
 
+def key_folders(key):
+    parts = key.split("/")
+    return ["/".join(parts[:count]) for count in range(1, len(parts))]
+
+
 def step_inputs(project, command, before):
     if "inputs" not in command:
         return before
-    matchers = [input_matcher(*parse_input_entry(project, value)) for value in command["inputs"]]
-    return {key: value for key, value in before.items() if any(matcher(key) for matcher in matchers)}
+    paths, matchers = set(), []
+    for value in command["inputs"]:
+        kind, text = parse_input_entry(project, value)
+        if kind == "path":
+            paths.add(text)
+        else:
+            matchers.append(input_matcher(kind, text))
+    return {key: value for key, value in before.items()
+            if "." in paths or key in paths or not paths.isdisjoint(key_folders(key))
+            or any(matcher(key) for matcher in matchers)}
 
 
 def validate_command_inputs(project, plan, files, require_matches=False):
-    roots = [project_path(project, value) for value in plan["inputs"]]
+    roots = {project_path(project, value) for value in plan["inputs"]}
     root = Path(project).resolve()
+    folders = {folder for key in files for folder in key_folders(key)}
+    checked = set()
     for command in plan["commands"]:
         if "inputs" not in command:
             continue
@@ -350,11 +365,22 @@ def validate_command_inputs(project, plan, files, require_matches=False):
         if not isinstance(declared, list) or not declared:
             raise VerificationError("command.inputs 는 비어 있지 않은 경로·글롭 배열이어야 함")
         for value in declared:
+            if isinstance(value, str) and value in checked:
+                continue
             kind, text = parse_input_entry(project, value)
-            if kind == "path" and not any((root / text).resolve().is_relative_to(base) for base in roots):
-                raise VerificationError(f"command.inputs 는 계획 inputs 안의 경로여야 함: {value}")
+            checked.add(value)
+            if kind == "path":
+                target = (root / text).resolve()
+                if target not in roots and roots.isdisjoint(target.parents):
+                    raise VerificationError(f"command.inputs 는 계획 inputs 안의 경로여야 함: {value}")
             matcher = input_matcher(kind, text)
-            if require_matches and not any(matcher(key) for key in files):
+            if not require_matches:
+                continue
+            if kind == "glob" or text == ".":
+                matched = any(matcher(key) for key in files)
+            else:
+                matched = text in files or text in folders
+            if not matched:
                 raise VerificationError(f"command.inputs 가 계획 inputs 의 파일과 일치하지 않음: {value}")
 
 
