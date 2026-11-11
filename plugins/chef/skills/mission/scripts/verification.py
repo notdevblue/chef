@@ -170,11 +170,14 @@ def runtime_key(project, plan, settings=None):
 
 
 def project_path(project, value):
+    return rooted_path(Path(project).resolve(), value)
+
+
+def rooted_path(root, value):
     if not isinstance(value, str) or not value:
         raise VerificationError("비어 있지 않은 문자열 경로가 필요함")
     if any(ord(char) < 32 or 127 <= ord(char) < 160 for char in value):
         raise VerificationError("경로에 제어 문자를 쓸 수 없음")
-    root = Path(project).resolve()
     path = (root / value).resolve()
     if not path.is_relative_to(root):
         raise VerificationError(f"프로젝트 밖 경로: {value}")
@@ -187,10 +190,12 @@ def snapshot(project, inputs):
     files = {}
     root = Path(project).resolve()
     for value in inputs:
-        path = project_path(project, value)
-        candidates = sorted(path.rglob("*")) if path.is_dir() else [path]
-        for candidate in candidates:
-            resolved = project_path(project, str(candidate))
+        path = rooted_path(root, value)
+        if path.is_dir():
+            candidates = [(candidate, rooted_path(root, str(candidate))) for candidate in sorted(path.rglob("*"))]
+        else:
+            candidates = [(path, path)]
+        for candidate, resolved in candidates:
             if resolved.is_dir():
                 continue
             key = candidate.relative_to(root).as_posix()
@@ -273,6 +278,10 @@ def validate_plan(project, plan, grades, require_matches=False):
 
 
 def parse_input_entry(project, value):
+    return rooted_input_entry(Path(project).resolve(), value)
+
+
+def rooted_input_entry(root, value):
     if not isinstance(value, str) or not value:
         raise VerificationError("command.inputs 는 비어 있지 않은 경로·글롭 문자열 배열이어야 함")
     text = value.replace("\\", "/")
@@ -283,8 +292,7 @@ def parse_input_entry(project, value):
         raise VerificationError(f"command.inputs 경로 형식 오류: {value}")
     if any(char in text for char in "*?["):
         return "glob", text
-    root = Path(project).resolve()
-    return "path", project_path(project, text).relative_to(root).as_posix()
+    return "path", rooted_path(root, text).relative_to(root).as_posix()
 
 
 def glob_regex(pattern):
@@ -341,9 +349,10 @@ def key_folders(key):
 def step_inputs(project, command, before):
     if "inputs" not in command:
         return before
+    root = Path(project).resolve()
     paths, matchers = set(), []
     for value in command["inputs"]:
-        kind, text = parse_input_entry(project, value)
+        kind, text = rooted_input_entry(root, value)
         if kind == "path":
             paths.add(text)
         else:
@@ -354,8 +363,8 @@ def step_inputs(project, command, before):
 
 
 def validate_command_inputs(project, plan, files, require_matches=False):
-    roots = {project_path(project, value) for value in plan["inputs"]}
     root = Path(project).resolve()
+    roots = {rooted_path(root, value) for value in plan["inputs"]}
     folders = {folder for key in files for folder in key_folders(key)}
     checked = set()
     for command in plan["commands"]:
@@ -367,10 +376,10 @@ def validate_command_inputs(project, plan, files, require_matches=False):
         for value in declared:
             if isinstance(value, str) and value in checked:
                 continue
-            kind, text = parse_input_entry(project, value)
+            kind, text = rooted_input_entry(root, value)
             checked.add(value)
             if kind == "path":
-                target = (root / text).resolve()
+                target = root / text
                 if target not in roots and roots.isdisjoint(target.parents):
                     raise VerificationError(f"command.inputs 는 계획 inputs 안의 경로여야 함: {value}")
             matcher = input_matcher(kind, text)
@@ -602,12 +611,12 @@ def output_snapshot(project, outputs):
     state = {}
     root = Path(project).resolve()
     for value in outputs:
-        path = project_path(project, value)
+        path = rooted_path(root, value)
         entries = [path]
         if path.is_dir():
             entries.extend(sorted(path.rglob("*")))
         for entry in entries:
-            target = project_path(project, str(entry))
+            target = rooted_path(root, str(entry))
             key = entry.relative_to(root).as_posix()
             if target.is_dir():
                 state[key] = "directory"
@@ -1238,13 +1247,14 @@ def store_blob(directory, name, data):
 
 def copy_snapshot_files(project, files, directory, budget=COPY_BUDGET):
     directory = Path(directory).resolve()
+    root = Path(project).resolve()
     copied, skipped = [], {}
     used = 0
     for key, expected in files.items():
         if expected == "missing":
             continue
         try:
-            source = project_path(project, key)
+            source = rooted_path(root, key)
             if source.stat().st_size > COPY_LIMIT:
                 skipped[key] = "large"
                 continue
@@ -1381,6 +1391,7 @@ def scope_side(read):
 
 
 def write_scope_diff(project, folder, unit, prior, current, copies, changed):
+    root = Path(project).resolve()
     lines = []
     for key in changed:
         old_name, new_name = f"a/{key}", f"b/{key}"
@@ -1394,7 +1405,7 @@ def write_scope_diff(project, folder, unit, prior, current, copies, changed):
         if current.get(key, "missing") == "missing":
             new_name = "/dev/null"
         else:
-            new, new_reason = scope_side(lambda: project_path(project, key).read_bytes())
+            new, new_reason = scope_side(lambda: rooted_path(root, key).read_bytes())
         if old is None or new is None:
             lines.append(f"# 비교 불가({old_reason or new_reason}): {key}\n")
             continue

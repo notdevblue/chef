@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -1749,36 +1748,76 @@ def test_many_declared_inputs_resolve_linearly_and_select_what_the_matchers_sele
     names, plan = many_inputs_plan(tmp_path, count)
     before = verification.snapshot(tmp_path, plan["inputs"])
     expected = [matcher_selection(tmp_path, command, before) for command in plan["commands"]]
-    real, calls = Path.resolve, []
-
-    def counted(self, *args, **kwargs):
-        calls.append(self)
-        if len(calls) > 40 * count:
-            pytest.fail("Path.resolve 호출이 선언 입력 수에 비례하지 않음")
-        return real(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve", counted)
+    counted_resolves(monkeypatch, 40 * count)
     assert verification.validate_plan(tmp_path, plan, ["pytest-pass"], require_matches=True) is plan
     assert [sorted(verification.step_inputs(tmp_path, command, before)) for command in plan["commands"]] == expected
     assert expected[0] == sorted(names)
     assert expected[3] == sorted(["docs/a.md", "docs/deep/b.md"] + [name for name in names if name.startswith("src/g1/")])
 
 
+def counted_resolves(monkeypatch, limit):
+    real, calls = Path.resolve, []
+
+    def counted(self, *args, **kwargs):
+        calls.append(self)
+        if len(calls) > limit:
+            pytest.fail("Path.resolve 호출이 선언 입력 수에 비례하지 않음")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted)
+    return calls
+
+
+def test_input_checks_resolve_the_project_root_once_and_each_declared_path_once(tmp_path, monkeypatch):
+    _, plan = many_inputs_plan(tmp_path, 50)
+    folder_entries = ["docs/a.md", "docs/deep", "docs/deep/b.md"]
+    calls = counted_resolves(monkeypatch, 1000)
+    files = verification.snapshot(tmp_path, plan["inputs"])
+    assert len(calls) == 1 + len(plan["inputs"]) + len(folder_entries)
+    calls.clear()
+    verification.validate_command_inputs(tmp_path, plan, files, require_matches=True)
+    path_values = {value for command in plan["commands"] for value in command["inputs"] if "*" not in value}
+    assert len(calls) == 1 + len(plan["inputs"]) + len(path_values)
+    calls.clear()
+    verification.step_inputs(tmp_path, plan["commands"][0], files)
+    assert len(calls) == 1 + len(plan["commands"][0]["inputs"])
+    calls.clear()
+    assert set(verification.output_snapshot(tmp_path, ["docs"])) == {"docs", *folder_entries}
+    assert len(calls) == 2 + 1 + len(folder_entries)
+    calls.clear()
+    copied = verification.copy_snapshot_files(tmp_path, files, tmp_path / "copies")
+    assert len(copied["files"]) == len(files) and len(calls) == 2 + len(files)
+
+
 def test_step_input_selection_does_not_compare_every_file_with_every_declaration(monkeypatch):
     keys = [f"src/g{index % 10}/f{index}.txt" for index in range(5000)]
     before = dict.fromkeys(keys, "hash")
-    monkeypatch.setattr(verification, "parse_input_entry", lambda project, value: ("path", value))
-    start = time.perf_counter()
-    selected = verification.step_inputs("unused", {"inputs": keys[::2] + ["src/g1"]}, before)
-    assert time.perf_counter() - start < 1
-    assert list(selected) == [key for index, key in enumerate(keys) if index % 2 == 0 or key.startswith("src/g1/")]
+    real, calls = verification.input_matcher, []
+
+    def counting(kind, text):
+        matcher = real(kind, text)
+
+        def counted(key):
+            calls.append(key)
+            if len(calls) > len(keys):
+                pytest.fail("단계 입력 선택이 파일마다 모든 선언과 비교함")
+            return matcher(key)
+
+        return counted
+
+    monkeypatch.setattr(verification, "input_matcher", counting)
+    monkeypatch.setattr(verification, "rooted_input_entry",
+                        lambda root, value: ("glob" if "*" in value else "path", value))
+    selected = verification.step_inputs("unused", {"inputs": keys[::2] + ["src/g1", "src/g3/*.txt"]}, before)
+    assert list(selected) == [key for index, key in enumerate(keys)
+                              if index % 2 == 0 or key.startswith(("src/g1/", "src/g3/"))]
 
 
-@pytest.mark.parametrize("declared,message", [
-    ("docs/a", "일치하지 않음"), ("src/g1", "계획 inputs 안의 경로여야 함"),
-    ("src/g1/f1", "계획 inputs 안의 경로여야 함"), ("docs/deep", ""), ("gone/x.txt", "case"),
+@pytest.mark.parametrize("declared,message,case_dependent", [
+    ("docs/a", "일치하지 않음", False), ("src/g1", "계획 inputs 안의 경로여야 함", False),
+    ("src/g1/f1", "계획 inputs 안의 경로여야 함", False), ("docs/deep", "", False), ("gone/x.txt", "", True),
 ])
-def test_declared_path_checks_keep_containment_and_match_results(tmp_path, declared, message):
+def test_declared_path_checks_keep_containment_and_match_results(tmp_path, declared, message, case_dependent):
     _, plan = many_inputs_plan(tmp_path, 20)
     plan["inputs"].append("Gone")
     plan["commands"][3]["inputs"] = [declared]
@@ -1792,7 +1831,7 @@ def test_declared_path_checks_keep_containment_and_match_results(tmp_path, decla
         expected = "계획 inputs 안의 경로여야 함"
     elif not matched:
         expected = "일치하지 않음"
-    if message != "case":
+    if not case_dependent:
         assert expected == message
     if expected:
         with pytest.raises(verification.VerificationError, match=f"{expected}: {declared}"):
