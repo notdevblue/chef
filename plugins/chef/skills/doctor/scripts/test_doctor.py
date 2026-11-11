@@ -256,11 +256,11 @@ def test_grok_doctor_missing_registration_is_a_warning(monkeypatch):
 
 
 @pytest.mark.parametrize("change,detail", [
-    ("missing", "없음: chef:reviewer"),
+    ("missing", "없음: chef:reviewer-small"),
     ("wrong-name", "예상 밖 역할: chef:other"),
-    ("compat-source", "원본 경로 불일치·중복: chef:reviewer"),
-    ("missing-source", "원본 경로 불일치·중복: chef:reviewer"),
-    ("duplicate", "원본 경로 불일치·중복: chef:reviewer"),
+    ("compat-source", "원본 경로 불일치·중복: chef:reviewer-small"),
+    ("missing-source", "원본 경로 불일치·중복: chef:reviewer-small"),
+    ("duplicate", "원본 경로 불일치·중복: chef:reviewer-small"),
 ])
 def test_grok_doctor_reports_missing_or_wrong_native_roles(change, detail):
     inspection = grok_inspection()
@@ -270,7 +270,7 @@ def test_grok_doctor_reports_missing_or_wrong_native_roles(change, detail):
     elif change == "wrong-name":
         reviewer["name"] = "chef:other"
     elif change == "compat-source":
-        reviewer["source"]["path"] = os.path.join(doctor.PLUGIN, "agents", "reviewer.md")
+        reviewer["source"]["path"] = os.path.join(doctor.PLUGIN, "agents", "reviewer-small.md")
     elif change == "missing-source":
         reviewer.pop("source")
     else:
@@ -280,7 +280,7 @@ def test_grok_doctor_reports_missing_or_wrong_native_roles(change, detail):
     assert levels(report, "grok-agents") == ["WARN"]
     row = next(row for row in report.rows if row["area"] == "grok-agents")
     assert detail in row["text"]
-    assert "4/5개" in row["text"]
+    assert "5/6개" in row["text"]
 
 
 @pytest.mark.parametrize("change", ["wrong-path", "disabled", "missing", "duplicate"])

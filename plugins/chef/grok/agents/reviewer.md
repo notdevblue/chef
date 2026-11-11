@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: 구현과 분리된 새 맥락에서 변경·명세·완료 조건 또는 미션 기록을 읽기 전용으로 검토한다.
+description: 구현과 분리된 새 맥락에서 변경·명세·완료 조건 또는 미션 기록을 읽기 전용으로 심층 검토한다. 직전 리뷰 이후의 좁은 재리뷰와 뜻이 그대로인 작은 문서 변경은 reviewer-small이 맡는다.
 model: inherit
 effort: high
 ---

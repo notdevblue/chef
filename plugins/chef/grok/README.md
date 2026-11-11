@@ -21,7 +21,7 @@ Main 또는 slotN의 Grok CLI는 오케스트레이터다. 조사·구현·검�
 슬롯 봇은 미션이 붙기 전까지 대기한다. 새 미션은 비어 있는 ready 슬롯에만 붙인다.
 메인과 슬롯이 아닌 작업은 메인 작업 폴더의 실행 봇에게 보낸다.
 
-native 역할은 아래 다섯 개다. 모두 부모의 Grok 4.7 모델을 상속하며, effort는 역할 정의에 고정한다. 리뷰와 기록 감사는 같은 `chef:reviewer`를 각각 새 작업으로 파견한다.
+native 역할은 아래 여섯 개다. 모두 부모의 Grok 4.7 모델을 상속하며, effort는 역할 정의에 고정한다. 리뷰와 기록 감사는 같은 `chef:reviewer`를 각각 새 작업으로 파견하고, 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 `chef:reviewer-small`이 맡는다.
 
 | 역할 | native 이름 | effort |
 | --- | --- | --- |
@@ -30,6 +30,7 @@ native 역할은 아래 다섯 개다. 모두 부모의 Grok 4.7 모델을 상�
 | 여러 파일·계층 구현 | `chef:dev-medium` | high |
 | 검증 | `chef:verifier` | low |
 | 리뷰·기록 감사 | `chef:reviewer` | high |
+| 좁은 재리뷰·작은 문서 변경의 첫 리뷰 | `chef:reviewer-small` | medium |
 
 chef는 Grok 기본 depth 1에 맞춰 메인이 추가 파견을 맡는다. 하위 에이전트가 추가 분할을 요구하면 소유 파일·계약·검증 범위를 메인에 돌려주고, 메인이 같은 역할의 새 하위 에이전트를 띄운다. 전역 깊이 설정은 바꾸지 않는다. 어댑터 `rolePolicy`(`runtimes.grok.rolePolicy`)는 이미 충족돼 추가 동작이 없다. 작업 단계와 사람 확인 A·B·C는 공유 미션 절차를 따른다.
 
@@ -44,7 +45,7 @@ native chef는 아래 여덟 스킬을 등록한다. `chef-status`·`chef-doctor
    프로젝트의 `.grok/orchestrator/adapter.json`이 있으면 그게 먼저다. 없으면 같은 자리의 `.claude`, 그다음 `.codex` 어댑터를 읽는다.
 3. `~/.grok/plugins/chef`를 `<repo>/plugins/chef`으로 연결한다. Windows에서는 junction, POSIX에서는 symlink를 쓴다. 이미 그 경로가 있으면 대상을 확인하고 덮어쓰지 않는다.
 4. 기존 `~/.grok/config.toml`의 이 플러그인 전용 `[skills].paths` 항목과 `~/.grok/skills/han-*`·`chef-*` 링크 정보를 먼저 백업한다. 이전 이름(`han`)으로 등록한 `~/.grok/plugins/han`도 함께 확인한다. native chef를 등록하기 전에 그 항목과 링크만 제거해 중복 발견을 막는다. 다른 스킬 경로와 링크는 보존한다.
-5. `grok inspect`에서 native chef의 선택 경로가 `<repo>/plugins/chef`인지, 스킬 8개·훅 1개와 위 native 역할 5개인지 확인한다. `agents`의 실제 이름·원본 경로를 확인한다. `provides.agents`는 등록 경로 수라서 역할 수와 다를 수 있다. inspect는 모델·effort 실행 증거를 제공하지 않으므로 역할 파일과 실제 child 기록으로 따로 확인한다. `chef-watch`와 `chef-handoff`는 없어야 한다. 단순 `grok plugin install`은 성공해도 compat chef가 선택될 수 있으므로 inspect 결과로 적용 여부를 판단한다.
+5. `grok inspect`에서 native chef의 선택 경로가 `<repo>/plugins/chef`인지, 스킬 8개·훅 1개와 위 native 역할 6개인지 확인한다. `agents`의 실제 이름·원본 경로를 확인한다. `provides.agents`는 등록 경로 수라서 역할 수와 다를 수 있다. inspect는 모델·effort 실행 증거를 제공하지 않으므로 역할 파일과 실제 child 기록으로 따로 확인한다. `chef-watch`와 `chef-handoff`는 없어야 한다. 단순 `grok plugin install`은 성공해도 compat chef가 선택될 수 있으므로 inspect 결과로 적용 여부를 판단한다.
 6. Grok Bot 스킬 라이브러리에도 그 여덟 폴더만 등록하거나, 저장소 파일을 직접 읽게 한다.
    - `plugins/chef/grok/skills/chef-status/SKILL.md`
    - `plugins/chef/grok/skills/chef-doctor/SKILL.md`

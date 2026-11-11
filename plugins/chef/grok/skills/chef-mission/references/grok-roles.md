@@ -1,7 +1,7 @@
 # Grok 역할 파견
 
 native manifest는 `<plugin-root>/grok/agents` 폴더를 등록한다. 각 `.md` 파일의 YAML frontmatter가 역할·모델·effort를 정의한다.
-`grok inspect --json`의 실제 `agents` 목록에서 아래 다섯 이름과 정의 파일 경로를 확인한다.
+`grok inspect --json`의 실제 `agents` 목록에서 아래 여섯 이름과 정의 파일 경로를 확인한다.
 `plugins[].provides.agents`는 등록 폴더 수여서 이 플러그인에서는 1이다. 그것을 실제 역할 수로 읽지 않는다.
 
 | 미션 역할 | native subagent_type | 정의 파일 | effort |
@@ -10,9 +10,10 @@ native manifest는 `<plugin-root>/grok/agents` 폴더를 등록한다. 각 `.md`
 | implementSmall | `chef:dev-small` | `grok/agents/dev-small.md` | medium |
 | implement | `chef:dev-medium` | `grok/agents/dev-medium.md` | high |
 | verify | `chef:verifier` | `grok/agents/verifier.md` | low |
-| review, audit, 좁은 재리뷰 | `chef:reviewer` | `grok/agents/reviewer.md` | high |
+| review, audit | `chef:reviewer` | `grok/agents/reviewer.md` | high |
+| 좁은 재리뷰, 뜻·승인 범위가 그대로인 작은 문서 변경의 첫 리뷰 | `chef:reviewer-small` | `grok/agents/reviewer-small.md` | medium |
 
-다섯 정의는 `model: inherit`로 현재 선택된 native Grok 4.7을 상속한다. 부모의 현재 effort는 바꾸지 않고 역할의 effort만 적용한다.
+여섯 정의는 `model: inherit`로 현재 선택된 native Grok 4.7을 상속한다. 부모의 현재 effort는 바꾸지 않고 역할의 effort만 적용한다.
 다른 모델을 선택하거나 Claude·Codex CLI를 대신 실행하지 않는다. 실행 환경의 모델 핀·역할 설정이 상속을 바꿀 수 있으므로 실제 자식의 모델도 확인한다.
 
 ## 어댑터 역할 해석
@@ -24,7 +25,8 @@ native manifest는 `<plugin-root>/grok/agents` 폴더를 등록한다. 각 `.md`
 - implementSmall: 누락 또는 `chef:dev-small`, `chef_developer_small` → `chef:dev-small`.
 - implement: 누락 또는 `chef:dev-medium`, `chef_developer_medium` → `chef:dev-medium`.
 - verify: 누락 또는 `chef:verifier`, `chef_verifier` → `chef:verifier`.
-- review: 누락 또는 `code-reviewer`, `chef:code-reviewer`, `chef_code_reviewer`, `chef:reviewer`, `chef:reviewer-small` → `chef:reviewer`.
+- review: 누락 또는 `code-reviewer`, `chef:code-reviewer`, `chef_code_reviewer`, `chef:reviewer` → `chef:reviewer`.
+- 좁은 재리뷰: `chef:reviewer-small`, `chef_reviewer_small` → `chef:reviewer-small`.
 - audit: 누락이면 review 매핑을 따르고, 명시된 `chef:reviewer`, `chef:code-reviewer`, `chef_code_reviewer`, `code-reviewer`도 `chef:reviewer`다.
 
 다른 사용자 정의 역할은 실제 native 등록·지시·권한·모델·effort 계약을 읽고 확인한다.
@@ -60,7 +62,7 @@ Claude의 `Task`·`TaskStop`·`SendMessage`, Codex의 `spawn_agent`·`wait_agent
 코디네이터가 관련 규칙·원문·승인·양식의 실제 경로와 해당 절을 한 번 확정해 구현·수정·첫 리뷰·재리뷰 브리프가 모두 같은 묶음을 가리키게 한다.
 새 참조 누락·충돌은 부모에게 돌려 양쪽 묶음을 맞춘다. 프로젝트 자료를 플러그인에 복사·요약·익명화하지 않는다.
 
-chef는 Grok의 기본 깊이 1에서 동작하도록 루트만 spawn한다. 런타임 설정이 더 깊은 파견을 허용해도 다섯 역할 모두 자식을 띄우지 않는다.
+chef는 Grok의 기본 깊이 1에서 동작하도록 루트만 spawn한다. 런타임 설정이 더 깊은 파견을 허용해도 여섯 역할 모두 자식을 띄우지 않는다.
 분할이 필요하면 파일 경계·계약·선행 조건·검증을 담은 분할 브리프를 부모에게 반환하고, 부모가 새 단위를 파견한다.
 부모는 전체 파일 소유·각 결과·남은 범위를 모아 판정한다. 일부 반환·실패·턴 상한을 전체 완료나 새 승인 필요로 바꾸지 않는다.
 
@@ -71,7 +73,9 @@ YAML의 `effort`는 native 역할 해석에서 자식 런타임의 `reasoning_ef
 실행 뒤 실제 자식 세션의 `summary.json`에 기록된 `current_model_id`·`reasoning_effort`와 연결된 실행 결과를 확인한다.
 모델이 effort를 지원하지 않거나 적용 기록을 확인할 수 없으면 요청값과 미확인 이유를 보고한다. 다른 모델로 바꾸거나 절감이 확인됐다고 말하지 않는다.
 
-리뷰·감사는 새 `chef:reviewer`로 실행한다. 구현자를 재사용하거나 `resume_from`으로 구현 대화를 물려주지 않는다.
+리뷰·감사는 새 `chef:reviewer`로 실행한다. 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 새 `chef:reviewer-small`로 실행하고, 그 첫 리뷰 브리프에는 변경 전 본 대비 diff를 넣는다.
+`chef:reviewer-small`이 뜻·승인 범위 변경, 새 규칙·규칙 관계 변경, 질문·보고 문서나 공통 계약·구조 변경·원인 불명을 발견하면 clean을 선언하지 않고 근거와 남은 범위를 반환한다. 코디네이터는 그 범위를 위 review 매핑으로 정한 새 심층 리뷰어(기본 `chef:reviewer`)로 확대한다.
+구현자를 재사용하거나 `resume_from`으로 구현 대화를 물려주지 않는다.
 첫 구현의 구현자는 반환 전에 변경 함수·블록 또는 문서 전체를 고정 자료와 대조하고 명확한 결함·규칙 위반을 먼저 고친다. 지적 수정 라운드는 바뀐 줄과 그 줄이 닿는 호출부만 점검한다.
 리뷰는 결함·명시적 규칙 위반·계약·호출부를 한 번에 모으며 제안은 분리한다. 읽지 못한 경로는 검증 공백으로 적고, 문서의 의미·보존·문체도 전체 자료로 한 번에 본다.
 열린 지적 0건(미해결 포함)에 제안만 남으면 clean이고 제안은 루프 안에서 적용하지 않는다. finding의 고정 id·`severity`·원인·이전 해소 근거를 유지해 미해결·새 지적·회귀를 구분한다.

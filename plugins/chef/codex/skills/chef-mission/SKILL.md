@@ -26,8 +26,8 @@ PoC가 필요 없는 작업이면 A를 건너뛴다. 확인과 멈춤 질문은 
 
 - `<plugin-root>`는 이 SKILL.md에서 세 단계 위인 플러그인 폴더다. 스크립트 경로는 실제 절대 경로로 바꿔 호출한다.
 - `references/codex-roles.md`를 읽고 사용 가능한 서브에이전트 도구로 역할별 생성·결과 수집·후속 지시를 한다.
-  등록되지 않은 역할 이름을 도구에 넘기지 않는다. research와 review는 부모 설정을 상속한다.
-  implement는 GPT-6.1 Sol / high, implementSmall과 verify는 GPT-6 Luna / high로 고정하며 미등록 파견 세부는 `codex-roles.md`를 따른다.
+  등록되지 않은 역할 이름을 도구에 넘기지 않는다. research와 심층 review는 부모 설정을 상속한다.
+  implement는 GPT-6.1 Sol / high, implementSmall과 verify는 GPT-6 Luna / high, 작은 리뷰(`chef_reviewer_small`)는 GPT-6.1 Terra / high로 고정하며 미등록 파견 세부는 `codex-roles.md`를 따른다.
 - 어댑터 `rolePolicy`(`runtimes.codex.rolePolicy`가 최상위 값을 덮는다)는 이 스킬이 역할을 파견할 때만 적용한다. 없으면 `model: "definition"`, `subagents: true`다.
   `model: "inherit"`면 미등록 파견에서 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며 위의 고정보다 우선한다(등록된 역할은 정의의 모델이 적용되므로 그 경우를 보고한다). `definition`이면 위 고정을 따른다.
   `subagents: false`면 `chef_developer_medium`(과 `roles`가 가리키는 같은 계열 역할)의 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다.
@@ -339,7 +339,8 @@ PoC 명세와의 일치로 쓴다.
    - 에디터 준비·검증·결과 수집·정리는 어댑터 실행 명령에 묶는다. 프로젝트 경로·양수 테스트 수·결과 상태를 검사하고 이번에 연 에디터만 정리한다.
    - 어댑터가 정한 lint·규약 검사 명령은 계획 `commands[]`에 넣어 리뷰 파견 전에 돌린다. 통과 전에는 리뷰를 띄우지 않고 그 출력을 리뷰어에게 준다.
    - 리뷰 수정 뒤에는 같은 전체 계획으로 `verify`한다. 단계별 `inputs`를 선언한 `reusable` 단계는 바뀐 입력에 닿을 때만 실제로 돈다. 그 receipt로 통과 리뷰(clean·closed-low)를 기록한 뒤 `complete`한다(좁은 계획으로 재검증하면 `review-scope` 비교 기준이 끊긴다).
-4. **마일스톤 리뷰** — 검증이 끝난 단위부터 진행한다. 파일 소유가 겹치지 않으면 그 리뷰를 같은 턴에 파견한다. fresh `roles.review`(없으면 `chef_code_reviewer`) 하나로 첫 라운드는 단위 전체를 본다. fork는 쓰지 않는다.
+4. **마일스톤 리뷰** — 검증이 끝난 단위부터 진행한다. 파일 소유가 겹치지 않으면 그 리뷰를 같은 턴에 파견한다. fresh `roles.review`(없으면 `chef_code_reviewer`) 하나로 첫 라운드는 단위 전체를 본다(아래 작은 문서 변경은 예외). fork는 쓰지 않는다.
+   좁은 수정 확인과 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 라운드는 `chef_reviewer_small`(GPT-6.1 Terra / high)로 시작하고, 그 첫 리뷰 브리프에는 변경 전 본 대비 diff를 넣는다(`references/codex-roles.md`). 공통 계약·구조 변경, 불명확한 원인, 뜻·승인 범위 변경이 나오면 근거와 남은 범위를 반환받아 `roles.review`(없으면 `chef_code_reviewer`)의 심층 리뷰로 확대한다. 프로젝트 리뷰 규약은 두 역할 모두 지킨다.
    리뷰 파견 직전에 `review-start <id> --plan …`로 입력 snapshot을 기록하고 리뷰가 돌아올 때까지 그 범위를 고치지 않는다. 리뷰 중 바뀐 파일은 리뷰 기록에 남아 다음 `review-scope` 범위로 넘어가며 그 리뷰를 다시 하지 않는다.
    첫 리뷰는 같은 고정 참조 묶음으로 결함·규칙 위반·계약·호출부를 한 번에 대조하고 제안은 분리한다. 읽지 못한 경로는 검증 공백으로 적게 하고, 코디네이터가 그 공백을 같은 라운드 안에서 보강 지시한다.
    재리뷰는 같은 묶음과 `review-scope`의 파일별 diff·직전 finding·영향받는 계약만 본다. 바뀌지 않은 부분은 실제 결함·규칙·원문 근거가 있는 Medium 이상일 때만 다시 열고 Low는 제안으로 돌린다.

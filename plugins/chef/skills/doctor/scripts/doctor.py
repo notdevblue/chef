@@ -31,7 +31,7 @@ MISSION_STATE = {
     "codex": os.path.join(PLUGIN, "codex", "skills", "chef-mission", "scripts", "mission_state.py"),
     "grok": SHARED_MISSION_STATE,
 }
-GROK_NATIVE_ROLES = ("researcher", "dev-small", "dev-medium", "verifier", "reviewer")
+GROK_NATIVE_ROLES = ("researcher", "dev-small", "dev-medium", "verifier", "reviewer", "reviewer-small")
 
 
 class Report:

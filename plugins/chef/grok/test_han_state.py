@@ -459,7 +459,7 @@ def test_grok_native_role_registration_and_runtime_settings():
     plugin = SCRIPT.parents[2]
     manifest = json.loads((plugin / ".grok-plugin/plugin.json").read_text(encoding="utf-8"))
     assert manifest["agents"] == ["./grok/agents"]
-    expected = {"researcher": "medium", "dev-small": "medium", "dev-medium": "high", "verifier": "low", "reviewer": "high"}
+    expected = {"researcher": "medium", "dev-small": "medium", "dev-medium": "high", "verifier": "low", "reviewer": "high", "reviewer-small": "medium"}
     agent_dir = plugin / manifest["agents"][0]
     assert {path.stem for path in agent_dir.glob("*.md")} == set(expected)
     for name, effort in expected.items():
@@ -473,6 +473,8 @@ def test_grok_native_role_registration_and_runtime_settings():
     for name in expected:
         assert f"chef:{name}" in role_reference
     assert "runtimes.grok.roles" in role_reference
+    assert "`chef:reviewer-small`, `chef_reviewer_small` → `chef:reviewer-small`" in role_reference
+    assert "→ `chef:reviewer`" in role_reference and "chef:reviewer-small` → `chef:reviewer`" not in role_reference
     assert "summary.json" in role_reference and "reasoning_effort" in role_reference
 
 

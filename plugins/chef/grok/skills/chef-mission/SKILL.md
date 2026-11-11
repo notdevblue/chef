@@ -40,7 +40,7 @@ python "<plugin-root>/skills/mission/scripts/mission_state.py" --runtime grok --
 - 공통 문서의 `Bash`는 현재 Grok 셸 도구, `Read`·`Grep`·`Glob`은 실제 파일 읽기·검색 도구로 대체한다.
   파견·수집은 `grok-roles.md`의 native 도구만 쓴다. 도구가 없으면 그 단계를 미확인으로 반환하고 직접 구현이나 외부 봇 인계로 우회하지 않는다.
 - 공통 `roles.*`와 Claude/Codex 역할 이름·모델·effort 지시는 모두 `grok-roles.md`의 Grok 역할로 대체한다.
-  `verification-workflow.md`의 verifier 모델 고정, `usage-policy.md`의 Sonnet/Opus 배정, 좁은 재리뷰 역할도 이 대체에 포함된다.
+  `verification-workflow.md`의 verifier 모델 고정, `usage-policy.md`의 Sonnet/Opus 배정도 이 대체에 포함된다. 공통 문서의 `chef:reviewer-small`은 Grok `chef:reviewer-small`(상속 / medium)이다.
   현재 선택된 native Grok 4.7 모델을 파견에 상속한다. 코디네이터 자신의 현재 effort는 바꾸지 않는다.
 - `/chef:adapter-init`·Codex adapter-init 호출은 Grok `chef-adapter-init`, 슬롯 호출은 `chef-slots`, `../distill/SKILL.md`는 `<plugin-root>/grok/skills/chef-distill/SKILL.md`로 대체한다.
   어댑터의 프로젝트 스킬은 실제 설치 파일과 도구를 읽고 적용한다. 필요한 스킬·Unity 연결이 없으면 해당 단계를 미확인으로 남긴다.
@@ -86,7 +86,7 @@ open·resume 직전에는 같은 입력의 진입 성공이 필요하다. 등록
   승인 범위 안의 남은 일을 진단해 새 브리프로 이어간다. 실제 멈춤 조건·리뷰 3라운드·timebox는 유지한다.
   3라운드에서 남은 것이 Low뿐이면 코디네이터가 `closed-low`로 닫는다. closed-low 조건이 안 되면 독립 재리뷰를 하거나 사용자에게 묻는다.
   Medium 이상이 남았거나 수정끼리 충돌하거나 같은 지적이 재발하거나 timebox를 넘기면 미해결 원인·참조 누락·회귀·남은 판단·수정과 검증을 진단한다. 같은 일을 더 돌리는 연장안만 묻거나 품질·검증 범위를 낮추지 않는다.
-- 리뷰와 기록 감사는 구현자와 다른 fresh reviewer다. 구현 대화를 상속하거나 구현자를 재사용하지 않는다. `roles.review`가 없거나 `code-reviewer`·`chef:code-reviewer`면 `chef:reviewer`다(`grok-roles.md`).
+- 리뷰와 기록 감사는 구현자와 다른 fresh reviewer다. 구현 대화를 상속하거나 구현자를 재사용하지 않는다. `roles.review`가 없거나 `code-reviewer`·`chef:code-reviewer`면 `chef:reviewer`다. 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 `chef:reviewer-small`이고 그 브리프에는 변경 전 본 대비 diff를 넣는다. 뜻·승인 범위 변경 등을 반환하면 review 매핑의 심층 리뷰어(기본 `chef:reviewer`)로 확대한다(`grok-roles.md`).
   리뷰 파견 직전 `review-start <id> --plan …`으로 입력 snapshot을 기록하고 돌아올 때까지 그 범위를 고치지 않는다. 어댑터가 정한 lint·규약 검사는 검증 계획 `commands[]`로 먼저 통과시키고 출력을 리뷰어에게 준다.
   첫 리뷰는 결함·규칙 위반·계약·호출부를 한 번에 대조하고 읽지 못한 경로는 검증 공백으로 적게 한다. 코디네이터가 그 공백을 같은 라운드 안에서 보강 지시한다.
   재리뷰는 같은 묶음과 `review-scope`의 파일별 diff·직전 finding·영향받는 계약만 본다. 문서 원문·최신 답·승인·규칙·양식·예시도 첫 리뷰에 함께 넘겨 의미·보존·문체를 한 번에 본다.

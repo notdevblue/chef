@@ -542,6 +542,24 @@ def test_codex_role_definitions_are_listed_and_review_inherits_the_model():
     assert "읽기 전용" in reviewer["description"]
 
 
+def test_codex_reviewer_small_is_pinned_and_listed_with_routing():
+    import tomllib
+
+    small = tomllib.loads((PLUGIN / "codex/agents/chef-reviewer-small.toml").read_text(encoding="utf-8"))
+    assert small["name"] == "chef_reviewer_small"
+    assert small["model"] == "gpt-6.1-terra" and small["model_reasoning_effort"] == "high"
+    assert "읽기 전용" in small["description"]
+    assert "변경 전 본과의 diff" in small["developer_instructions"]
+    roles = (PLUGIN / "codex/skills/chef-mission/references/codex-roles.md").read_text(encoding="utf-8")
+    assert "codex/agents/chef-reviewer-small.toml" in roles
+    assert roles.count("gpt-6.1-terra") >= 3
+    assert "변경 전 본 대비 diff" in roles
+    rules = (PLUGIN / "codex/rules/main-session.md").read_text(encoding="utf-8")
+    assert "chef_reviewer_small" in rules and "chef-reviewer-small.toml" in rules
+    mission = (PLUGIN / "codex/skills/chef-mission/SKILL.md").read_text(encoding="utf-8")
+    assert "chef_reviewer_small" in mission and "변경 전 본 대비 diff" in mission
+
+
 def test_claude_code_reviewer_is_read_only_deep_reviewer():
     text = (PLUGIN / "agents/code-reviewer.md").read_text(encoding="utf-8").replace("\r\n", "\n")
     fields = dict(line.split(": ", 1) for line in text.split("---", 2)[1].strip().splitlines())

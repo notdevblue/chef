@@ -15,6 +15,10 @@
 - 커밋 전에 추적 파일과 staged diff를 확인한다. 공개 전에는 원격 브랜치·태그의 이력과 PR·이슈·첨부까지 확인하며, 삭제한 파일의 과거 내용이 남으면 공개를 완료로 보고하지 않는다.
 - 정리 전 백업과 점검 중 수집한 원본 자료는 이 저장소 밖에 비공개로 보관한다. 이전 이력을 다시 병합하거나 push해 자료를 복원하지 않는다.
 
+## 세 런타임 동시 반영
+
+플러그인 동작을 바꾸는 변경은 Claude·Codex·Grok 세 런타임에 함께 반영한다. 한 런타임에 대응 역할·기능이 없으면 만들고, 만들 모델·설정이 결정 사항이면 사용자에게 묻는다. 한 런타임 전용으로 두지 않는다.
+
 ## 완료 절차
 
 이 플러그인 저장소의 수정 작업은 **공개 반영 전 점검 → 검증 → 커밋 → push → Claude·Codex 플러그인 업데이트·Grok 경로 확인 → 반영 확인**까지 기본으로 수행한다. 별도 push·업데이트 요청을 기다리지 않는다. 사용자가 보류하거나 범위를 제한하면 그 지시를 따른다.
@@ -27,7 +31,7 @@
 - Codex는 `codex plugin add chef@chef-codex`로 설치본을 갱신한다.
 - Grok은 `~/.grok/plugins/chef`가 이번 push 체크아웃의 `plugins/chef`를 가리키도록 등록한다. 기존 대상이 있으면 실제 대상을 확인하고 덮어쓰지 않는다. 전환 전 `~/.grok/config.toml`과 `~/.grok/skills/han-*`·`chef-*` 링크 정보를 저장하고, 이전 이름(`han`)의 `~/.grok/plugins/han` 등록과 이 플러그인 전용 `[skills].paths` 항목, `han-*`·`chef-*` 링크만 등록 해제한다. 다른 스킬 설정은 보존한다.
 - Codex 역할 등록이 하나라도 있으면(`$CODEX_HOME/agents`, 없으면 `~/.codex/agents/`) 이번 push 체크아웃의 `plugins/chef/codex/agents/`에 있는 chef 역할 toml 전부(새로 생긴 역할 포함)를 같게 복사하고 `diff`로 차이가 없는지 확인한다. 등록이 없으면 만들지 않는다. 그 폴더의 다른 사용자 파일은 건드리지 않고, 플러그인에 없는 `chef_` 역할 파일은 지우지 않고 알린다.
-- `grok inspect`에서 native `chef`가 이번 체크아웃을 선택하고 스킬 8개·훅 1개와 native 역할 5개(`chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:reviewer`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `provides.agents`는 등록 경로 수이므로 역할 수로 판단하지 않는다. `chef-watch`·`chef-handoff`가 없어야 한다. `grok plugin install` 성공만으로 선택된 플러그인을 판단하지 않는다. compat `chef`가 native 경로보다 우선할 수 있다.
+- `grok inspect`에서 native `chef`가 이번 체크아웃을 선택하고 스킬 8개·훅 1개와 native 역할 6개(`chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:reviewer`, `chef:reviewer-small`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `provides.agents`는 등록 경로 수이므로 역할 수로 판단하지 않는다. `chef-watch`·`chef-handoff`가 없어야 한다. `grok plugin install` 성공만으로 선택된 플러그인을 판단하지 않는다. compat `chef`가 native 경로보다 우선할 수 있다.
 - 선택된 native 경로의 manifest·스킬 파일과 그 파일이 부르는 공유 스크립트를 push한 커밋과 대조한다. 다른 작업의 미커밋 변경이 그 파일에 있으면 반영으로 치지 않는다.
 - 설치 버전과 캐시 파일을 실제 push한 커밋의 배포 내용과 대조한다. 다른 작업의 미커밋 변경이 있으면 커밋된 배포본을 기준으로 업데이트하며, 작성 중인 내용을 함께 설치하지 않는다.
 - 배포 내용이 그대로이고 `grok inspect`의 선택 경로·manifest 내용이 일치하면 최신 상태로 보고 불필요한 재등록은 생략한다.
