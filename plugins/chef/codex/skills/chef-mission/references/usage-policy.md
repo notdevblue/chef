@@ -10,3 +10,6 @@ Claude 런타임의 모델·effort 배정이나 도구 규칙을 Codex 역할에
 `reference check --input <묶음.json>` 통과 후 같은 묶음 하나를 구현·수정·첫 리뷰·재리뷰 브리프가 모두 가리킨다.
 `brief <단위> --references <묶음.json>` 출력으로 단위 계약을 전달한다.
 반환 상세·증거는 기존 프로젝트 파일로 받고 `handoff <단위> --summary <결과> --detail <상세> [--evidence <근거>]…`로 연결한다.
+구현자는 첫 구현에서 변경 함수·블록 또는 문서 전체를, 지적 수정에서는 바뀐 줄과 직접 영향 범위를 대조한다. 반환에는 대조 범위·자료의 실제 경로와 절·기계 검사 결과·미확인 또는 제외 범위와 이유를 간결히 적고, 일부 확인을 전체 준수처럼 보고하지 않는다. 자기 확인은 기계적 준수 증명이나 독립 리뷰를 대신하지 않는다. 공개 플러그인에는 회사·고객·비공개 프로젝트 규칙·사례를 복사·요약·익명화하지 않는다.
+계획·receipt 조회는 공유 `mission_state.py inspect --plan <경로>` 또는 `inspect --receipt <경로>`를 우선한다. 둘 중 하나만 지정하며 `source`·`identity`·`counts`·`steps`·`statusCounts`·`failedSteps`·`failure.repeatCount`·`executionCounts`와 `recorded` 포인터 중 필요한 요약만 사용한다. 원본 JSON·로그 전체는 컨텍스트에 싣지 않는다. `current_validity=not_checked`는 현재 입력·정책·환경이나 재사용 판정이 아니며, 검증·재사용은 공통 `preflight`·`verify` 절차가 맡는다.
+취소·중단 상태만으로 이미 도착한 같은 task 결과를 버리지 않는다. 재파견 전 최종 본문·근거 파일·실제 완료 범위·입력 상태를 확인해 유효한 결과는 재사용하고 미완료 부분만 후속 파견한다. 결과가 없거나 입력에서 무효하면 다시 실행하며, `cancelled`는 clean을 뜻하지 않는다.

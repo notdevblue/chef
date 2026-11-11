@@ -250,6 +250,7 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
   리뷰 파견 직전에는 `review-start --plan`으로 입력을 기록하고 후속 범위는 `review-scope`의 파일별 diff로 본다.
   Low만 남으면 코디네이터가 diff를 확인해 `review --status closed-low`로 닫으며 `complete`는 clean 또는 closed-low를 통과로 인정한다.
   [검증 계획과 결과 재사용](plugins/chef/skills/mission/references/verification-workflow.md)에 계약·예시가 있다.
+  계획·receipt는 공통 `mission_state.py inspect --plan <경로>` 또는 `inspect --receipt <경로>`로 먼저 요약해 본다. 이는 기록 조회이며 현재 유효성이나 재사용 여부는 기존 `preflight`·`verify`가 판단한다.
   기존 ledger 이력은 유지하며 새 완료는 문자열 pass 대신 유효한 검증·리뷰 기록이 필요하다.
 
 - 로컬 디렉터리 마켓플레이스라도 설치본은 캐시 복사본이다. 고친 뒤 `claude plugin marketplace update chef`와

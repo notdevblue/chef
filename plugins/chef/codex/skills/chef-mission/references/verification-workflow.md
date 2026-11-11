@@ -9,3 +9,4 @@ Codex는 `chef_verifier`의 GPT-6 Luna / high로 고정한다. 등록되지 않�
 
 계획에 `referenceBundle`을 넣으면 `preflight <단위> --plan <계획.json>`이 먼저 참조·준비 상태를 확인한다.
 preflight 통과 뒤 `verify <단위> --plan <계획.json>`을 실행한다. 참조 원문이 바뀌면 코디네이터가 승인 범위를 확인하고 묶음을 갱신한다.
+계획·receipt를 미리 훑을 때는 공유 `mission_state.py inspect --plan <경로>` 또는 `inspect --receipt <경로>`를 쓴다. `--plan`·`--receipt` 중 하나만 지정하며 mission·adapter·ACTIVE를 탐색하지 않는다. 원본을 변경하거나 포인터 대상 파일을 열지 않고 `source`·`identity`·`counts`·`steps`·`statusCounts`·`failedSteps`·`failure.repeatCount`·`executionCounts`·`recorded` 포인터만 요약한다. `current_validity=not_checked`는 현재 유효성이나 재사용 보증이 아니므로 실제 판정은 아래 기존 `preflight`·`verify`로 한다.

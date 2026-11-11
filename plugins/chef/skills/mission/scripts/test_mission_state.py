@@ -22,6 +22,101 @@ ADAPTER = {
 BRIEF = ["--goal", "목표", "--files", "a.cs", "--done", "테스트 1개", "--verify", "pytest", "--timebox", "60", "--forbid", "submit"]
 
 
+@pytest.mark.parametrize("runtime", ["claude", "codex", "grok"])
+def test_inspect_standalone_without_adapter_or_active(tmp_path, monkeypatch, capsys, runtime):
+    plan = {"grade": "pytest-pass", "inputs": ["missing-source.py"], "environment": {"target": "fictional"},
+            "commands": [{"id": "unit-tests", "argv": ["nonexistent-executable"]}]}
+    source = tmp_path / "plan.json"
+    source.write_text(json.dumps(plan), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("standalone inspect accessed mission infrastructure")
+
+    monkeypatch.setattr(mission_state.slots, "locate", unexpected)
+    monkeypatch.setattr(mission_state.slots, "FileLock", unexpected)
+    monkeypatch.setattr(mission_state.mission_guard, "read_active", unexpected)
+    monkeypatch.setattr(subprocess, "run", unexpected)
+    before = source.read_bytes()
+    assert mission_state.main(["inspect", "--plan", str(source)], runtime=runtime) == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert captured.err == ""
+    assert result["kind"] == "plan" and result["current_validity"] == "not_checked"
+    assert result["steps"]["items"] == [{"index": 0, "id": "unit-tests"}]
+    assert source.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("content,options", [
+    ("{", ["--plan"]), ("[]", ["--plan"]), ("{}", ["--receipt"]),
+    ('{"kind":"review","schema":1}', ["--receipt"]),
+    ('{"schema":99}', ["--receipt"]), ("{}", []), ("{}", ["--plan", "--receipt"]),
+    ("invalid-encoding", ["--receipt"]),
+])
+def test_inspect_invalid_input_has_one_line_error_and_no_state(tmp_path, monkeypatch, capsys, content, options):
+    source = tmp_path / "invalid.json"
+    if content == "invalid-encoding":
+        source.write_bytes(b"\xff\xfe")
+    else:
+        source.write_text(content, encoding="utf-8")
+    args = ["inspect"]
+    for option in options:
+        args.extend([option, str(source)])
+    monkeypatch.chdir(tmp_path)
+    before = source.read_bytes()
+    assert mission_state.main(args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("오류:") and len(captured.err.splitlines()) == 1
+    assert "Traceback" not in captured.err
+    assert source.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [source]
+
+
+def test_inspect_preserves_existing_mission_files(tmp_path, monkeypatch, capsys):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "ACTIVE").write_bytes(b"existing active marker")
+    (state / "mission.md").write_bytes(b"existing mission")
+    source = tmp_path / "receipt.json"
+    source.write_text(json.dumps({"schema": 1, "status": "fail", "unit": "M1", "grade": "unknown",
+                                 "plan": {}, "snapshot": {}, "results": {}, "log": "missing.log", "error": "bad plan"}),
+                      encoding="utf-8")
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    monkeypatch.chdir(tmp_path)
+    assert mission_state.main(["inspect", "--receipt", str(source)]) == 0
+    assert json.loads(capsys.readouterr().out)["recorded"]["error"] == "bad plan"
+    after = {str(path.relative_to(tmp_path)): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    assert before == after
+
+
+@pytest.mark.parametrize("option", ["--plan", "--receipt"])
+def test_inspect_empty_or_missing_path_has_no_traceback(tmp_path, monkeypatch, capsys, option):
+    monkeypatch.chdir(tmp_path)
+    for path in ("", "missing.json"):
+        assert mission_state.main(["inspect", option, path]) == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "오류: inspect: 파일 읽기 실패\n"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_inspect_rejects_unrepresentable_receipt_seconds(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "receipt.json"
+    source.write_text(json.dumps({"schema": 1, "status": "fail", "unit": "M1", "grade": "unknown",
+                                 "plan": {}, "snapshot": {}, "results": {}, "log": "missing.log", "error": "bad plan",
+                                 "seconds": 10 ** 400}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    before = source.read_bytes()
+    assert mission_state.main(["inspect", "--receipt", str(source)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "오류: inspect: receipt.seconds 형식 오류\n"
+    assert source.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [source]
+
+
 class Mission:
     def __init__(self, root, capsys):
         self.root = root

@@ -1147,6 +1147,14 @@ def cmd_document_list(ctx, args):
     return result
 
 
+def cmd_inspect(ctx, args):
+    if args.plan:
+        summary = verification.inspect_artifact(args.plan, "plan")
+    else:
+        summary = verification.inspect_artifact(args.receipt, "receipt")
+    return [json.dumps(summary, ensure_ascii=False)]
+
+
 def build_parser():
     parser = OneLineParser(prog="mission_state.py", description="미션 상태 파일 쓰기")
     parser.add_argument("--project", help="어댑터를 찾기 시작할 폴더 (기본: 현재 폴더)")
@@ -1170,6 +1178,10 @@ def build_parser():
     leaf(sub, "status", cmd_status)
     leaf(sub, "context", cmd_context)
     leaf(sub, "schema", cmd_schema)
+    inspect = leaf(sub, "inspect", cmd_inspect)
+    source = inspect.add_mutually_exclusive_group(required=True)
+    source.add_argument("--plan", default="")
+    source.add_argument("--receipt", default="")
     brief = leaf(sub, "brief", cmd_brief)
     brief.add_argument("id")
     brief.add_argument("--references", default="")
@@ -1293,6 +1305,10 @@ def main(argv=None, runtime="claude"):
         try:
             args = build_parser().parse_args(argv)
         except SystemExit:
+            return OK
+        if args.handler == cmd_inspect:
+            for line in cmd_inspect({}, args):
+                print(line)
             return OK
         runtime = getattr(args, "runtime", None) or runtime
         try:

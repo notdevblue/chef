@@ -52,6 +52,15 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 
 ## 계획
 
+기존 계획이나 receipt를 빠르게 확인할 때는 공유 CLI의 `inspect`를 쓴다.
+
+```text
+python <plugin-root>/skills/mission/scripts/mission_state.py inspect --plan <계획.json>
+python <plugin-root>/skills/mission/scripts/mission_state.py inspect --receipt <receipt.json>
+```
+
+`--plan`과 `--receipt`는 하나만 지정한다. 출력은 원본을 수정하거나 mission·adapter·ACTIVE를 찾지 않고, `source`·`identity`·`counts`·`steps`·`statusCounts`·`failedSteps`·`failure.repeatCount`·`executionCounts`와 `recorded` 포인터를 요약한다. 목록은 길이를 제한해 표시하고 나머지는 `truncatedFields`로 알린다. 원본 JSON·로그·포인터 대상 파일을 통째로 읽지 않는다. `current_validity`는 항상 `not_checked`이므로 요약만으로 현재 입력·정책·환경의 유효성이나 결과 재사용을 판단하지 않는다. 실제 검증과 재사용 판단은 기존 `preflight`·`verify`가 맡는다.
+
 ```json
 {
   "grade": "pytest-pass",

@@ -14,6 +14,179 @@ import mission_state
 import verification
 
 
+@pytest.fixture
+def inspect_plan():
+    return {"grade": "pytest-pass", "inputs": ["src", "tests"], "environment": {"target": "fictional-secret"},
+            "referenceBundle": "references.json", "commands": [
+                {"id": "prepare", "argv": ["fictional-tool", "secret-argument"], "reusable": True, "outputs": []},
+                {"id": "check", "argv": ["fictional-check"]},
+                {"id": "finish", "argv": ["fictional-finish"]},
+            ]}
+
+
+@pytest.fixture
+def inspect_receipt(inspect_plan):
+    return {"schema": 1, "runnerVersion": 2, "unit": "M1", "grade": "pytest-pass", "status": "fail",
+            "plan": inspect_plan, "snapshot": {"src/main.py": "input-hash"}, "results": {},
+            "log": "never-open.log", "logHash": "log-hash", "error": "fictional command failure",
+            "startedAt": "2026-01-01T00:00:00Z", "finishedAt": "2026-01-01T00:00:01Z", "seconds": 1.0,
+            "executionCounts": {"executed": 1, "reused": 1},
+            "failure": {"category": "command_exit", "step": 1, "signature": "failure-signature",
+                        "repeatCount": 3, "previousReceipt": "never-open-previous.json"},
+            "priorReceipt": "never-open-previous.json", "priorReceiptHash": "previous-hash",
+            "steps": [{"index": 0, "id": "prepare", "status": "reused", "sourceReceipt": "never-open-source.json",
+                       "sourceReceiptHash": "source-hash", "sourceStep": 0},
+                      {"index": 1, "id": "check", "status": "failed", "exitCode": 2},
+                      {"index": 2, "id": "finish", "status": "not_run"}]}
+
+
+def test_inspect_plan_and_receipt_only_read_source(tmp_path, inspect_plan, inspect_receipt, monkeypatch):
+    source = tmp_path / "artifact.json"
+    real_read = Path.read_bytes
+    opened = []
+
+    def read(path):
+        opened.append(path)
+        assert path == source
+        return real_read(path)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("inspect performed an execution or validity check")
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+    monkeypatch.setattr(verification.subprocess, "run", unexpected)
+    monkeypatch.setattr(verification, "validate_plan", unexpected)
+    monkeypatch.setattr(verification, "validate_receipt", unexpected)
+    monkeypatch.setattr(verification, "runtime_key", unexpected)
+    for kind, value in (("plan", inspect_plan), ("receipt", inspect_receipt)):
+        source.write_text(json.dumps(value), encoding="utf-8")
+        before = real_read(source)
+        result = verification.inspect_artifact(source, kind)
+        assert result["source"] == {"path": str(source.resolve()), "sha256": verification.hashlib.sha256(before).hexdigest()}
+        assert result["current_validity"] == "not_checked"
+        assert result["counts"]["inputEntries"] == 2
+        assert result["counts"]["referenceBundles"] == 1
+        assert result["counts"]["commands"] == 3
+        assert result["steps"]["omitted"] == 0
+        assert "fictional-secret" not in json.dumps(result)
+        assert "secret-argument" not in json.dumps(result)
+        assert "input-hash" not in json.dumps(result)
+        assert real_read(source) == before
+    assert opened == [source, source]
+    assert list(tmp_path.iterdir()) == [source]
+    assert result["statusCounts"] == {"passed": 0, "failed": 1, "reused": 1, "not_run": 1}
+    assert result["executionCounts"] == {"executed": 1, "reused": 1}
+    assert result["failure"]["repeatCount"] == 3
+    assert result["failedSteps"]["items"] == [{"index": 1, "id": "check", "exitCode": 2}]
+    assert result["steps"]["items"][0]["sourceReceipt"] == "never-open-source.json"
+    assert result["recorded"]["priorReceipt"] == "never-open-previous.json"
+
+
+def test_inspect_recorded_pass_does_not_check_current_inputs(tmp_path, inspect_receipt):
+    inspect_receipt["status"] = "pass"
+    inspect_receipt["steps"][1]["status"] = "passed"
+    inspect_receipt["steps"][2]["status"] = "passed"
+    inspect_receipt["executionCounts"]["executed"] = 2
+    inspect_receipt["error"] = ""
+    inspect_receipt["failure"] = {"category": "", "step": -1, "repeatCount": 0}
+    source = tmp_path / "pass.json"
+    source.write_text(json.dumps(inspect_receipt), encoding="utf-8")
+    result = verification.inspect_artifact(source, "receipt")
+    assert result["identity"]["status"] == "pass"
+    assert result["current_validity"] == "not_checked"
+    assert result["failedSteps"] == {"items": [], "omitted": 0}
+    assert not (tmp_path / "never-open.log").exists()
+
+
+def test_inspect_accepts_actual_generated_receipts_and_original_plan(mission):
+    root, folder, _ = mission
+    plan = reusable_plan(mission)
+    assert verification.inspect_artifact(root / "plan.json", "plan")["counts"]["commands"] == 2
+    code, first = verify(mission)
+    assert code == 1
+    assert verification.inspect_artifact(first, "receipt")["statusCounts"]["failed"] == 1
+    code, second = verify(mission)
+    assert code == 1
+    result = verification.inspect_artifact(second, "receipt")
+    assert result["executionCounts"] == {"executed": 1, "reused": 1}
+    assert result["failure"]["repeatCount"] == 2
+    plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
+    save_plan(mission)
+    code, final = verify(mission)
+    assert code == 0
+    assert verification.inspect_artifact(final, "receipt")["identity"]["status"] == "pass"
+    path, _, _ = verification.record_failure(root, folder, "M1", "fictional invalid plan")
+    result = verification.inspect_artifact(path, "receipt")
+    assert result["counts"]["commands"] == 0
+    assert result["failure"]["category"] == "plan_invalid"
+
+
+def test_inspect_preflight_failure_and_legacy_absent_steps(tmp_path, inspect_receipt):
+    source = tmp_path / "fail.json"
+    inspect_receipt.update(plan={}, steps=[], executionCounts={"executed": 0, "reused": 0}, snapshot={})
+    inspect_receipt["failure"].update(category="plan_invalid", step=-1)
+    source.write_text(json.dumps(inspect_receipt), encoding="utf-8")
+    result = verification.inspect_artifact(source, "receipt")
+    assert result["counts"]["commands"] == 0
+    assert result["failure"]["category"] == "plan_invalid"
+    del inspect_receipt["steps"]
+    del inspect_receipt["executionCounts"]
+    source.write_text(json.dumps(inspect_receipt), encoding="utf-8")
+    result = verification.inspect_artifact(source, "receipt")
+    assert "steps" not in result and "executionCounts" not in result and "statusCounts" not in result
+
+
+@pytest.mark.parametrize("kind,field,value", [
+    ("plan", "kind", "receipt"), ("plan", "schema", 2), ("plan", "schema", True),
+    ("plan", "commands", ["invalid"]), ("plan", "commands", []), ("plan", "inputs", "src"),
+    ("plan", "environment", []), ("plan", "unit", ["invalid"]), ("plan", "grade", 1),
+    ("receipt", "kind", "plan"), ("receipt", "schema", "1"), ("receipt", "status", "passed"),
+    ("receipt", "snapshot", []), ("receipt", "steps", [{}]), ("receipt", "failure", []),
+    ("receipt", "executionCounts", {"executed": True, "reused": 1}),
+    ("receipt", "executionCounts", {"executed": 999, "reused": 1}),
+    ("receipt", "seconds", float("nan")), ("receipt", "plan", []),
+])
+def test_inspect_rejects_wrong_artifact_structure(tmp_path, inspect_plan, inspect_receipt, kind, field, value):
+    artifacts = {"plan": inspect_plan, "receipt": inspect_receipt}
+    artifacts[kind][field] = value
+    source = tmp_path / "invalid.json"
+    source.write_text(json.dumps(artifacts[kind]), encoding="utf-8")
+    with pytest.raises(verification.VerificationError, match="inspect:"):
+        verification.inspect_artifact(source, kind)
+
+
+def test_inspect_large_receipt_has_bounded_output_and_late_failure(tmp_path, inspect_receipt):
+    size = 2000
+    long_text = "x" * 10000
+    inspect_receipt["plan"]["commands"] = [
+        {"id": f"step-{index}-{long_text}", "argv": [long_text]} for index in range(size)]
+    inspect_receipt["steps"] = [
+        {"index": index, "id": f"step-{index}-{long_text}", "status": "reused", "sourceReceipt": long_text,
+         "sourceReceiptHash": long_text} for index in range(size)]
+    inspect_receipt["steps"][-1].update(status="failed", exitCode=1)
+    inspect_receipt["executionCounts"] = {"executed": 1, "reused": size - 1}
+    inspect_receipt["failure"]["step"] = size - 1
+    inspect_receipt["snapshot"] = {f"src/{index}": long_text for index in range(size)}
+    inspect_receipt["error"] = long_text
+    source = tmp_path / "large.json"
+    source.write_text(json.dumps(inspect_receipt), encoding="utf-8")
+    result = verification.inspect_artifact(source, "receipt")
+    assert len(json.dumps(result)) < 14000
+    assert result["counts"]["snapshotFiles"] == size
+    assert result["steps"]["omitted"] == size - 8
+    assert len(result["steps"]["items"]) == 8
+    assert result["failedSteps"]["items"][0]["index"] == size - 1
+    assert result["truncatedFields"]["omitted"] > 0
+    assert len(result["truncatedFields"]["items"]) == 8
+    assert len(result["recorded"]["error"]) == 240
+    source.write_text(json.dumps(inspect_receipt["plan"]), encoding="utf-8")
+    plan_result = verification.inspect_artifact(source, "plan")
+    assert len(json.dumps(plan_result)) < 4000
+    assert plan_result["steps"]["omitted"] == size - 8
+    assert len(plan_result["steps"]["items"]) == 8
+    assert len(plan_result["truncatedFields"]["items"]) == 8
+
+
 def resource_settings(tmp_path, *resources):
     return {"resourceDir": str(tmp_path / "shared-resources"), "resources": {"pytest-pass": list(resources)}}
 
