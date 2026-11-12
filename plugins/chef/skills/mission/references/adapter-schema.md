@@ -10,6 +10,8 @@
 미션 시작·재개는 [공통 진입 CLI](mission-entry.md)를 먼저 실행한다. 선택적으로 등록한 외부 이벤트는 어댑터가 없어도 준비를 실행할 수 있다.
 이벤트가 적용되는 root의 open·resume은 어댑터 탐색보다 먼저 진입 receipt를 확인한다. 아래의 어댑터 없음 알림은 진입 등록이 없는 환경에 해당한다.
 
+### Claude
+
 스킬과 가드 훅은 같은 순서로 찾는다. 시작 폴더는 `CLAUDE_PROJECT_DIR`, 없으면 cwd.
 
 1. **저장소 안 어댑터** — 시작 폴더에서 위로 올라가며 `.claude/orchestrator/adapter.json`이 있는 첫 폴더.
@@ -36,6 +38,33 @@
 
 어댑터를 찾으면 같은 폴더의 `local.json`(PC별 값, VCS 제외)을 깊게 병합해 읽는다. 객체는 키별로 합치고
 배열·스칼라는 `local.json` 값이 통째로 덮는다. `schema`는 병합 뒤 값으로 검사한다.
+
+### Codex
+
+Codex는 훅 payload의 cwd를 시작점으로 삼는다. 명령에 cwd가 있으면 그 폴더를 사용한다.
+`CLAUDE_PROJECT_DIR`와 Claude 플러그인 옵션은 Codex에서 읽지 않는다.
+
+1. 시작 폴더에서 위로 올라가며 `.codex/orchestrator/adapter.json`을 확인하고,
+   같은 폴더에 없으면 `.claude/orchestrator/adapter.json`도 확인한다. 가까운 폴더가 우선이다.
+2. 없으면 시작 셸의 `HAN_ADAPTERS_DIR`을 사용한다. 값이 없거나 비어 있으면
+   `<CODEX_HOME>/config.toml` 또는 `~/.codex/config.toml`의 기존
+   `[shell_environment_policy.set].HAN_ADAPTERS_DIR`을 읽는다. 환경변수는 설정값보다 우선한다.
+3. 둘 다 설정되지 않았고 저장소에서 직접 실행할 때만 `<저장소>/adapters`를 사용한다.
+   설치 캐시에는 이 폴더가 없으므로 개인 레지스트리 경로를 환경변수나 Codex 설정에 둔다.
+   TOML 폴백은 표준 라이브러리 `tomllib`을 쓰므로 Python 3.11 이상이 필요하다.
+
+Claude와 Codex는 같은 레지스트리·stateDir·슬롯 잠금 파일을 공유한다.
+Codex 덮어쓰기는 `runtimes.codex` 객체에 둔다. 병합 순서는
+`adapter.json` → 그 파일의 `runtimes.codex` → `local.json` → 그 파일의 `runtimes.codex`다.
+객체는 깊게 병합하고 배열·스칼라는 교체한다. 공통 PC별 경로는 local.json에서 계속 관리한다.
+스킬과 가드, check_guard, slots가 이 병합 규칙을 같이 쓴다.
+
+`AdapterNotFound`는 미션 마커 명령(`echo han-mission open|resume|close <id>`)에서만
+`미션 가드 꺼짐: 어댑터 못 찾음 — <이유>`로 알리고(차단은 안 함), 다른 명령에는 알리지 않는다. 가능한 이유는
+시작 폴더 없음, 경로 미설정, 레지스트리 폴더나 `projects.json` 없음, 맞는 `roots` 없음이다.
+Codex 설정 읽기·형식 오류 또는 Python 버전 부족은 `GuardOff`이므로 마커 여부와 관계없이 훅 호출에서
+`미션 가드 꺼짐: <이유>`를 알린다. 셸 `echo`의 텍스트 출력은 훅 실행 증거가 아니다. 미션을 열거나 재개한
+뒤에는 훅의 `가드 켜짐` 안내와 `<stateDir>/ACTIVE`의 미션 id 및 현재 세션 id가 일치하는지 확인한다.
 
 ## Grok에서 상태 읽기
 
@@ -167,8 +196,8 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `mission.staleHours` | 선택. ACTIVE 끊김 의심 기준 시간(기본 24, 0이면 끔). 환경변수 `HAN_STALE_HOURS`가 우선. 표시만 하고 자동으로 닫지 않는다(`close-stale --force-close-stale`) |
 | `roles.*` | 역할별 실제 에이전트·스킬 이름. 없는 역할은 아래 행의 기본값을 쓰고, 기본값이 없으면 `general-purpose` |
 | `roles.implementSmall` | 승인된 문서·정해진 소규모 수정 담당. 없으면 implement. 구현과 독립 리뷰 분리는 유지 |
-| `roles.verify` | 테스트·Unity Play 실행 전담. 없으면 `chef:verifier`. Sonnet 5.5 / low 고정(`rolePolicy.model`이 `inherit`면 정책 우선), 코드 수정·모델 전환·완료 판정 금지 |
-| `roles.review` | 첫 심층 리뷰를 맡을 읽기 전용 에이전트. 프로젝트 리뷰어 이름(예시의 `code-reviewer`)을 쓰고, 없으면 `chef:code-reviewer`(Opus / high, `rolePolicy.model`이 `inherit`면 정책 우선). 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 `chef:reviewer-small` |
+| `roles.verify` | 테스트·Unity Play 실행 전담. 기본 역할·모델·effort는 런타임 진입점의 역할 계약. 코드 수정·모델 전환·완료 판정 금지 |
+| `roles.review` | 첫 심층 리뷰를 맡을 읽기 전용 역할. 프로젝트 리뷰어와 기본·작은 리뷰 라우팅·모델은 런타임 역할 계약. 작은 문서 첫 리뷰의 뜻·승인 범위 조건은 공통 mission 절차 |
 | `roles.audit` | 미션 끝 기록 감사(SKILL §6의 4)를 맡을 읽기 전용 에이전트. 없으면 `roles.review`. 구현 역할과 다른 모델이면 더 좋다 |
 | `rolePolicy` | 선택. 이 플러그인 스킬이 역할을 파견할 때의 정책 `{"model": "definition" 또는 "inherit", "subagents": true 또는 false}`. 없거나 키가 없으면 `model: "definition"`, `subagents: true`(기존 동작). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.rolePolicy`·`runtimes.grok.rolePolicy`가 기존 깊은 병합으로 최상위 값을 덮는다. `roles`의 이름 매핑은 바꾸지 않는다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다 |
 | `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex에서 미등록 파견의 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
@@ -226,8 +255,8 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 ## 슬롯
 
 미션을 동시에 여러 개 돌리려면 워크스페이스를 나눈다. 슬롯 하나는 같은 스트림을 받는 별도 워크스페이스이고,
-그 폴더에서 띄운 Claude 세션 하나가 미션 하나를 맡는다. 세션마다 MCP 연결·에디터·`ACTIVE`가 따로라
-서로 막지 않는다. 만들고 갱신하는 절차는 `/chef:slots`, 프로젝트별 준비 단계는 `adapter.md`의 "슬롯 준비".
+그 폴더에서 띄운 해당 런타임 세션 하나가 미션 하나를 맡는다. 세션마다 MCP 연결·에디터·`ACTIVE`가 따로라
+서로 막지 않는다. 만들고 갱신하는 절차는 현재 런타임의 slots 스킬, 프로젝트별 준비 단계는 `adapter.md`의 "슬롯 준비".
 
 | 키 | 뜻 |
 | --- | --- |
@@ -315,7 +344,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `client` | 슬롯 작업 공간 이름 |
 | `created` | 만든 시각 |
 | `synced` | 마지막 동기화 시각 |
-| `state` | `creating`(만드는 중) / `ready` / `failed:<단계 id>`(만들다 실패) / `failed:refresh:<단계 id>`(갱신 실패. `churn`은 churn 되돌림 실패, `resolve`는 `--keep-local` 뒤 남은 충돌). 만들다 실패·중단된 슬롯은 `create --resume`, 갱신 실패는 `refresh`로 복구한다. `run`·`refresh`는 그 밖의 상태면 거부한다. 같은 슬롯 동시 조작은 `<stateDir>/slots/<이름>.lock`으로 막는다. `--discard-local` 플래그를 포함한 동작은 `/chef:slots`가 정본이다 |
+| `state` | `creating`(만드는 중) / `ready` / `failed:<단계 id>`(만들다 실패) / `failed:refresh:<단계 id>`(갱신 실패. `churn`은 churn 되돌림 실패, `resolve`는 `--keep-local` 뒤 남은 충돌). 만들다 실패·중단된 슬롯은 `create --resume`, 갱신 실패는 `refresh`로 복구한다. `run`·`refresh`는 그 밖의 상태면 거부한다. 같은 슬롯 동시 조작은 `<stateDir>/slots/<이름>.lock`으로 막는다. `--discard-local` 플래그를 포함한 동작은 공통 slots 절차가 정본이다 |
 
 슬롯 폴더도 레지스트리 `roots`에 넣어야(예: `<root>/*`) 슬롯에서 띄운 세션이 어댑터를 찾는다.
 
@@ -330,3 +359,12 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 - 독점 락 파일 종류
 - 하네스 문서 위치(규칙·라우터·워크플로)
 - 슬롯 준비(슬롯을 쓰면): 새 워크스페이스가 빌드·검증 가능해지기까지의 단계와 실측 시간
+
+## Codex 슬롯 준비
+
+Codex에 필요한 준비 단계는 `runtimes.codex.slots.prepare`에 둔다. Claude의 설정 복사·메모리 junction을
+Codex에 그대로 쓰지 않는다. 예시 어댑터(`adapters/example/`)는 공통 sync·library·junction·import·verify 단계를 사용한다.
+`{memoryDir}`·`{mainMemoryDir}`는 Claude 전용 변수다. Codex 준비 단계에서는 쓰지 않는다.
+Codex 전용 MCP 설정과 AGENTS.md가 로컬 파일이면 준비 단계에 실제 복사 절차를 명시한다.
+Codex의 기본 셸은 Windows에서 PowerShell로 해석하고, 명시된 shell이 있으면 그 값을 따른다.
+가드는 도구 차단 보조 수단이며 write_stdin의 후속 입력이나 의도적 우회를 통제하지 않는다.

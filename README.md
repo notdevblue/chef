@@ -10,6 +10,7 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 
 | 구성 | 위치 | 하는 일 |
 | --- | --- | --- |
+| 공통 스킬 절차 | `plugins/chef/shared/skills/` | 다섯 스킬의 단계·승인·검증·완료 정본. 런타임 진입점은 도구·역할·경로 차이만 둠 |
 | 개인 규칙 | `plugins/chef/rules/` | 플러그인 설정 `inject_rules`가 `on`이거나 `shared`일 때만(`shared`는 `personal-rules.md`를 뺀 나머지), 세션 시작·재개·압축 때 `SessionStart` 훅이, 서브에이전트 시작 때 `SubagentStart` 훅이 컨텍스트에 넣는다(예전 `~/.claude/CLAUDE.md`) |
 | 에이전트 | `plugins/chef/agents/` | `chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:code-reviewer`, `chef:reviewer-small` |
 | `/chef:mission` | `plugins/chef/skills/mission/` | 컨텐츠 확인 → PoC → 구현 → 검토, 사람 확인 A·B·C. 상태 파일은 `scripts/mission_state.py`로만 쓰고, 끝에 기록 감사 |
@@ -261,7 +262,8 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
 - 슬롯 테스트: `python -m pytest plugins/chef/skills/slots/scripts -q -p no:cacheprovider`
 - Codex 런타임 테스트: `python -m pytest plugins/chef/codex/test_codex.py -q -p no:cacheprovider`
 - Grok 조회 테스트: `python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider`
-- Codex 공유 자료: `plugins/chef/skills/mission/references`의 템플릿·예시·양식이 원본이다. 고친 뒤 `python plugins/chef/codex/sync_shared.py --write`로 Codex 사본을 맞춘다(테스트가 불일치를 잡는다).
+- 공통 스킬 절차: `plugins/chef/shared/skills/*.md`가 단일 정본이며 Claude·Codex·Grok의 `SKILL.md`는 공통 문서를 읽고 런타임 실행 차이만 적용한다. 공통 참조·양식은 `plugins/chef/skills/mission/references`에 한 벌만 둔다. Codex 기존 참조 경로는 정본 링크 포인터다. `python plugins/chef/codex/sync_shared.py`로 진입점·정본·포인터를 검사하고, `--write`는 참조 포인터를 갱신한다.
+  검사는 런타임 참조 폴더의 불필요한 사본과 공백을 정규화한 120자 이상 비코드 문단의 재복제를 잡는다. 의역이나 짧은 구절의 의미 중복까지 판정하지 않는다.
 - 설치·어댑터 점검: `python plugins/chef/skills/doctor/scripts/doctor.py`
 
 사용량과 반복 리뷰는 [사용량 운영 규약](plugins/chef/skills/mission/references/usage-policy.md)을 따른다.

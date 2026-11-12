@@ -2,21 +2,9 @@
 
 ## 역할과 입력
 
-Claude는 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium,
-`chef:verifier`는 low, `chef:dev-medium`은 high로 시작한다. 첫 심층 리뷰·기록 감사의 기본 역할은 `chef:code-reviewer`(Opus / high)이고,
-설계 판단은 Opus / high를 명시한다.
-문서 변경이 문구·양식이나 한 파일의 몇 절에 그치고 규칙의 뜻과 승인 범위가 그대로면 첫 리뷰도 `chef:reviewer-small`로 하고, 그 브리프에는 변경 전 본 대비 diff를 넣는다.
-새 규칙·규칙 관계 변경과 사람이 결정에 쓰는 문서(질문·보고)의 첫 리뷰는 심층 리뷰를 유지한다.
-모델·effort를 지정할 수 없으면 실제 설정을 미확인으로 보고하고 역할 이름만으로 적용됐다고 말하지 않는다.
-Claude에서 `rolePolicy.model`이 `definition`이면 리뷰·검증 파견의 Agent 호출 `model` 인자에 `opus` 또는 `sonnet`을 넣는다. 인자를 비우지 않는다. 첫 심층 리뷰·기록 감사·확대만 `opus`다. 정해진 수정의 재리뷰는 같은 리뷰 역할에 `sonnet`이다. 독립 재리뷰를 첫 라운드와 같은 Opus 호출로 반복하지 않는다.
-Claude의 편집 역할과 리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고
-ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속이나 검색을 확인하지 못하면 검증 가능으로 보고하지 않는다.
-도구 축소가 실제 사용량을 얼마나 줄였는지는 측정 전 미확인으로 남긴다.
-Codex의 역할·모델 배정은 `../../../codex/skills/chef-mission/references/codex-roles.md`를 유지한다.
-Sonnet 설정을 Codex 역할에 복사하지 않는다.
-어댑터 `rolePolicy.model`이 `inherit`면 이 배정보다 그 정책이 우선한다(Claude는 코디네이터 모델 별칭, Codex는 부모 상속).
-공통 계약·구조 변경·원인 불명·판단 충돌, reviewer-small이 돌려준 뜻·승인 범위 변경이면 근거와 남은 범위를 메인에 반환하고 더 깊은 검토로 확대한다.
-테스트 실행자는 원인 분석이나 모델 전환을 직접 하지 않는다.
+역할·모델·effort·도구·상속 정책은 현재 런타임 진입점의 실행 계약을 따른다. 지정한 설정을 확인할 수 없으면 미확인으로 보고한다.
+문서 변경이 문구·양식이나 한 파일의 몇 절에 그치고 규칙의 뜻과 승인 범위가 그대로면 첫 리뷰도 작은 리뷰 역할로 하고, 변경 전 본 대비 diff를 넘긴다. 새 규칙·규칙 관계 변경과 질문·보고의 첫 리뷰는 심층 리뷰다.
+공통 계약·구조 변경·원인 불명·판단 충돌, 작은 리뷰어가 돌려준 뜻·승인 범위 변경이면 근거와 남은 범위를 반환하고 심층 리뷰로 확대한다. 테스트 실행자는 원인 분석·모델 전환을 직접 하지 않는다.
 
 코디네이터는 방향·최신 답·승인 원문·적용 규칙·양식의 실제 경로를 정하고
 `reference snapshot --source <자료> --source <자료> --output <묶음.json>`으로 고정한다.
@@ -59,7 +47,7 @@ clean·findings·closed-low 모두 기록해야 다음 범위 비교가 직전 �
 동일 소유·검증을 공유하는 작은 수정은 묶어 파견한다. 기존 승인 단위를 자동 병합하거나 receipt를 공유하지 않는다.
 문서 기존 답·설계 표 보존은 `check_human_doc.py --source`, JSON 구문·링크·상태 검사는 기존 CLI로 먼저 검사한다.
 코디네이터는 생성 문서의 JSON 정본과 작성 담당 하나를 유지하고, 검토한 초안만 발행한다.
-계획·receipt를 먼저 훑을 때는 `python <plugin-root>/skills/mission/scripts/mission_state.py inspect --plan <계획.json>` 또는 `... inspect --receipt <receipt.json>`을 쓴다. 둘 중 하나만 지정하며 mission·adapter·ACTIVE 없이 읽기 전용으로 요약한다. `source`, `identity`, `counts`, 단계별 `steps`·`statusCounts`, `failedSteps`, `failure.repeatCount`, `executionCounts`, `recorded` 포인터 중 필요한 부분만 확인한다. 원본 JSON·로그 전체를 컨텍스트에 싣지 않는다. `current_validity`는 `not_checked`이며, 이 요약은 현재 입력·정책·환경 검증이나 결과 재사용 판정이 아니다. 그 판정은 기존 `preflight`·`verify`가 맡는다.
+계획·receipt를 먼저 훑을 때는 `python "<mission-state>" <mission-state-runtime> inspect --plan <계획.json>` 또는 `... inspect --receipt <receipt.json>`을 쓴다. 둘 중 하나만 지정하며 mission·adapter·ACTIVE 없이 읽기 전용으로 요약한다. `source`, `identity`, `counts`, 단계별 `steps`·`statusCounts`, `failedSteps`, `failure.repeatCount`, `executionCounts`, `recorded` 포인터 중 필요한 부분만 확인한다. 원본 JSON·로그 전체를 컨텍스트에 싣지 않는다. `current_validity`는 `not_checked`이며, 이 요약은 현재 입력·정책·환경 검증이나 결과 재사용 판정이 아니다. 그 판정은 기존 `preflight`·`verify`가 맡는다.
 반환 상세와 증거는 파일로 받고 `handoff <단위> --summary <짧은 결과> --detail <상세> --evidence <근거>`로 연결한다.
 상세·증거는 프로젝트 안 기존 파일이며 `--evidence`를 반복할 수 있다. 기본 summary 상한은 1000자다.
 `handoff`는 파일 포인터를 출력할 뿐 상태를 쓰거나 완료·승인을 판정하지 않는다.
@@ -72,38 +60,4 @@ Medium 이상이 남았거나 수정끼리 충돌하거나 같은 지적이 재�
 
 ## 측정
 
-`scripts/usage_report.py`는 Claude JSONL을 읽는 로컬 명령이다. 모델 호출·상태 변경 없이 프로젝트별,
-역할별, 모델·effort별 입력·캐시 생성·캐시 읽기·출력과 별도 Advisor 사용량을 JSON으로 저장한다.
-보고서에는 프롬프트·응답·암호화된 Advisor 본문을 넣지 않는다.
-
-```text
-python <plugin>/skills/mission/scripts/usage_report.py --project main=D:/Work/Game --project slot1=D:/Work/slots/slot1 --start 2026-10-23T00:00:00+09:00 --end 2026-10-24T00:00:00+09:00 --output usage.json
-```
-
-`--start` 포함·`--end` 제외이며 시간대가 필수다. 기본 설정 디렉터리는 `CLAUDE_CONFIG_DIR` 또는
-`~/.claude`다. `--claude-home`으로 바꿀 수 있다. `--mission-root 이름=경로`는 해당 프로젝트의 미션
-루트를 지정하며 반복할 수 있다. 생략하면 어댑터의 `paths.stateDir`을 찾는다. 없는 경로는 보고서에 표시한다.
-
-중복 스트리밍 응답은 requestId·message.id로 합치고 각 토큰 필드의 최댓값을 쓴다. 별도 Advisor iteration은
-일반 메시지 합계와 분리한다. 알 수 없는 iteration·손상된 줄·누락 필드는 진단에 남긴다.
-단순 합계는 요금이나 구독 한도 소비율이 아니다. 캐시 읽기를 신규 입력과 같은 비용으로 계산하지 않는다.
-실행 중 로그에는 같은 응답의 usage가 뒤늦게 추가될 수 있다. 기간과 보고서 생성 시각을 함께 보존하며,
-동일 기간의 재집계 값이 바뀌는 것을 절감·증가 효과로 해석하지 않는다.
-
-리뷰 기록에는 `review --findings-count N --fixed-count N`을 사용한다. 전자는 해당 라운드의 남은 지적,
-후자는 직전 지적 중 해소를 확인한 수다(`closed-low`의 `--findings-count`는 0 또는 생략). 기록되지 않은 값은 알 수 없음으로 남기며 고유 버그 수로 합산하지 않는다.
-보고서는 단위별 리뷰 횟수·상태·지적 수와 ledger의 명시적 retry 기록을 함께 보여 준다.
-기존 타임스탬프 없는 리뷰는 파일 수정 시각 기준임을 표시한다. retry 기록은 전체 재작업 횟수의 대용이 아니다.
-
-작업 종류별 측정은 `--activity-map <JSON>`의 명시적 메타데이터만 쓴다. 형식은 `schema: 1`,
-`activities` 배열이며 각 항목에 `sessionId`, 선택적 `agentId`, `taskKind`와 선택적 `mission`, `unit`,
-`phase`, `attempt`, `startedAt`, `endedAt`을 둔다. 실제 세션·에이전트 식별자와 시간 구간으로 연결한다.
-`taskKind`는 `implementation|document|review|verification|coordination|research`다. `agentId` 생략·빈 값은 루트 세션이며
-나머지 생략 메타데이터는 알 수 없음이다. 시각에는 시간대를 넣고 시작 포함·끝 제외로 연결한다.
-코디네이터는 파견·반환 시 확보한 실제 세션·에이전트 id와 작업 종류·단위·시도·시각을 기존 미션 기록에 남기고
-그 기록으로 로컬 activity-map을 만든다. 수동 보충도 실제 식별자와 실행 근거가 있을 때만 한다.
-프롬프트 본문으로 작업 종류를 추측하지 않는다. 매핑 누락·충돌과 미분류 사용량은 알 수 없음으로 보존하며
-`activityCoverage`의 assigned·unknown·ambiguous·conflict와 출처 수로 분류된 범위와 전체 대비 공백을 함께 보고한다.
-
-동일 범위·비슷한 작업량의 전후 보고서를 비교한다. 모델·effort 변경, 리뷰·검증 횟수, 지적·수정 확인,
-재작업 기록과 미확인 공백을 함께 보고 절감 효과를 판단한다. 정확한 계정 한도는 `/usage`로 별도 확인한다.
+실제 런타임이 제공하는 로그·모델·effort 증거를 기록하고 미확인 한계를 구분한다. Claude JSONL 측정은 [Claude 사용량](claude-usage.md)을 따른다. 다른 런타임 로그에 이 집계기를 적용하지 않는다.

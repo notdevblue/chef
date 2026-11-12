@@ -3,7 +3,19 @@ name: chef-doctor
 description: "Grok Bot이 chef 어댑터를 못 찾거나 조회 환경이 안 맞을 때 쓴다. 발견 순서와 HAN_ADAPTERS_DIR, HAN_REPO를 확인하고 읽기 전용으로 끝낸다. 실행은 이 진단 다음의 별도 단계다."
 ---
 
-# chef 조회 진단
+# Grok doctor
+
+실행 전에 [공통 절차](../../../shared/skills/doctor.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
+
+`<plugin-root>`는 이 SKILL.md에서 세 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+
+## 실행 계약
+
+- `<doctor-script>`: `<plugin-root>/skills/doctor/scripts/doctor.py`, `<doctor-runtime>`: `--runtime grok`.
+- `<check-guard-script>`: `<plugin-root>/skills/adapter-init/scripts/check_guard.py`, `<check-guard-runtime>`: `--runtime grok`.
+- `<repo>`는 `HAN_REPO` 또는 실제 체크아웃이다. 공통 doctor의 `codex-agents`는 Codex 등록 점검이며 Grok 조회와 무관하다.
+
+## Grok 조회 진단
 
 `chef-status`의 `snapshot`이 종료 코드 2이거나, 어느 어댑터를 읽는지 불확실할 때 이 스킬로 원인을 가른다.
 파일을 만들거나 고치지 않는다. Claude·Codex 플러그인 갱신으로 이 문제를 풀지 않는다.
@@ -27,14 +39,3 @@ python "<repo>/plugins/chef/grok/scripts/han_state.py" snapshot --project "<프�
    Claude 플러그인 설정과 Codex `config.toml`은 이 조회가 읽지 않는다. 훅 경로·패키징은 설치 환경에서 별도로 확인한다.
 
 진단은 여기서 끝난다. 어댑터 초안을 쓰지 않는다. 이 스킬은 미션을 열지 않는다.
-
-레지스트리·guard-cases·끊김 의심·버전을 더 보려면 공유 doctor를 읽기 전용으로 돌린다. 파일을 고치거나 미션을 닫지 않는다.
-Grok 어댑터를 못 찾는 문제의 정본은 위 snapshot이다.
-
-```text
-python "<repo>/plugins/chef/skills/doctor/scripts/doctor.py" --runtime grok
-```
-
-`active` WARN은 닫지 않는다. 미리보기를 보여 주고, 닫기는 사용자가 그 미션을 승인한 뒤 `chef-mission`의 `close-stale`로 한다.
-
-`codex-agents` 행은 Codex 역할 등록 점검이며 Grok 조회와 무관하다. WARN이면 `$CODEX_HOME/agents`(없으면 `~/.codex/agents/`)에 등록한 chef 역할 사본이 플러그인 `codex/agents/`와 내용이 다르거나(낡은 등록), 일부 역할이 빠졌거나, 플러그인에 없는 chef 역할 파일이 있다는 뜻이다. 사본을 고치지 말고 플러그인의 chef 역할을 모두 다시 복사한다. 등록이 없으면 OK(선택 사항)다.

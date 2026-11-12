@@ -3,30 +3,15 @@ name: chef-adapter-init
 description: "Grok CLI에서 미션 어댑터(adapter.json · adapter.md) 초안을 만들거나 점검할 때 쓴다. 미션 어댑터 만들어줘, 이 프로젝트에 미션 붙여줘, 어댑터 점검해줘, chef-adapter-init 요청에 사용한다. 값을 지어내지 않는다."
 ---
 
-# chef 어댑터 초안
+# Grok adapter-init
 
-계약은 `<repo>/plugins/chef/skills/mission/references/adapter-schema.md`다. 값은 프로젝트 문서·도구 도움말·설정 파일에서 확인한 것만 쓴다. 문서와 코드가 어긋나면 코드를 따른다.
-어댑터 본문을 이 스킬 안에 만들지 않는다. 초안을 쓰기 전에 사용자에게 위치를 묻는다.
+실행 전에 [공통 절차](../../../shared/skills/adapter-init.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
-`<repo>`는 `HAN_REPO`이거나 저장소 체크아웃이다. Grok은 Claude `pluginConfigs`의 `adapters_dir` 주입을 받지 않는다.
+`<plugin-root>`는 이 SKILL.md에서 세 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
 
-## 위치
+## 실행 계약
 
-둘 중 어디인지 확인받기 전에는 파일을 쓰지 않는다.
-
-- 개인 레지스트리: `HAN_ADAPTERS_DIR`의 `<이름>/`과 `projects.json`의 `roots`. VCS에 올리지 않는다. 슬롯을 쓰면 `slots.root`·`slots.client`·`slots.mainClient`는 그 폴더의 `local.json`에 둔다.
-- 저장소 안: `<프로젝트>/.grok/orchestrator/`. 팀과 공유할 때만. 개인 경로·작업 공간 이름은 넣지 않는다.
-
-`HAN_ADAPTERS_DIR`가 비어 있으면 `HAN_REPO/adapters`를 레지스트리로 쓸지 사용자에게 묻고, 경로를 정해 달라고 한다. 폴더를 추측해서 만들지 않는다.
-이미 어댑터가 있으면 새로 쓰지 않고, 확인한 값과 다른 칸만 제안한다.
-
-## 점검
-
-```text
-python "<repo>/plugins/chef/skills/adapter-init/scripts/check_guard.py" --doctor
-python "<repo>/plugins/chef/skills/adapter-init/scripts/check_guard.py" --runtime grok "<adapter.json 또는 레지스트리 이름>" [cases.json]
-```
-
-`--doctor`는 이 PC의 python이 실행되는지 본다. 표본을 생략하면 어댑터 옆 `guard-cases.json`을 쓴다.
-어긋남이 0이기 전에 초안을 확정하지 않는다. 표본 파일은 VCS에 올리지 않는다.
-초안과 미확인 값을 보여 주고 승인받은 것만 쓴다. 슬롯을 쓰기로 했으면 `chef-slots`로 첫 슬롯을 만든다.
+- `<check-guard-script>`: `<plugin-root>/skills/adapter-init/scripts/check_guard.py`, `<check-guard-runtime>`: `--runtime grok`.
+- 저장소 안 어댑터는 `<프로젝트>/.grok/orchestrator/`다. 개인 레지스트리는 `HAN_ADAPTERS_DIR`이고 Claude `pluginConfigs`의 `adapters_dir` 주입을 받지 않는다.
+- 환경변수가 비었으면 `HAN_REPO/adapters`를 레지스트리로 쓸지 묻고 경로를 정해 달라고 한다. 폴더를 추측해서 만들지 않는다.
+- 계약은 [공통 어댑터](../../../skills/mission/references/adapter-schema.md)의 Grok 절, 파견은 [Grok 역할](../chef-mission/references/grok-roles.md)이다. 첫 슬롯은 `chef-slots`로 만든다.

@@ -515,16 +515,99 @@ def test_installed_codex_integrity_uses_config_registry_read_only(project, tmp_p
     assert not list(installed.rglob("__pycache__"))
 
 
-def test_shared_references_are_copies_of_claude_source():
+@pytest.fixture
+def shared_docs():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("sync_shared", Path(__file__).with_name("sync_shared.py"))
     sync = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sync)
-    files = list(sync.shared_files())
+    return sync
+
+
+def test_shared_references_are_pointers_to_single_source(shared_docs):
+    files = list(shared_docs.shared_files())
     assert len(files) >= 10
     assert any(t.endswith("human-writing.md") for _, t in files)
-    assert sync.differing() == [], "python codex/sync_shared.py --write"
+    assert shared_docs.differing() == [], "python codex/sync_shared.py --write"
+    assert shared_docs.contract_errors() == []
+    for source, target in files:
+        assert Path(source).read_text(encoding="utf-8") != Path(target).read_text(encoding="utf-8")
+
+
+def test_shared_reference_check_detects_missing_or_copied_pointer(shared_docs, tmp_path, monkeypatch):
+    source = tmp_path / "skills/mission/references/human-writing.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("# Source\n", encoding="utf-8")
+    target = tmp_path / "codex/skills/chef-mission/references/human-writing.md"
+    monkeypatch.setattr(shared_docs, "ROOT", str(tmp_path))
+    assert shared_docs.differing() == [(str(source), str(target))]
+    target.parent.mkdir(parents=True)
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    assert shared_docs.differing() == [(str(source), str(target))]
+    target.write_text(shared_docs.pointer_text(str(source), str(target)), encoding="utf-8")
+    assert shared_docs.differing() == []
+
+
+@pytest.fixture
+def shared_doc_tree(shared_docs, tmp_path, monkeypatch):
+    plugin = tmp_path / "plugin"
+    shutil.copytree(PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(shared_docs, "ROOT", str(plugin))
+    return plugin
+
+
+def test_shared_skill_check_rejects_missing_canonical_or_wrong_entrypoint(shared_docs, shared_doc_tree):
+    plugin = shared_doc_tree
+    assert shared_docs.contract_errors() == []
+    canonical = plugin / "shared/skills/mission.md"
+    canonical.unlink()
+    assert any("shared/skills/mission.md" in error for error in shared_docs.contract_errors())
+    canonical.write_text("# Common mission\n", encoding="utf-8")
+    entrypoint = plugin / "grok/skills/chef-mission/SKILL.md"
+    entrypoint.write_text("# Detached runtime copy\n", encoding="utf-8")
+    assert any("공통 절차 링크 없음" in error and "grok/skills/chef-mission/SKILL.md" in error
+               for error in shared_docs.contract_errors())
+    entrypoint.write_text("[공통 절차](../../../shared/skills/mission.md)\n\n" + canonical.read_text(encoding="utf-8"), encoding="utf-8")
+    assert any("공통 본문 중복" in error for error in shared_docs.contract_errors())
+
+
+@pytest.mark.parametrize("name", ["question.json", "units.tsv", "ledger.tsv", "decisions.tsv", "obsolete.md"])
+def test_shared_reference_check_rejects_unmanaged_runtime_copy(shared_docs, shared_doc_tree, name):
+    reference = shared_doc_tree / "codex/skills/chef-mission/references/templates" / name
+    reference.write_text("unmanaged runtime copy\n", encoding="utf-8")
+    assert shared_docs.obsolete_reference_files() == [str(reference)]
+    assert any("불필요한 참조 사본" in error and name in error for error in shared_docs.contract_errors())
+
+
+@pytest.mark.parametrize("scope", ["section", "paragraph", "whitespace"])
+def test_shared_skill_check_rejects_partial_prose_copy(shared_docs, shared_doc_tree, scope):
+    source = (shared_doc_tree / "shared/skills/mission.md").read_text(encoding="utf-8")
+    section = source.split("## 5. 구현 진행", 1)[1].split("## 6.", 1)[0]
+    paragraph = section.split("\n\n", 2)[1]
+    copied = section
+    if scope == "paragraph":
+        copied = paragraph
+    elif scope == "whitespace":
+        copied = " \n  ".join(paragraph.split())
+    target = shared_doc_tree / "grok/skills/chef-mission/SKILL.md"
+    target.write_text(target.read_text(encoding="utf-8") + "\n" + copied, encoding="utf-8")
+    assert any("공통 문단 중복" in error and "grok/skills/chef-mission/SKILL.md" in error
+               for error in shared_docs.contract_errors())
+
+
+def test_shared_skill_check_does_not_treat_code_examples_as_shared_prose(shared_docs, shared_doc_tree):
+    source = (shared_doc_tree / "shared/skills/mission.md").read_text(encoding="utf-8")
+    code = "```" + source.split("```", 2)[1] + "```"
+    target = shared_doc_tree / "grok/skills/chef-mission/SKILL.md"
+    target.write_text(target.read_text(encoding="utf-8") + "\n" + code, encoding="utf-8")
+    assert shared_docs.contract_errors() == []
+
+
+def test_shared_reference_check_includes_claude_usage_links(shared_docs, shared_doc_tree):
+    source = shared_doc_tree / "skills/mission/references/claude-usage.md"
+    source.write_text(source.read_text(encoding="utf-8") + "\n[missing](unregistered-target.md)\n", encoding="utf-8")
+    assert any("claude-usage.md -> unregistered-target.md" in error for error in shared_docs.contract_errors())
 
 
 def test_codex_role_definitions_are_listed_and_review_inherits_the_model():

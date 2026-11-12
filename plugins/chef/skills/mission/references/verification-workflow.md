@@ -1,10 +1,10 @@
 # 검증과 완료 처리
 
+`<mission-state>`·`<mission-state-runtime>`은 현재 런타임 mission 진입점이 정한 경로·인자다.
+
 코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `preflight <단위> --plan <계획.json>`으로 정적 검사한 뒤
 `roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
-Claude는 `chef:verifier`의 Sonnet 5.5 / low, Codex는 `chef_verifier`의 GPT-6 Luna / high로 고정한다.
-등록되지 않은 Codex 역할은 `codex-roles.md`의 명시적 모델·추론 수준과 지시로 파견한다.
-어댑터 `rolePolicy.model`이 `inherit`면 두 런타임 모두 이 고정보다 그 정책이 우선한다(각 mission 스킬의 역할 정책).
+기본 역할·모델·effort와 어댑터 `rolePolicy.model`의 적용은 현재 런타임 진입점의 실행 계약을 따른다.
 검증자는 코드·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 실패·예상 밖 상태는 증거와 미완료 이유를 반환한다.
 검증 입력을 스냅샷으로 확정한 시점부터 결과 수집이 끝날 때까지 해당 입력을 바꾸는 작업을 동결한다.
 공유 Unity는 코디네이터가 Refresh·컴파일·EditMode·Play 순서를 정하고, 관련 구현자와 그 하위 작업이 모두 반환하거나 정지되어 미완료임을 확인한 뒤 verifier 한 명만 실행한다. 검증 준비에서 필요한 `.meta` 생성·생성물 생성·CL 정리를 마친다.
@@ -55,8 +55,8 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 기존 계획이나 receipt를 빠르게 확인할 때는 공유 CLI의 `inspect`를 쓴다.
 
 ```text
-python <plugin-root>/skills/mission/scripts/mission_state.py inspect --plan <계획.json>
-python <plugin-root>/skills/mission/scripts/mission_state.py inspect --receipt <receipt.json>
+python "<mission-state>" <mission-state-runtime> inspect --plan <계획.json>
+python "<mission-state>" <mission-state-runtime> inspect --receipt <receipt.json>
 ```
 
 `--plan`과 `--receipt`는 하나만 지정한다. 출력은 원본을 수정하거나 mission·adapter·ACTIVE를 찾지 않고, `source`·`identity`·`counts`·`steps`·`statusCounts`·`failedSteps`·`failure.repeatCount`·`executionCounts`와 `recorded` 포인터를 요약한다. 목록은 길이를 제한해 표시하고 나머지는 `truncatedFields`로 알린다. 원본 JSON·로그·포인터 대상 파일을 통째로 읽지 않는다. `current_validity`는 항상 `not_checked`이므로 요약만으로 현재 입력·정책·환경의 유효성이나 결과 재사용을 판단하지 않는다. 실제 검증과 재사용 판단은 기존 `preflight`·`verify`가 맡는다.

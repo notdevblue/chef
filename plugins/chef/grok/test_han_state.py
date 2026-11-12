@@ -429,7 +429,7 @@ def test_grok_skill_registration_names():
     adapter = (skills / "chef-adapter-init" / "SKILL.md").read_text(encoding="utf-8")
     distill = (skills / "chef-distill" / "SKILL.md").read_text(encoding="utf-8")
     assert "--runtime grok" in mission and "mission_state.py" in mission
-    assert "plugins/chef/skills/mission/references/" in mission and "--force-tier" in mission
+    assert "../../../shared/skills/mission.md" in mission and "--force-tier" in mission
     assert "사람에게 묻는 법" not in mission and "ACTIVE" in mission
     assert "--runtime grok" in slot_skill and "slots.py" in slot_skill and "chef-run" in slot_skill
     assert "ready" in slot_skill and "chef-watch" not in slot_skill
