@@ -267,7 +267,7 @@ def test_real_subagent_rules_drop_main_session_sections(runtime):
     payload = {"hook_event_name": "SessionStart"}
     main = context_of(run_hook(HOOKS_DIR.parent, payload=payload, runtime=runtime))
     subagent = context_of(run_hook(HOOKS_DIR.parent, payload=SUBAGENT_START, runtime=runtime))
-    for heading in ("## Answering", "## Plan Output", "## Subagent Dispatch"):
+    for heading in ("## Answering", "## Subagent Dispatch"):
         assert heading in main
         assert heading not in subagent
     for heading in ("## Basic Attitude", "## Code Writing Rules", "## Root Cause First"):

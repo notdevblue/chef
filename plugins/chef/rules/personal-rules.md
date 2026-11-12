@@ -13,7 +13,6 @@
 **NULLABLE, NULL RETURN IS PROHIBITED** — no nullable fields, parameters, or return types and no `null` returns, except in `Find*` or `TryGet*` methods. Default to `new()` or an empty value.
 **FIX RULE-VIOLATING CODE FIRST** before adding new code — only within the function/block being modified; in a review-fix round, only within the lines the fix touches.
 **NO COMMENTS** — make the code self-explanatory; fix a name or structure instead of commenting around it. Never narrate what or how the code does, even as rationale. Only a *why* the code can't express (non-obvious intent, external contract, hidden invariant, consequence, workaround reason) is allowed, in one short clause.
-**COMMENT VOICE** — surviving comments are terse notes, not doc prose; in Korean use plain `-함/-음/부름`, not `-한다/-됩니다`.
 **ONE-VALUE CHECKS USE `if`/`else`** — compare against a single value with `if` plus `else`, not `switch`, preferring `==` over `!=`. Keep a do-nothing branch as an empty block with a one-clause reason comment. No ternary; `Math.Min`/`Max`/`Clamp` to pick a value is fine.
 **BRANCH-VARYING VALUES GO INTO A FUNCTION** — move a per-branch value into one shared function named for the value, handling its edge cases; copying the check into every branch to drop the variable is not a fix.
 **NO CIRCULAR CHANGE UNITS** — one-way dependencies between CLs or commits are fine (land the prerequisite first, state the order); changes that can't build or pass checks without each other share one unit. Confirm a new unit's symbols exist in head, not only in another pending unit.

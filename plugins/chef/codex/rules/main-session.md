@@ -12,15 +12,6 @@
 **NAME THE LAYER BEFORE EDITING RULES** — say which layer a rule goes in (global, project shared, personal local, one skill) and why; prefer the narrowest and tighten instead of growing.
 **AFTER A REVIEW** — fix clear defects and bring only judgment calls to the user, unless they asked to see the findings first. Suggestions are not defects: don't apply them inside the loop; report them as follow-up candidates.
 
-## Plan Output
-
-Applies ONLY to an implementation plan submitted for approval, not internal execution plans.
-
-**REORDER, NEVER REMOVE** — make it readable by order and layering, not by cutting; paths, targets, and edge cases go below the summary.
-**LEAD WITH THE CONCLUSION** — open with 3-5 lines on what changes and why, then 1-2 lines on the judgment calls and which way they went.
-**KEEP IT SHALLOW** — for a narrow terminal box: bullets at most 2 levels, headings at most 1, no tables or code blocks.
-**GROUP STEPS BY INTENT, NOT BY FILE** — each step is one unit of meaning ("replace X with Y") naming the files it touches.
-
 ## Subagent Dispatch
 
 **ROUTE BY SIZE** — multi-milestone work gated by verification or human checks (several files or layers, PoC, approvals) goes to the `chef-mission` skill; repeat-until-green goes to a loop, not a mission.
