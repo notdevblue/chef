@@ -1207,6 +1207,100 @@ def test_prepare_cannot_use_before_run_lock_context(project):
         config.build_steps("a")
 
 
+PREPARE_CONTEXT_HELPER = (
+    'import json, pathlib, sys\n'
+    'lock, owner, mode, session, ticks = sys.argv[1:6]\n'
+    'seen = "".join(path.read_text() for path in sorted(pathlib.Path(ticks).iterdir()))\n'
+    'pathlib.Path("before-run.json").write_text(json.dumps({\n'
+    '    "mode": mode, "session": session, "owner": owner, "seen": seen,\n'
+    '    "held": pathlib.Path(lock).read_text().split("\\t")[0], "lockFile": pathlib.Path(lock).is_file(),\n'
+    '}))\n'
+)
+
+
+def seed_before_run_target(project, command, name):
+    if command == "refresh":
+        seed_slot(project, name)
+
+
+@pytest.mark.parametrize("command", ["create", "refresh"])
+def test_create_and_refresh_run_before_run_as_prepare_under_slot_lock_after_prepare(project, command):
+    context_helper = project.helper.parent / "context.py"
+    context_helper.write_text(PREPARE_CONTEXT_HELPER)
+    step = {
+        "id": "context", "cwd": "{slot}",
+        "run": f'"{{py}}" "{str(context_helper).replace(chr(92), "/")}" "{{slotLockPath}}" "{{slotLockOwnerPid}}" "{{launchMode}}" "{{sessionId}}" "{{ticks}}"',
+    }
+    project.write_adapter([project.tick_step("one", 1)], beforeRun=[step])
+    seed_before_run_target(project, command, "x")
+    code, _, _ = project.run(command, "x")
+    assert code == slots.OK
+    context = json.loads((project.slot_root / "x/before-run.json").read_text())
+    assert context["mode"] == "prepare" and context["session"] == ""
+    assert context["lockFile"] and context["held"] == context["owner"] == str(os.getpid())
+    assert "x-one end" in context["seen"]
+    assert project.state_of("x") == slots.STATE_READY
+    assert not project.lock_path("x").exists()
+    timing = (project.state_dir / "slots/beforeRun/x-timing.tsv").read_text().splitlines()
+    assert [line.split("\t")[1] for line in timing] == ["beforeRun.context"]
+
+
+@pytest.mark.parametrize("command", ["create", "refresh"])
+def test_create_and_refresh_dry_run_list_before_run_after_prepare_without_executing(project, command):
+    project.write_adapter([project.tick_step("one", 1)], beforeRun=[project.tick_step("launch", 0)])
+    seed_before_run_target(project, command, "x")
+    before = {str(path): path.read_bytes() for path in project.dir.parent.rglob("*") if path.is_file()}
+    code, out, _ = project.run(command, "x", "--dry-run")
+    after = {str(path): path.read_bytes() for path in project.dir.parent.rglob("*") if path.is_file()}
+    assert code == slots.OK and before == after and not project.ticks.exists()
+    assert out.index("x-one") < out.index("beforeRun.launch")
+
+
+@pytest.mark.parametrize("command", ["create", "refresh"])
+def test_create_and_refresh_do_nothing_extra_without_before_run(project, command):
+    project.write_adapter([project.tick_step("one", 1)])
+    seed_before_run_target(project, command, "x")
+    code, out, _ = project.run(command, "x")
+    assert code == slots.OK and "beforeRun" not in out
+    assert not (project.state_dir / "slots/beforeRun").exists()
+    assert project.state_of("x") == slots.STATE_READY
+
+
+@pytest.mark.parametrize("command", ["create", "refresh"])
+def test_create_and_refresh_report_before_run_failure_and_keep_other_slots(project, command):
+    steps = [project.tick_step("launch", 0, args="x-launch 7"), project.tick_step("later", 1)]
+    project.write_adapter([project.tick_step("one", 1)], beforeRun=steps)
+    seed_before_run_target(project, command, "x")
+    seed_before_run_target(project, command, "y")
+    code, out, _ = project.run(command, "x", "y")
+    assert code == slots.FAILED
+    assert "x: failed" in out and "beforeRun 실패" in out and "종료 코드 7" in out
+    assert "x-beforeRun.launch.out.log" in out
+    assert "y: failed" not in out
+    assert "x-later" not in project.ticks_text() and "y-launch end" in project.ticks_text()
+    assert project.state_of("x") == slots.STATE_READY and project.state_of("y") == slots.STATE_READY
+    assert (project.slot_root / "x").is_dir()
+
+
+def test_run_refresh_runs_before_run_once_as_new_not_prepare(project, monkeypatch):
+    project.write_adapter([project.tick_step("one", 1)], beforeRun=[project.tick_step("launch", 0)])
+    seed_slot(project, "a")
+    calls = []
+    monkeypatch.setattr(slots, "launch_mission", lambda *_: calls.append("terminal"))
+    modes = []
+    original = slots.Config.before_run_steps
+
+    def recorded(self, name, launch_mode, session_id):
+        modes.append(launch_mode)
+        return original(self, name, launch_mode, session_id)
+
+    monkeypatch.setattr(slots.Config, "before_run_steps", recorded)
+    code, _, _ = project.run("run", "a", "task", "--refresh")
+    assert code == slots.OK and calls == ["terminal"]
+    assert modes == ["new"]
+    assert project.ticks_text().count("a-launch start") == 1
+
+
 def test_launch_settings_use_existing_runtime_overlay_precedence(project):
     project.write_adapter([], beforeRun=[project.tick_step("base", 0)], codexProjectDocMaxBytes=32768)
     folder = project.dir / ".claude/orchestrator"
@@ -1372,7 +1466,7 @@ def test_codex_agent_configs_requires_a_mapping(project, value):
     assert code == slots.USAGE and "slots.codexAgentConfigs" in err
 
 
-@pytest.mark.parametrize("alias", ["", "role.name", "role name", "role/name", "a=1", "역할", *sorted(slots.CODEX_AGENT_RESERVED)])
+@pytest.mark.parametrize("alias", ["", "role.name", "role name", "role/name", "a=1", "역할", "a:", ":a", "a:b:c", *sorted(slots.CODEX_AGENT_RESERVED)])
 def test_codex_agent_configs_rejects_unsafe_and_reserved_aliases(project, alias):
     project.write_adapter([], codexAgentConfigs={alias: {"configFile": "{slot}/role.toml", "description": "Fictional role"}})
     code, _, err = project.run("--runtime", "codex", "run", "a", "task", "--dry-run")
@@ -1409,6 +1503,25 @@ def test_codex_agent_toml_strings_preserve_unicode_and_escape_controls():
     assert slots.toml_string(value) == expected
     for text in [value, 'C:\\roles\\;moon🚀.toml', '\x00\b\t\f\r\n"\\', r'\u003b']:
         assert tomllib.loads("value=" + slots.toml_string(text))["value"] == text
+
+
+def test_codex_agent_config_accepts_colon_alias_with_quoted_toml_key(project, recorded_session):
+    import tomllib
+
+    config, _, _, _ = recorded_session
+    config.runtime = "codex"
+    config.codex_agent_configs = {"team:helper": {"configFile": "{slot}/roles/helper.toml", "description": "Fictional role"}}
+    command = slots.wt_command(config, "a", "task")
+    options = [command[index + 1] for index, part in enumerate(command[:-1]) if part == "-c" and command[index + 1].startswith("agents.")]
+    assert len(options) == 2
+    expected_options = [
+        'agents."team:helper".config_file=' + slots.toml_string(os.path.normpath(str(project.slot_root / "a/roles/helper.toml"))),
+        'agents."team:helper".description="Fictional role"',
+    ]
+    assert options == [slots.wt_argument(option) for option in expected_options]
+    parsed = tomllib.loads("\n".join(expected_options))["agents"]["team:helper"]
+    assert parsed["description"] == "Fictional role"
+    assert slots.toml_key("archive-helper") == "archive-helper"
 
 
 @pytest.mark.parametrize("resume", [False, True])

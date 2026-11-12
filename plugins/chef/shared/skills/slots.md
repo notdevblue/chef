@@ -37,10 +37,18 @@ name	path	client	created	synced	state
 `state`는 `creating`(만드는 중이거나 중단됨), `ready`, `failed:<단계>`(만들다 실패), `failed:refresh:<단계>`(갱신하다 실패)다.
 `ready`가 아니면 `run`은 거부한다.
 
-새 미션 시작·재개는 상태·ACTIVE·세션 검사를 통과한 뒤 `slots.beforeRun[]`을 슬롯 잠금 안에서 한 번 실행한다.
-`--refresh` 갱신 후, 에디터·CLI 실행 전에 적용하며 실패하면 실행을 멈추고 기존 `ready` 상태를 유지한다.
-`--dry-run`은 실행할 단계만 표시한다. 단계 형식·런타임별 설정은 어댑터 계약의 "슬롯"을 따른다.
+`slots.beforeRun[]`은 슬롯 잠금 안에서 부르며, 부른 때는 `{launchMode}` 값으로 구분한다.
+설정이 없으면 아무것도 하지 않고, `--dry-run`은 실행할 단계만 표시한다. 단계 형식·런타임별 설정은 어댑터 계약의 "슬롯"을 따른다.
 출력 로그는 `<stateDir>/slots/beforeRun/<이름>-beforeRun.<id>.out.log`다.
+
+| `{launchMode}` | 부르는 때 |
+| --- | --- |
+| `new` | `run <이름> <작업...>`. 상태·ACTIVE 검사와 `--refresh` 갱신이 끝난 뒤, 에디터·CLI 실행 전에 한 번 |
+| `resume` | `run <이름> --resume`. 상태·ACTIVE·세션 검사를 통과한 뒤, 에디터·CLI 실행 전에 한 번 |
+| `prepare` | `create`·`create --resume`·`refresh`의 준비·갱신 단계가 성공해 슬롯이 `ready`가 된 직후 슬롯마다 한 번. 실행 전에 슬롯을 직접 열어도 정의가 맞도록 한다. `run --refresh`의 갱신은 뒤이은 `new` 호출이 맡아 `prepare`로 부르지 않는다 |
+
+`run`에서 `beforeRun`이 실패하면 실행을 멈추고 기존 `ready` 상태를 유지한다.
+`create`·`refresh`에서 실패하면 슬롯은 `ready`로 남기되 그 슬롯을 `failed`로 보고하고 종료 코드 1로 끝낸다. 다른 슬롯의 진행에는 영향이 없다.
 
 ## 명령
 

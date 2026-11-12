@@ -212,12 +212,12 @@
   "runtimes": {
     "codex": {
       "roles": {
-        "research": "chef_researcher",
-        "implement": "chef_developer_medium",
-        "verify": "chef_verifier",
+        "research": "chef:researcher",
+        "implement": "chef:dev-medium",
+        "verify": "chef:verifier",
         "review": "code-reviewer",
         "reviewLoopSkill": "review-loop",
-        "implementSmall": "chef_developer_small"
+        "implementSmall": "chef:dev-small"
       },
       "slots": {
         "prepare": [

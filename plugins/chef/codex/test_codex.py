@@ -463,12 +463,13 @@ def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
         assert any("question_integrity.py" in command for command in commands)
         assert all(not hook.get("async", False) for entry in hooks[event] for hook in entry["hooks"])
     assert set(hooks) == {"SessionStart", "SubagentStart", "PreToolUse", "Stop"}
-    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 4
+    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 5
     for removed in ("korean_reply.py", "memory_notice.py", "session_title.py"):
         assert removed not in json.dumps(hooks)
         assert not (PLUGIN / "hooks" / removed).exists()
         assert not (PLUGIN / "codex" / removed).exists()
     assert "mission_guard.py" in json.dumps(hooks["PreToolUse"])
+    assert "subagent_allow.py" in json.dumps(hooks["PreToolUse"])
     assert "session_rules.py" in json.dumps(hooks["SessionStart"])
     assert "session_rules.py" in json.dumps(hooks["SubagentStart"])
 
@@ -616,11 +617,12 @@ def test_codex_role_definitions_are_listed_and_review_inherits_the_model():
     roles = (PLUGIN / "codex/skills/chef-mission/references/codex-roles.md").read_text(encoding="utf-8")
     for path in sorted((PLUGIN / "codex/agents").glob("*.toml")):
         definition = tomllib.loads(path.read_text(encoding="utf-8"))
-        assert definition["name"].startswith("chef_")
+        assert definition["name"].startswith("chef:")
+        assert path.name == "chef-" + definition["name"].split(":", 1)[1] + ".toml"
         assert definition["description"] and definition["developer_instructions"].strip()
         assert f"codex/agents/{path.name}" in roles
     reviewer = tomllib.loads((PLUGIN / "codex/agents/chef-code-reviewer.toml").read_text(encoding="utf-8"))
-    assert reviewer["name"] == "chef_code_reviewer"
+    assert reviewer["name"] == "chef:code-reviewer"
     assert "model" not in reviewer and "model_reasoning_effort" not in reviewer
     assert "읽기 전용" in reviewer["description"]
 
@@ -629,18 +631,18 @@ def test_codex_reviewer_small_is_pinned_and_listed_with_routing():
     import tomllib
 
     small = tomllib.loads((PLUGIN / "codex/agents/chef-reviewer-small.toml").read_text(encoding="utf-8"))
-    assert small["name"] == "chef_reviewer_small"
+    assert small["name"] == "chef:reviewer-small"
     assert small["model"] == "gpt-6.1-terra" and small["model_reasoning_effort"] == "high"
     assert "읽기 전용" in small["description"]
     assert "변경 전 본과의 diff" in small["developer_instructions"]
     roles = (PLUGIN / "codex/skills/chef-mission/references/codex-roles.md").read_text(encoding="utf-8")
     assert "codex/agents/chef-reviewer-small.toml" in roles
-    assert roles.count("gpt-6.1-terra") >= 3
+    assert "gpt-6.1-terra" in roles and "GPT-6.1 Terra / high 고정" in roles
     assert "변경 전 본 대비 diff" in roles
     rules = (PLUGIN / "codex/rules/main-session.md").read_text(encoding="utf-8")
-    assert "chef_reviewer_small" in rules and "chef-reviewer-small.toml" in rules
+    assert "chef:reviewer-small" in rules and "chef-*.toml" in rules
     mission = (PLUGIN / "codex/skills/chef-mission/SKILL.md").read_text(encoding="utf-8")
-    assert "chef_reviewer_small" in mission and "변경 전 본 대비 diff" in mission
+    assert "chef:reviewer-small" in mission and "roles.reviewSmall" in mission and "변경 전 본 대비 diff" in mission
 
 
 def test_claude_code_reviewer_is_read_only_deep_reviewer():

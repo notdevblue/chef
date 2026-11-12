@@ -16,7 +16,7 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 - `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/skills/mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/skills/distill/SKILL.md`. 슬롯은 `/chef:slots`, 어댑터는 `/chef:adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Claude 절을 따른다. `${CLAUDE_PLUGIN_ROOT}`를 실제 루트로 쓸 수 있다.
-- 조사·구현·검증 파견은 실제 등록된 Agent 역할과 도구를 쓴다. 기본 검증은 `chef:verifier`, 심층 리뷰는 `chef:code-reviewer`, 작은 리뷰는 `chef:reviewer-small`, 감사는 `roles.audit` 또는 `roles.review`다.
+- 조사·구현·검증 파견은 실제 등록된 Agent 역할과 도구를 쓴다. 검증은 `roles.verify`(없으면 `chef:verifier`), 심층 리뷰는 `roles.review`(없으면 `chef:code-reviewer`), 작은 리뷰는 `roles.reviewSmall`(없으면 `chef:reviewer-small`), 감사는 `roles.audit` 또는 `roles.review`다.
 - 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium, `chef:verifier`는 Sonnet 5.5 / low, `chef:dev-medium`은 high다. 첫 심층 리뷰·기록 감사·설계 판단은 Opus / high다.
 - 편집·리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고 ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속·검색이 미확인이면 검증 가능으로 보고하지 않는다. 도구 축소의 사용량 효과는 측정 전 미확인이다.
 
@@ -32,7 +32,7 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 
 4. **마일스톤 리뷰** — 검증이 끝난 단위부터 진행한다. 파일 소유가 겹치지 않으면 그 리뷰를 같은 턴에 파견한다. `rolePolicy.model`이 `definition`이면 리뷰 파견의 Agent 호출 `model` 인자에 별칭만 넣는다(`opus` 또는 `sonnet`). 역할 이름이나 역할 파일의 `model: inherit`로 모델을 정하지 않는다. `inherit`면 그 정책이 우선한다. fork는 쓰지 않는다.
    첫 심층 리뷰는 fresh `roles.review`(없으면 `chef:code-reviewer`)에 `model: "opus"`다(아래 작은 문서 변경은 예외).
-   직전 finding의 수정 확인은 같은 `roles.review`에 `model: "sonnet"`이다. 서버 체크리스트처럼 그 역할만 읽는 규약이 있으면 `chef:reviewer-small`로 바꾸지 않는다. 그 규약이 없는 좁은 확인과, 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 라운드만 `chef:reviewer-small`에 `model: "sonnet"`을 넣고, 그 브리프에는 변경 전 본 대비 diff를 넣는다(`references/usage-policy.md`).
+   직전 finding의 수정 확인은 같은 `roles.review`에 `model: "sonnet"`이다. 프로젝트 규약이 `roles.review` 역할만 읽게 정하면 `roles.reviewSmall`로 바꾸지 않는다. 그 규약이 없는 좁은 확인과, 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 라운드만 `roles.reviewSmall`(없으면 `chef:reviewer-small`)에 `model: "sonnet"`을 넣고, 그 브리프에는 변경 전 본 대비 diff를 넣는다(`references/usage-policy.md`).
    원인 불명, 공통 계약·구조 변경, 판단 충돌일 때만 그 근거를 브리프에 적고 같은 역할에 `model: "opus"`로 확대한다. 독립 재리뷰는 이 Sonnet 재리뷰이거나 그 확대이며, 첫 라운드 Opus 호출을 반복하는 뜻이 아니다. 프로젝트 리뷰 규약은 두 역할 모두 지킨다.
 
 검증 파견은 Agent 호출 `model: "sonnet"`을 명시한다. `rolePolicy.model: "inherit"`가 우선하며 역할·모델 지정 불가 시 미확인으로 반환한다.

@@ -21,10 +21,11 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 | Grok 바깥 층 | `grok/` | 등록하지 않는 초안. 읽기 전용 셸 호출 목록. 실행 절차는 `plugins/chef/grok/` |
 | Grok | `plugins/chef/grok/` | 등록 스킬 여덟 개와 native 역할 여섯 개. 메인·슬롯 CLI가 역할별 하위 에이전트를 조율한다. SessionStart `new`·`load`와 미션 가드는 공유 훅 규칙을 따른다. `chef-watch`·`chef-handoff`는 등록하지 않는 안내 |
 | 미션 가드 | `plugins/chef/hooks/mission_guard.py` | 미션 중 submit 등 금지 명령 차단(걸림줄) |
+| 서브에이전트 허용 목록 | `plugins/chef/hooks/subagent_allow.py` | 어댑터 `agents.allow`(이름 glob 목록)에 맞지 않는 서브에이전트 파견을 거부. 키가 없으면 제한 없음, 미션 진행과 무관 |
 | 질문 무결성 | `plugins/chef/hooks/question_integrity.py` | 미션 진행·완료·공유 전에 질문 정본·생성본 검사. 참여 세션의 답변 종료 전에도 전체 검사 |
 | 어댑터 | `adapters/<이름>/` | 프로젝트별 값(`adapter.json`)과 절차(`adapter.md`) |
 
-Claude·Codex 훅은 규칙 주입·미션 가드·질문 무결성 3종이다. Grok은 SessionStart `new`·`load` 규칙 전달과 미션 가드를 지원한다. 세션 제목·메모리 안내·한국어 답변 차단 훅은 제공하지 않는다.
+Claude·Codex 훅은 규칙 주입·미션 가드·서브에이전트 허용 목록·질문 무결성 4종이다. Grok은 SessionStart `new`·`load` 규칙 전달, 미션 가드, 서브에이전트 허용 목록을 지원한다. 세션 제목·메모리 안내·한국어 답변 차단 훅은 제공하지 않는다.
 슬롯 실행에서 지정하는 세션 이름은 유지한다.
 
 미션의 `confirm-*.md`·`ask-*.md`는 이번 변경·남은 질문·최신 승인 대상·승인 범위를 보여 주고, 개정할 때 현재 상태로 고쳐 쓴다.
@@ -119,17 +120,17 @@ adapter → adapter.runtimes.codex → local → local.runtimes.codex다.
 로컬 Codex 설정·개인 AGENTS.md 복사가 필요하면 어댑터 준비 단계에 명시한다.
 매번 실행 직전에 갱신할 로컬 지침은 `runtimes.codex.slots.beforeRun[]`에 둔다. 새 미션 시작·재개 모두
 슬롯 검사 후 에디터·CLI 실행 전에 한 번 돌며, 실패하면 세션을 열지 않는다. 단계 형식은 기존 `prepare[]`와 같다.
+`beforeRun`은 슬롯 `create`·`create --resume`·`refresh` 직후에도 `{launchMode}`=`prepare`로 불린다. `new`·`resume`만 처리하던 외부 beforeRun 명령은 `prepare`도 받아야 한다.
 Codex 프로젝트 지침 읽기 한도는 선택 설정 `slots.codexProjectDocMaxBytes`(양의 정수, 바이트)로 새 세션·재개에 적용한다.
 생략하면 기존 CLI 동작을 유지한다. 전체 계약은 [어댑터 슬롯 설정](plugins/chef/codex/skills/chef-mission/references/adapter-schema.md#슬롯)에 있다.
 슬롯에 준비한 native 역할 파일은 `slots.codexAgentConfigs`의 별칭별 `{configFile, description}`으로 명시 등록한다.
 새 세션·재개 모두 준비 단계가 끝난 뒤 파일을 확인하고, 역할 파일 경로와 설명을 Codex 설정 인자로 전달한다.
 
-`codex/agents/*.toml`은 역할별 지시다. 등록된 Codex 에이전트가 없으면 스킬이 그 지시를
-새 서브에이전트에게 전달한다. research와 심층 review(`chef_code_reviewer`)는 부모 모델·추론 수준을 상속한다. 중간 구현 역할은 `gpt-6.1-sol` / high,
-작은 구현 역할은 `gpt-6-luna` / high, 작은 리뷰 역할 `chef_reviewer_small`은 `gpt-6.1-terra` / high로 고정한다.
-검증 역할 `chef_verifier`는 `gpt-6-luna` / high로 고정하며, 미등록이면 같은 모델·추론 수준을 명시해 새 에이전트로 파견한다.
-선택적으로 `~/.codex/agents/`에 복사해 이름을 등록할 수 있으며 등록할 때 기존 파일을 덮어쓰지 않는다.
-사용자가 플러그인을 업데이트할 때 등록한 사본도 플러그인의 `codex/agents/`에서 다시 복사해야 하며, chef doctor가 낡은 등록·빠진 역할·플러그인에 없는 `chef_` 역할 파일을 보고한다.
+`codex/agents/*.toml`은 역할별 정의이며 이름은 `chef:researcher`·`chef:dev-small`·`chef:dev-medium`·`chef:verifier`·`chef:code-reviewer`·`chef:reviewer-small`이다. 등록된 역할만 파견하고, 등록이 없으면 다른 에이전트로 대신하지 않고 사용자에게 알린다.
+research와 심층 review(`chef:code-reviewer`)는 부모 모델·추론 수준을 상속한다. 중간 구현 역할은 `gpt-6.1-sol` / high,
+작은 구현 역할은 `gpt-6-luna` / high, 작은 리뷰 역할 `chef:reviewer-small`은 `gpt-6.1-terra` / high, 검증 역할 `chef:verifier`는 `gpt-6-luna` / high로 고정한다.
+역할 파견은 `~/.codex/agents/`에 복사해 등록한 이름이 전제다. 등록은 사용자가 정하며 이 플러그인 설치만으로 전역 파일을 쓰지 않고, 등록할 때 기존 파일을 덮어쓰지 않는다.
+사용자가 플러그인을 업데이트할 때 등록한 사본도 플러그인의 `codex/agents/`에서 다시 복사해야 하며, chef doctor가 낡은 등록·빠진 역할·플러그인에 없는 `chef-` 역할 파일을 보고한다. 옛 파일명(`chef-developer-small.toml`·`chef-developer-medium.toml`)은 `chef-dev-small.toml`·`chef-dev-medium.toml`로 바뀌었으므로 등록한 옛 사본은 지우고 새 파일을 복사한다.
 Claude와 Codex는 미션 상태·슬롯 잠금을 공유하므로 같은 슬롯의 미션을 동시에 이어받지 않는다.
 
 업데이트는 마켓플레이스를 갱신하고 플러그인을 다시 설치한 뒤 새 세션에서 훅을 확인한다.
@@ -235,14 +236,14 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
 - 구현 역할은 `dev-small`(승인된 문서·정해진 소규모 수정)과 `dev-medium`(복잡한 구현, high effort)이다.
   `dev-small`은 Claude Sonnet 5.5 / medium, Codex GPT-6 Luna / high로 고정한다.
   Claude `dev-medium`은 기존 Sonnet / high, `researcher`와 `reviewer-small`은 기존 Sonnet / medium을 쓴다.
-  첫 심층 리뷰·기록 감사의 기본 역할 `chef:code-reviewer`는 Opus / high이며 프로젝트 리뷰어(예: `code-reviewer`)가 없을 때 쓴다. 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 세 런타임 모두 작은 리뷰어가 맡는다. Claude `chef:reviewer-small`(Sonnet / medium), Codex `chef_reviewer_small`(GPT-6.1 Terra / high), Grok `chef:reviewer-small`(모델 상속 / medium)이며 첫 리뷰 브리프에는 변경 전 본 대비 diff를 넣는다. 작은 리뷰어가 뜻·승인 범위 변경이나 새 규칙을 발견하면 clean을 선언하지 않고 심층 리뷰로 확대한다. Codex `chef_code_reviewer`는 모델을 고정하지 않고 부모를 상속한다.
+  첫 심층 리뷰·기록 감사의 기본 역할 `chef:code-reviewer`는 Opus / high이며 프로젝트 리뷰어(예: `code-reviewer`)가 없을 때 쓴다. 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 세 런타임 모두 작은 리뷰어가 맡는다. Claude `chef:reviewer-small`(Sonnet / medium), Codex `chef:reviewer-small`(GPT-6.1 Terra / high), Grok `chef:reviewer-small`(모델 상속 / medium)이며 첫 리뷰 브리프에는 변경 전 본 대비 diff를 넣는다. 작은 리뷰어가 뜻·승인 범위 변경이나 새 규칙을 발견하면 clean을 선언하지 않고 심층 리뷰로 확대한다. Codex `chef:code-reviewer`는 모델을 고정하지 않고 부모를 상속한다.
   Codex `dev-medium`은 GPT-6.1 Sol / high로 고정한다.
   코디네이터가 직접 편집하지 않는 미션 경계와 독립 리뷰는 유지한다.
 - 테스트·Unity Play 실행은 `roles.verify` 하나가 맡는다. Claude는 `chef:verifier`(Sonnet 5.5 / low),
-  Codex는 `chef_verifier`(GPT-6 Luna / high)로 고정한다. 구현자는 공유 Unity 검증을 직접 실행하지 않는다.
+  Codex는 `chef:verifier`(GPT-6 Luna / high)로 고정한다. 구현자는 공유 Unity 검증을 직접 실행하지 않는다.
   검증자는 코드·검증 범위·모델을 바꾸지 않고 실패·예상 밖 상태·미확인 증거를 메인에 반환한다.
   공유 Unity 순서와 에디터 수명, 최종 완료 판정은 코디네이터가 맡고 독립 리뷰는 별도로 받는다.
-- 어댑터 `rolePolicy`(`{"model": "definition"|"inherit", "subagents": true|false}`)는 mission 스킬이 역할을 파견할 때만 적용한다. 없으면 `definition`·`true`로 위 고정을 따른다. `inherit`면 Claude는 코디네이터 모델 별칭을 Agent `model` 인자로 넘기고 Codex는 미등록 파견의 `model`·`reasoning_effort`를 생략해 부모를 상속하며, 이때 위 고정보다 정책이 우선한다. `subagents: false`면 `dev-medium`류 브리프에 하위 파견 금지·분할안 반환을 넣는다(도구 차단 아님). Grok은 이미 충족된다. Claude는 최상위, Codex·Grok은 `runtimes.<런타임>.rolePolicy`에 둔다.
+- 어댑터 `rolePolicy`(`{"model": "definition"|"inherit", "subagents": true|false}`)는 mission 스킬이 역할을 파견할 때만 적용한다. 없으면 `definition`·`true`로 위 고정을 따른다. `inherit`면 Claude는 코디네이터 모델 별칭을 Agent `model` 인자로 넘기고 Codex는 등록된 역할의 TOML 모델이 적용되어 부모 상속을 지킬 수 없으므로 그 사실을 보고한다(위 고정은 정의의 값이 그대로 적용됨). `subagents: false`면 `dev-medium`류 브리프에 하위 파견 금지·분할안 반환을 넣는다(도구 차단 아님). Grok은 이미 충족된다. Claude는 최상위, Codex·Grok은 `runtimes.<런타임>.rolePolicy`에 둔다.
 - 승인된 계약과 파일 소유가 독립적인 구현은 같은 턴에 파견한다. 관련 하위 작업까지 반환을 모으고 필요한
   `.meta`·생성물·CL 정리를 마친 뒤 검증 입력을 고정한다. 검증 자원이 다르면 단위마다 검증하고, 공유 Unity는 관련 구현이 돌아온 뒤 한 명만 실행한다. 검증 중 그 입력을 바꾸지 않는다.
   브리프에는 해당 작업의 파일·CL 소유, 기능 완료 범위와 반례를 넣는다. 같은 CL에 속해도 마일스톤별 검증 기록은 따로 유지한다.

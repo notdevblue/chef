@@ -35,7 +35,8 @@ VARIABLE = re.compile(r"\{(\w+)\}")
 BASELINE_LINE = re.compile(r"Change (\d+) on ")
 CLIENT_NAME_LINE = re.compile(r"^Client name:\s*(.+)$", re.M)
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
-CODEX_AGENT_NAME = re.compile(r"[A-Za-z0-9_-]+")
+CODEX_AGENT_NAME = re.compile(r"[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?")
+TOML_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 CODEX_AGENT_RESERVED = {
     "max_threads", "max_depth", "job_max_runtime_seconds", "default_subagent_model",
     "default_subagent_reasoning_effort", "enabled", "interrupt_message", "max_concurrent_threads_per_session",
@@ -51,6 +52,7 @@ KEEP_DESCRIPTION = "han slot keep-local {name}"
 MAIN_KEEP_DESCRIPTION = "han main keep-local"
 NO_RECONCILE = "no file(s) to reconcile"
 SYNC_STEP = "sync"
+LAUNCH_PREPARE = "prepare"
 
 STATE_CREATING = "creating"
 STATE_READY = "ready"
@@ -167,6 +169,12 @@ def toml_string(value):
     except UnicodeError as exc:
         raise UsageError("Codex 역할 설정 문자열은 유효한 UTF-8이어야 함") from exc
     return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f").replace(";", "\\u003b")
+
+
+def toml_key(alias):
+    if TOML_BARE_KEY.fullmatch(alias):
+        return alias
+    return toml_string(alias)
 
 
 def process_alive(pid):
@@ -1269,6 +1277,9 @@ def create_one(runner, name, steps, resume):
         runner.rows.upsert(name, synced=today, state=STATE_READY)
         outcome = Outcome(name, "resumed" if resume else "created", f"{time.monotonic() - begin:.0f}s ({format_seconds(results)})")
         outcome.warnings.append(workspace_warning(config, name))
+        failure_text = before_run_failure(config, name, LAUNCH_PREPARE, "")
+        if failure_text:
+            return Outcome(name, "failed", f"슬롯은 {outcome.state} 이지만 beforeRun 실패: {failure_text}", warnings=outcome.warnings)
         return outcome
 
 
@@ -1313,9 +1324,10 @@ def cmd_create(config, args):
         print("만들 슬롯 없음 (slots.names 가 모두 있음)")
         return OK
     plans = {name: config.build_steps(name) for name in names}
+    before_run_plans = {name: config.before_run_steps(name, LAUNCH_PREPARE, "") for name in names}
     print_baseline(config)
     if args.dry_run:
-        return dry_create(config, plans, args.resume)
+        return dry_create(config, plans, before_run_plans, args.resume)
     runner = Runner(config)
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         outcomes = list(pool.map(lambda name: guarded(create_one, runner, name, plans[name], args.resume), names))
@@ -1323,7 +1335,7 @@ def cmd_create(config, args):
     return report(outcomes, [registry_warning(config)] if created else [])
 
 
-def dry_create(config, plans, resume):
+def dry_create(config, plans, before_run_plans, resume):
     rows = Rows(config.rows_path)
     for name, steps in plans.items():
         slot = config.slot_path(name)
@@ -1345,10 +1357,12 @@ def dry_create(config, plans, resume):
                 print(f"  {line}")
         for line in describe_steps(steps):
             print(line)
+        for line in describe_steps(before_run_plans[name]):
+            print(line)
     return OK
 
 
-def refresh_one(runner, name, steps, keep_local, discard_local):
+def refresh_one(runner, name, steps, keep_local, discard_local, with_before_run=True):
     config, vcs = runner.config, runner.config.vcs
     client = config.client_of(name)
     with FileLock(config.slot_lock_path(name), f"슬롯 {name}"):
@@ -1403,6 +1417,10 @@ def refresh_one(runner, name, steps, keep_local, discard_local):
         runner.rows.upsert(name, synced=date.today().isoformat(), state=STATE_READY)
         outcome = Outcome(name, "refreshed", format_seconds(results), notes)
         outcome.warnings.append(workspace_warning(config, name))
+        if with_before_run:
+            failure_text = before_run_failure(config, name, LAUNCH_PREPARE, "")
+            if failure_text:
+                return Outcome(name, "failed", f"슬롯은 refreshed 이지만 beforeRun 실패: {failure_text}", notes, outcome.warnings)
         return outcome
 
 
@@ -1465,6 +1483,7 @@ def cmd_refresh(config, args):
     if code is not None:
         return code
     plans = {name: config.refresh_steps(name, args.keep_local) for name in names}
+    before_run_plans = {name: config.before_run_steps(name, LAUNCH_PREPARE, "") for name in names}
     print_baseline(config)
     if args.dry_run:
         for name, steps in plans.items():
@@ -1473,7 +1492,7 @@ def cmd_refresh(config, args):
             if refusal:
                 print(f"  거부: {refusal}")
                 continue
-            print("\n".join(describe_refresh(config, name, steps, args.keep_local)))
+            print("\n".join([*describe_refresh(config, name, steps, args.keep_local), *describe_steps(before_run_plans[name])]))
         return OK
     runner = Runner(config)
     outcomes = [guarded(refresh_one, runner, name, plans[name], args.keep_local, args.discard_local) for name in names]
@@ -1508,8 +1527,8 @@ def wt_command(config, name, task, session_task="", resume_session=""):
         if config.codex_project_doc_max_bytes:
             options += ["-c", f"project_doc_max_bytes={config.codex_project_doc_max_bytes}"]
         for alias, path, description in config.codex_agent_entries(name):
-            options += ["-c", f"agents.{alias}.config_file={toml_string(path)}"]
-            options += ["-c", f"agents.{alias}.description={toml_string(description)}"]
+            options += ["-c", f"agents.{toml_key(alias)}.config_file={toml_string(path)}"]
+            options += ["-c", f"agents.{toml_key(alias)}.description={toml_string(description)}"]
         if resume_session:
             options += ["resume", resume_session]
         return command + wt_child_command(executable, options + [escaped])
@@ -1668,11 +1687,18 @@ def resume_command(config, name, mission_id, new_session=False):
     return wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", resume_session)
 
 
-def run_before_run(config, name, launch_mode, session_id):
+def before_run_failure(config, name, launch_mode, session_id):
     results = Runner(config, "beforeRun").run_steps(name, config.before_run_steps(name, launch_mode, session_id))
-    failures = [result for result in results if not result.ok]
-    if failures:
-        print(f"[{name}] beforeRun 실패: {failures[0].failure_text()}")
+    failure = first_failure(results)
+    if failure:
+        return failure.failure_text()
+    return ""
+
+
+def run_before_run(config, name, launch_mode, session_id):
+    failure_text = before_run_failure(config, name, launch_mode, session_id)
+    if failure_text:
+        print(f"[{name}] beforeRun 실패: {failure_text}")
         return False
     return True
 
@@ -1778,7 +1804,7 @@ def cmd_run(config, args):
         refresh_plan = config.refresh_steps(name, args.keep_local)
     print_baseline(config)
     if args.refresh:
-        outcome = guarded(refresh_one, Runner(config), name, refresh_plan, args.keep_local, args.discard_local)
+        outcome = guarded(refresh_one, Runner(config), name, refresh_plan, args.keep_local, args.discard_local, False)
         if outcome.failed:
             return report([outcome])
         for warning in filter(None, outcome.warnings):

@@ -15,6 +15,10 @@
       {
         "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|apply_patch|ApplyPatch",
         "hooks": [{ "type": "command", "command": "python \"${PLUGIN_ROOT}/codex/mission_guard.py\"", "timeout": 10 }]
+      },
+      {
+        "matcher": ".*spawn_agent",
+        "hooks": [{ "type": "command", "command": "python \"${PLUGIN_ROOT}/codex/subagent_allow.py\"", "timeout": 10 }]
       }
     ],
     "Stop": [

@@ -97,8 +97,8 @@ Grok 전용 값은 `runtimes.grok` 객체에 둔다. 병합 순서는 `adapter.j
         "research": "chef:researcher",
         "implement": "chef:dev-medium",
         "verify": "chef:verifier",
-        "review": "chef:reviewer",
-        "audit": "chef:reviewer"
+        "review": "chef:code-reviewer",
+        "audit": "chef:code-reviewer"
       }
     }
   }
@@ -132,6 +132,7 @@ Grok 전용 값은 `runtimes.grok` 객체에 둔다. 병합 순서는 `adapter.j
     "implement": "chef:dev-medium",
     "verify": "chef:verifier",
     "review": "code-reviewer",
+    "reviewSmall": "chef:reviewer-small",
     "reviewLoopSkill": "review-loop"
   },
   "rolePolicy": { "model": "inherit", "subagents": false },
@@ -194,14 +195,16 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `guard.coordinatorWrite` | 선택 glob 배열(프로젝트 폴더 기준, `**` 여러 단계·`*` 한 단계, 대소문자 무시). 있으면 미션 진행 중 ACTIVE 세션의 메인 코디네이터(`agent_id` 없음)가 Write·Edit·MultiEdit·NotebookEdit로 프로젝트 안 이 목록 밖 파일을 쓰면 막는다. 서브에이전트·다른 세션·프로젝트 밖 경로(메모리 등)는 보지 않는다. 예: `["_My/missions/**"]`. Claude 훅만 적용(Codex 훅은 셸 명령만 받음) |
 | `guard.p4Client` | 선택. `{"require": true}`면 미션 중 p4 쓰기 명령에 전역 `-c <작업 공간>` 필수, 이 폴더 작업 공간(슬롯 `slots.client` 틀·메인 `slots.mainClient`·`.p4config`)과 달라도 막음. `commands`로 대상 하위 명령 목록을 바꿀 수 있다. 래퍼 `p4c.py`가 자동으로 붙인다 |
 | `mission.staleHours` | 선택. ACTIVE 끊김 의심 기준 시간(기본 24, 0이면 끔). 환경변수 `HAN_STALE_HOURS`가 우선. 표시만 하고 자동으로 닫지 않는다(`close-stale --force-close-stale`) |
-| `roles.*` | 역할별 실제 에이전트·스킬 이름. 없는 역할은 아래 행의 기본값을 쓰고, 기본값이 없으면 `general-purpose` |
+| `roles.*` | 역할별 실제 에이전트·스킬 이름. 없는 역할의 기본값은 chef 역할이다(research `chef:researcher`, implement `chef:dev-medium`, verify `chef:verifier`, review·audit `chef:code-reviewer`, reviewSmall `chef:reviewer-small`). 일반 에이전트로 대신하지 않고, 역할 에이전트가 없으면 사용자에게 알린다 |
 | `roles.implementSmall` | 승인된 문서·정해진 소규모 수정 담당. 없으면 implement. 구현과 독립 리뷰 분리는 유지 |
 | `roles.verify` | 테스트·Unity Play 실행 전담. 기본 역할·모델·effort는 런타임 진입점의 역할 계약. 코드 수정·모델 전환·완료 판정 금지 |
 | `roles.review` | 첫 심층 리뷰를 맡을 읽기 전용 역할. 프로젝트 리뷰어와 기본·작은 리뷰 라우팅·모델은 런타임 역할 계약. 작은 문서 첫 리뷰의 뜻·승인 범위 조건은 공통 mission 절차 |
+| `roles.reviewSmall` | 직전 리뷰 이후의 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경의 첫 리뷰를 맡을 읽기 전용 역할. 없으면 `chef:reviewer-small`. 프로젝트 리뷰 규약이 `roles.review`만 읽게 정하면 그 규약이 우선 |
 | `roles.audit` | 미션 끝 기록 감사(SKILL §6의 4)를 맡을 읽기 전용 에이전트. 없으면 `roles.review`. 구현 역할과 다른 모델이면 더 좋다 |
 | `rolePolicy` | 선택. 이 플러그인 스킬이 역할을 파견할 때의 정책 `{"model": "definition" 또는 "inherit", "subagents": true 또는 false}`. 없거나 키가 없으면 `model: "definition"`, `subagents: true`(기존 동작). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.rolePolicy`·`runtimes.grok.rolePolicy`가 기존 깊은 병합으로 최상위 값을 덮는다. `roles`의 이름 매핑은 바꾸지 않는다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다 |
-| `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex에서 미등록 파견의 `model`·`reasoning_effort` 인자를 생략해 부모를 상속하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
-| `rolePolicy.subagents` | `false`면 하위 파견을 허용하던 역할(Claude `chef:dev-medium`, Codex `chef_developer_medium`)의 파견 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다. 해당 역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막는 강제 차단은 아니다. Grok 역할은 어차피 자식을 띄우지 않는다 |
+| `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex는 등록된 역할의 TOML 모델이 적용되어 부모 상속을 지킬 수 없으므로 그 사실을 보고하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
+| `rolePolicy.subagents` | `false`면 하위 파견을 허용하던 역할(Claude `chef:dev-medium`, Codex `chef:dev-medium`)의 파견 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다. 해당 역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막는 강제 차단은 아니다. Grok 역할은 어차피 자식을 띄우지 않는다 |
+| `agents.allow` | 선택. 파견을 허용할 서브에이전트 이름의 glob 패턴 문자열 배열(예: `["team-*", "chef:*"]`). 키가 없으면 제한 없음. 있으면 훅이 이름이 맞지 않는 서브에이전트 파견을 거부한다(아래 "서브에이전트 허용 목록"). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.agents`·`runtimes.grok.agents`가 기존 깊은 병합으로 최상위 값을 덮는다(`allow` 배열은 통째로 교체) |
 | `verify.backend` | `mcp` / `cli` / `dotnet` — 엔진 검증 수단. 명령 자체는 `adapter.md` |
 | `verify.grades` | 이 프로젝트에서 낼 수 있는 검증 등급. 실제 허용 값은 상태 CLI `schema`로 조회 |
 | `verify.resourceDir` | 공유 검증 잠금 폴더. 절대 경로 또는 프로젝트 기준 상대 경로. `resources`에 자원을 선언하면 필수이며 같은 자원을 쓰는 프로젝트·슬롯은 같은 폴더 사용 |
@@ -252,6 +255,23 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 - 가드는 걸림줄이다. 문자열을 조립하는 식의 의도적 회피까지 막지는 못한다. 실제 통제는 스킬의 멈춤 규칙이다.
 - 훅은 PATH의 `python`으로 돈다. `check_guard.py --doctor`로 이 PC의 python이 진짜 실행되는지 확인한다.
 
+## 서브에이전트 허용 목록
+
+`agents.allow`가 있으면 `PreToolUse` 훅이 서브에이전트 파견 도구(Claude `Agent`·`Task`, Codex `spawn_agent`, Grok `spawn_subagent`)의
+호출마다 이름을 목록과 비교한다. 미션 진행(ACTIVE) 여부와 상관없이 호출한 폴더에서 찾은 어댑터를 기준으로 한다.
+
+- **이름 판정**: `fnmatch`(대소문자 구분, `*`·`?`·`[...]`)로 패턴 중 하나와 맞으면 통과한다. 호출 입력의 이름은 Claude·Grok `subagent_type`, Codex `agent_type`이다.
+  이름을 생략한 호출은 런타임 기본 이름(Claude·Grok `general-purpose`, Codex `default`)으로 판정한다.
+- **거부 이유**: 허용 패턴과 역할이 실제로 가리키는 이름을 알려 주므로, 에이전트는 허용되는 이름으로 다시 호출하고 맞는 역할이 없으면 다른 에이전트로 대신하지 않고 사용자에게 알린다.
+  실제 이름은 `roles`의 값(`reviewLoopSkill` 제외)에 없는 역할의 chef 기본 이름(`chef:researcher`·`chef:dev-medium`·`chef:verifier`·`chef:code-reviewer`·`chef:reviewer-small`,
+  `audit`는 review 따름, `implementSmall`은 Claude에서 implement 따름·Codex·Grok에서 `chef:dev-small`)과 옛 이름(`chef_*`, Grok의 `code-reviewer`·`chef:reviewer`)의 현재 이름 매핑을 반영한 값이다.
+- **입력을 못 읽을 때**: 도구 입력이 JSON 문자열이면 파싱해서 읽는다. 파싱되지 않거나 객체가 아니거나 Grok `toolInputTruncated`로 잘렸으면 이름을 판정할 수 없으므로 막지 않고 알림만 낸다.
+- **빈 배열**: `[]`은 모든 파견을 거부한다. 제한을 풀려면 `agents` 키를 지운다.
+- **꺼짐**: 어댑터가 없거나 `agents` 키가 없으면 통과한다. 어댑터를 읽지 못하거나 `agents`·`allow`의 형식이 틀리면(객체·문자열 배열이 아님)
+  도구를 막지 않고 `서브에이전트 허용 목록 꺼짐: <이유>` 알림만 낸다. `local.json`이 깨지면 그 파일은 무시되어 `local.json`에만 둔 제한이 빠질 수 있다.
+- `/chef:doctor`가 위 실제 파견 이름이 모두 허용되는지 런타임별로 점검해, 막히는 이름이 있으면 경고한다.
+- 훅 등록: Claude·Grok은 `hooks/hooks.json`의 `Agent|Task|spawn_subagent`, Codex는 `codex/hooks.json`의 `.*spawn_agent`(Codex 도구 이름에 namespace가 붙어 matcher가 전체 일치해야 한다).
+
 ## 슬롯
 
 미션을 동시에 여러 개 돌리려면 워크스페이스를 나눈다. 슬롯 하나는 같은 스트림을 받는 별도 워크스페이스이고,
@@ -269,7 +289,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `slots.p4` | `p4` 실행 명령(문자열 또는 인자 배열, 예: 경로·접속 옵션 포함). 없으면 PATH의 `p4` |
 | `slots.mainClient` | 메인 워크스페이스 이름. 새 슬롯의 옵션을 따라 만들 원본이자 `{baseline}`을 조회하는 대상. `refresh`는 슬롯을 갱신하기 전에 이 워크스페이스를 먼저 head로 sync한다(`create`는 하지 않음). 사람마다 달라 `local.json`에 둔다 |
 | `slots.prepare[]` | 슬롯 준비·갱신 단계 목록(아래) |
-| `slots.beforeRun[]` | 새 미션 시작·재개 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |
+| `slots.beforeRun[]` | 슬롯 `create`·`create --resume`·`refresh`가 성공해 `ready`가 된 직후(`launchMode=prepare`)와, 새 미션 시작(`new`)·재개(`resume`) 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |
 | `slots.codexProjectDocMaxBytes` | Codex 프로젝트 지침 읽기 한도(바이트). 양의 정수만 허용하며 bool·실수·문자열은 거부. 새 세션과 재개 모두 `-c project_doc_max_bytes=N` 적용. 생략하면 CLI 기본 동작 유지 |
 | `slots.sandboxMode` | Codex 슬롯의 선택적 sandbox 설정. `read-only`·`workspace-write`·`danger-full-access`만 허용하며, 새 시작·재개에 `--sandbox <값>`을 전달함. 런타임별 값은 `runtimes.codex.slots.sandboxMode`에 둠. 생략하면 기존 CLI·프로젝트 설정을 상속하고 Claude·Grok에는 적용하지 않음 |
 | `slots.codexAgentConfigs` | Codex native 역할 별칭별 `{configFile, description}` 객체. 선택 설정이며 기본은 빈 객체. 새 시작·재개에 역할 설정 파일과 설명을 명시적으로 등록함(아래) |
@@ -298,8 +318,8 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `{client}` | `slots.client`로 만든 슬롯 작업 공간 이름 |
 | `{main}` | 메인 프로젝트 폴더(`vars.main`, 없으면 어댑터를 찾은 폴더) |
 | `{log}` | 이 단계의 로그 파일 경로(`prepare`·`beforeRun` 단계에서 사용) |
-| `{launchMode}` | `beforeRun` 전용. 새 미션 시작은 `new`, 미션 재개는 `resume` |
-| `{sessionId}` | `beforeRun` 전용. CLI 재개 명령과 같은 검증된 기존 세션 UUID. 새 미션·`--new-session`·기존 UUID가 없어 새 세션으로 이어받는 경우 빈 문자열 |
+| `{launchMode}` | `beforeRun` 전용. 새 미션 시작은 `new`, 미션 재개는 `resume`, 슬롯 `create`·`refresh` 직후는 `prepare` |
+| `{sessionId}` | `beforeRun` 전용. CLI 재개 명령과 같은 검증된 기존 세션 UUID. 새 미션·`--new-session`·기존 UUID가 없어 새 세션으로 이어받는 경우 빈 문자열. `prepare`에서는 항상 빈 문자열 |
 | `{slotLockPath}` | `beforeRun` 전용. 현재 슬롯의 canonical 잠금 파일 절대 경로 |
 | `{slotLockOwnerPid}` | `beforeRun` 전용. 해당 잠금을 보유한 슬롯 실행 프로세스의 decimal PID |
 | `{baseline}` | 메인 워크스페이스가 받은 CL 번호(Perforce: `slots.mainClient`의 `changes -m1 //<mainClient>/...#have`). `create`는 메인이 지금 받은 CL이고, `refresh`·`run --refresh`는 메인을 먼저 head로 sync한 뒤 조회하므로 head다. 템플릿에 있을 때만 한 번 조회하고, `slots.vcs`가 없으면 쓸 수 없다 |
@@ -313,6 +333,9 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 도구는 전달 PID와 파일 owner, 살아 있는 조상 프로세스 소유를 확인하고 잠금을 삭제하거나 다시 획득하지 않는다.
 `--dry-run`의 값은 실행 계획이며 실제 잠금 보유 증거가 아니다. 이 문맥은 `prepare`에는 제공하지 않는다.
 `run --refresh`는 갱신을 먼저 끝낸다. 단계 실패 시 실행을 중단하고 로그를 알리며, 기존 `ready` 상태는 유지한다.
+`create`·`create --resume`·`refresh`에서는 준비·갱신 단계가 성공해 슬롯이 `ready`가 된 직후, 슬롯 잠금 안에서 슬롯마다 한 번 실행한다(`launchMode=prepare`).
+실행 전에 슬롯을 직접 열어도 beforeRun이 만드는 정의·지침이 맞도록 하기 위해서다. `run --refresh`의 갱신은 `prepare`로 부르지 않고 뒤이은 `new` 호출만 부른다.
+실패하면 슬롯은 `ready`로 남기고 그 슬롯을 `failed`로 보고하며 종료 코드 1이다. 다른 슬롯은 계속 진행한다.
 `--dry-run`은 단계만 표시하고 실행·파일 쓰기는 하지 않는다. 로그와 시간 기록의 단계 이름은 `beforeRun.<id>`이고,
 로그는 `<stateDir>/slots/beforeRun/`에 두어 준비·갱신 로그와 분리한다.
 출력 로그는 `<이름>-beforeRun.<id>.out.log`, 명령의 `{log}`는 `<이름>-beforeRun.<id>.log`,
@@ -323,13 +346,13 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 `sessionId`는 새 CLI 세션 ID를 예약하지 않으며, 기존 슬롯·ACTIVE·세션 검사를 대신하지 않는다.
 
 `codexAgentConfigs`의 각 값은 `configFile`·`description` 두 키만 가지며 둘 다 비어 있지 않은 문자열이어야 한다.
-별칭은 영문자·숫자·`_`·`-`만 허용한다. `agents`의 스칼라 설정 이름인 `max_threads`·`max_depth`·
+별칭은 영문자·숫자·`_`·`-`만 허용하며, `chef:dev-medium`처럼 콜론 하나로 나뉜 두 부분도 허용한다(콜론이 든 별칭은 `-c` 키에서 따옴표로 감싼다). `agents`의 스칼라 설정 이름인 `max_threads`·`max_depth`·
 `job_max_runtime_seconds`·`default_subagent_model`·`default_subagent_reasoning_effort`·`enabled`·
 `interrupt_message`·`max_concurrent_threads_per_session`은 별칭으로 쓰지 않는다.
 등록 필드와 현재 스칼라 키는 [공식 Codex 설정 스키마](https://learn.chatgpt.com/docs/config-schema.json)를 따른다.
 
 `configFile`은 기존 `{slot}`·`vars` 템플릿을 확장한 뒤 절대 경로여야 한다.
-`beforeRun`이 성공한 뒤 에디터·CLI를 열기 전에 파일 존재·읽기 가능 여부를 확인한다. 콜백이 없으면 기존 파일을 확인한다.
+`run` 경로에서만 `beforeRun`이 성공한 뒤 에디터·CLI를 열기 전에 파일 존재·읽기 가능 여부를 확인한다. 콜백이 없으면 기존 파일을 확인한다. `prepare` 호출 뒤에는 이 파일 검사를 하지 않는다.
 `--dry-run`은 파일이 아직 없어도 매핑 인자를 표시하며 파일을 만들지 않는다. 파일 내용은 Codex가 해석한다.
 각 항목은 별도 argv의 `-c agents.<별칭>.config_file="<경로>"`와 `-c agents.<별칭>.description="<설명>"`으로 전달한다.
 문자열은 TOML 형식으로 이스케이프하며 런타임별 값은 `runtimes.codex.slots.codexAgentConfigs`에 둘 수 있다.

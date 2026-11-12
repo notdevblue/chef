@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(PLUGIN, "skills", "adapter-init", "scripts"))
 
 import check_guard  # noqa: E402
 import mission_guard  # noqa: E402
+import subagent_allow  # noqa: E402
 
 SHARED_MISSION_STATE = os.path.join(PLUGIN, "skills", "mission", "scripts", "mission_state.py")
 MISSION_STATE = {
@@ -31,7 +32,7 @@ MISSION_STATE = {
     "codex": os.path.join(PLUGIN, "codex", "skills", "chef-mission", "scripts", "mission_state.py"),
     "grok": SHARED_MISSION_STATE,
 }
-GROK_NATIVE_ROLES = ("researcher", "dev-small", "dev-medium", "verifier", "reviewer", "reviewer-small")
+GROK_NATIVE_ROLES = ("researcher", "dev-small", "dev-medium", "verifier", "code-reviewer", "reviewer-small")
 
 
 class Report:
@@ -144,6 +145,20 @@ def check_role_policy(report, name, adapter_path):
                 report.add("OK", "role-policy", f"{where}: {json.dumps(policy, ensure_ascii=False, sort_keys=True)}")
 
 
+def check_agent_allow(report, name, adapter, runtime):
+    patterns, problem = subagent_allow.allow_patterns(adapter)
+    if problem:
+        report.add("WARN", "agent-allow", f"{name}: {problem}")
+        return
+    if patterns is None:
+        return
+    blocked = [role for role in subagent_allow.role_names(adapter, runtime) if not subagent_allow.allows(patterns, role)]
+    if blocked:
+        report.add("WARN", "agent-allow", f"{name}: agents.allow 가 역할의 실제 파견 이름을 막음: {', '.join(blocked)} (허용 패턴: {', '.join(patterns)})")
+    else:
+        report.add("OK", "agent-allow", f"{name}: 역할의 실제 파견 이름이 모두 허용됨 (허용 패턴: {', '.join(patterns)})")
+
+
 def check_adapter(report, name, adapter_path, roots, runtime):
     if not os.path.isfile(adapter_path):
         report.add("FAIL", "adapter", f"{name}: adapter.json 없음 ({adapter_path})")
@@ -159,6 +174,7 @@ def check_adapter(report, name, adapter_path, roots, runtime):
     if not problems:
         report.add("OK", "adapter", f"{name}: {adapter_path}")
     check_role_policy(report, name, adapter_path)
+    check_agent_allow(report, name, adapter, runtime)
     cases = os.path.join(os.path.dirname(adapter_path), "guard-cases.json")
     if os.path.isfile(cases):
         try:
@@ -315,7 +331,7 @@ def check_codex_agents(report):
     for file in role_files(registered_dir):
         text = read_role_text(os.path.join(registered_dir, file))
         name = role_name(text)
-        if not file.startswith("chef-") and not name.startswith("chef_"):
+        if not file.startswith("chef-") and not name.startswith(("chef_", "chef:")):
             continue
         key = find_shipped_role(shipped, name, file)
         if key is None:
@@ -326,7 +342,7 @@ def check_codex_agents(report):
                 stale.append(file)
     where = f"{registered_dir} (비교 기준 {source_dir})"
     if not (extra or registered):
-        report.add("OK", "codex-agents", f"{where}: chef 역할 등록 없음(선택 사항, 미등록이면 스킬이 지시를 새 서브에이전트에 넘김)")
+        report.add("OK", "codex-agents", f"{where}: chef 역할 등록 없음(미등록이면 Codex에서 chef 역할을 파견할 수 없음)")
         return
     missing = sorted(key for key in shipped if key not in registered)
     detail = f"{where}: 플러그인 역할 {len(shipped)}개 중 {len(registered)}개 등록"

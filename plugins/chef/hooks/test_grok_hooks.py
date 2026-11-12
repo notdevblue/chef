@@ -179,7 +179,7 @@ def test_native_manifest_exposes_only_grok_skills_and_agents():
             discovered.append(f"{manifest['name']}:{fields['name']}")
             assert fields["model"] == "inherit"
     assert len(discovered) == 6
-    assert set(discovered) == {"chef:researcher", "chef:dev-small", "chef:dev-medium", "chef:verifier", "chef:reviewer", "chef:reviewer-small"}
+    assert set(discovered) == {"chef:researcher", "chef:dev-small", "chef:dev-medium", "chef:verifier", "chef:code-reviewer", "chef:reviewer-small"}
     assert len(manifest["skills"]) == 8
     assert len(set(manifest["skills"])) == 8
     for skill in manifest["skills"]:

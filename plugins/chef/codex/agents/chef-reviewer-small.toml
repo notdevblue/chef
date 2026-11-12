@@ -1,4 +1,4 @@
-name = "chef_reviewer_small"
+name = "chef:reviewer-small"
 description = "직전 리뷰 이후의 좁은 변경과 finding 해소, 뜻이 그대로인 작은 문서 변경의 첫 리뷰를 구현과 분리된 새 맥락에서 읽기 전용으로 검증한다. 심층 리뷰·공통 계약 변경은 부모에게 반환한다."
 model = "gpt-6.1-terra"
 model_reasoning_effort = "high"

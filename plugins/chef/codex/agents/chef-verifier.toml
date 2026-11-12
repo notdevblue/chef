@@ -1,4 +1,4 @@
-name = "chef_verifier"
+name = "chef:verifier"
 description = "정해진 테스트와 Unity Play 시나리오를 실행하고 결과·로그·미확인 범위를 반환한다."
 model = "gpt-6-luna"
 model_reasoning_effort = "high"

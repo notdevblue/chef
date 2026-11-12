@@ -1,5 +1,5 @@
 {
-  "description": "세션·서브에이전트 규칙과 대화 기록 경로 전달, 미션 명령·파일 쓰기 가드, 질문 기록 무결성 검사",
+  "description": "세션·서브에이전트 규칙과 대화 기록 경로 전달, 미션 명령·파일 쓰기 가드, 서브에이전트 허용 목록, 질문 기록 무결성 검사",
   "hooks": {
     "SessionStart": [
       {
@@ -34,6 +34,17 @@
             "type": "command",
             "command": "python",
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/mission_guard.py"],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task|spawn_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/subagent_allow.py"],
             "timeout": 10
           }
         ]

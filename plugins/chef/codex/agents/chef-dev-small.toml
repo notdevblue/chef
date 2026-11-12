@@ -1,4 +1,4 @@
-name = "chef_developer_small"
+name = "chef:dev-small"
 description = "승인된 문서 작성과 명세가 확정된 소규모 변경을 맡는다."
 model = "gpt-6-luna"
 model_reasoning_effort = "high"

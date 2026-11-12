@@ -18,7 +18,7 @@ description: 미션을 동시에 여러 개 돌리기 위한 슬롯 워크스페
 - Windows 백그라운드 서버는 `Start-Process -WindowStyle Hidden`을 사용한다. 권한 검사가 파괴 옵션을 막으면 사용자가 터미널에서 직접 실행하도록 안내한다.
 
 런타임별 지침 준비 명령은 `runtimes.codex.slots.beforeRun`에 둔다.
-이 단계의 `{launchMode}`·`{sessionId}`는 시작·재개 구분과 검증된 기존 세션 UUID를 전달한다.
+이 단계의 `{launchMode}`(`new`·`resume`·`prepare`)·`{sessionId}`는 부른 때와 검증된 기존 세션 UUID를 전달한다. `prepare`는 슬롯 `create`·`refresh` 직후이며 세션 UUID는 비어 있다.
 새 세션의 빈 UUID 인자도 보존하도록 명령 값은 큰따옴표로 감싼다.
 `slots.codexProjectDocMaxBytes`를 양의 정수로 설정하면 새 세션·재개 모두 Codex 프로젝트 지침 읽기 한도를 적용한다.
 생략하면 기존 CLI 동작을 유지한다. 전체 계약은 `../chef-mission/references/adapter-schema.md`의 "슬롯"을 따른다.

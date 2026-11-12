@@ -139,6 +139,76 @@ def test_doctor_role_policy_claude_overlay_warns_ignored(tmp_path, monkeypatch, 
     assert not report.failed
 
 
+ALL_TEAM_ROLES = {"research": "team-research", "implement": "team-dev", "verify": "team-verify", "review": "team-review",
+                  "reviewSmall": "team-review-small"}
+
+
+def agent_allow_rows(report):
+    return [(row["level"], row["text"]) for row in report.rows if row["area"] == "agent-allow"]
+
+
+def test_doctor_agent_allow_absent_adds_no_rows(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    assert agent_allow_rows(doctor.run("claude")) == []
+
+
+def test_doctor_agent_allow_ok_when_all_roles_allowed(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"roles": {"dev": "team-dev", "reviewer": "chef:code-reviewer", "reviewLoopSkill": "x"},
+                                 "agents": {"allow": ["team-*", "chef:*"]}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = agent_allow_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["OK"]
+
+
+def test_doctor_agent_allow_warns_for_blocked_roles(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"roles": {"dev": "team-dev", "verifier": "chef:verifier"},
+                                 "agents": {"allow": ["team-*"]}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = agent_allow_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["WARN"]
+    assert "chef:verifier" in rows[0][1] and "team-dev" not in rows[0][1].split("(")[0]
+
+
+def test_doctor_agent_allow_checks_default_names_of_missing_roles(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"roles": {"research": "team-research", "implement": "team-dev"}, "agents": {"allow": ["team-*"]}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = agent_allow_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["WARN"]
+    for default in ("chef:verifier", "chef:code-reviewer", "chef:reviewer-small"):
+        assert default in rows[0][1]
+    assert "team-research" not in rows[0][1].split("(")[0]
+
+
+def test_doctor_agent_allow_reads_legacy_names_as_current(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"roles": {**ALL_TEAM_ROLES, "verify": "chef_verifier"}, "agents": {"allow": ["team-*"]}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = agent_allow_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["WARN"] and "chef:verifier" in rows[0][1]
+
+
+def test_doctor_agent_allow_uses_runtime_overlay(tmp_path, monkeypatch):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"roles": ALL_TEAM_ROLES, "agents": {"allow": ["team-*"]},
+                                 "runtimes": {"codex": {"agents": {"allow": ["other-*"]}}}})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    assert [level for level, _ in agent_allow_rows(doctor.run("claude"))] == ["OK"]
+    assert [level for level, _ in agent_allow_rows(doctor.run("codex"))] == ["WARN"]
+
+
+@pytest.mark.parametrize("agents", ["team-*", {"allow": "team-*"}, {"allow": ["team-*", 3]}, {"allow": [""]}])
+def test_doctor_agent_allow_bad_shape_warns(tmp_path, monkeypatch, agents):
+    adapters, _ = make_registry(tmp_path)
+    write_role_policy(adapters, {"agents": agents})
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
+    rows = agent_allow_rows(doctor.run("claude"))
+    assert [level for level, _ in rows] == ["WARN"] and "형식 오류" in rows[0][1]
+
+
 def test_doctor_without_registry_fails(tmp_path, monkeypatch):
     monkeypatch.setenv("HAN_ADAPTERS_DIR", str(tmp_path / "none"))
     report = doctor.run("codex")
@@ -360,14 +430,14 @@ def test_doctor_codex_agents_partial_registration_names_missing_roles(tmp_path):
     doctor.check_codex_agents(report)
     ((level, detail),) = codex_agent_rows(report)
     assert level == "WARN"
-    assert "빠진 역할" in detail and "chef_verifier" in detail and "chef_researcher" not in detail.split("빠진 역할")[1]
+    assert "빠진 역할" in detail and "chef:verifier" in detail and "chef:researcher" not in detail.split("빠진 역할")[1]
 
 
 def test_doctor_codex_agents_compares_by_role_name_not_file_name(tmp_path):
     for name in shipped_files():
         if name != "chef-verifier.toml":
             register_codex_role(tmp_path, name, shipped_text(name))
-    register_codex_role(tmp_path, "my-verifier.toml", shipped_text("chef-verifier.toml").replace("\"chef_verifier\"", "'chef_verifier'") + "\n# 오래된 사본\n")
+    register_codex_role(tmp_path, "my-verifier.toml", shipped_text("chef-verifier.toml").replace("\"chef:verifier\"", "'chef:verifier'") + "\n# 오래된 사본\n")
     report = doctor.Report()
     doctor.check_codex_agents(report)
     ((level, detail),) = codex_agent_rows(report)
@@ -403,14 +473,15 @@ def test_doctor_codex_agents_os_error_is_reported_and_doctor_finishes(tmp_path, 
 def test_doctor_codex_agents_reports_stale_and_unknown_chef_roles(tmp_path):
     stale = register_codex_role(tmp_path, "chef-verifier.toml", shipped_text("chef-verifier.toml") + "\n# 오래된 사본\n")
     register_codex_role(tmp_path, "chef-retired.toml", 'name = "chef_retired"\n')
-    register_codex_role(tmp_path, "renamed.toml", 'name = "chef_renamed"\n')
+    register_codex_role(tmp_path, "renamed.toml", 'name = "chef:renamed"\n')
+    register_codex_role(tmp_path, "chef-developer-small.toml", 'name = "chef_developer_small"\n')
     other = register_codex_role(tmp_path, "my-reviewer.toml", 'name = "my_reviewer"\n')
     report = doctor.Report()
     doctor.check_codex_agents(report)
     ((level, detail),) = codex_agent_rows(report)
     assert level == "WARN"
     assert "낡은 등록" in detail and "chef-verifier.toml" in detail
-    assert "chef-retired.toml" in detail and "renamed.toml" in detail
+    assert "chef-retired.toml" in detail and "renamed.toml" in detail and "chef-developer-small.toml" in detail
     assert "my-reviewer" not in detail
     assert stale.exists() and other.exists()
     assert not report.failed
