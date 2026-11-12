@@ -16,9 +16,8 @@
 **COMMENT VOICE** — surviving comments are terse notes, not doc prose; in Korean use plain `-함/-음/부름`, not `-한다/-됩니다`.
 **ONE-VALUE CHECKS USE `if`/`else`** — compare against a single value with `if` plus `else`, not `switch`, preferring `==` over `!=`. Keep a do-nothing branch as an empty block with a one-clause reason comment. No ternary; `Math.Min`/`Max`/`Clamp` to pick a value is fine.
 **BRANCH-VARYING VALUES GO INTO A FUNCTION** — move a per-branch value into one shared function named for the value, handling its edge cases; copying the check into every branch to drop the variable is not a fix.
-**VALIDATE THE REQUEST BEFORE READING STATE** — in server handlers, check request values before DB or state reads, even if that changes which error a multi-fault request gets.
 **NO CIRCULAR CHANGE UNITS** — one-way dependencies between CLs or commits are fine (land the prerequisite first, state the order); changes that can't build or pass checks without each other share one unit. Confirm a new unit's symbols exist in head, not only in another pending unit.
 
 ## Root Cause First
 
-**FIX ROOT CAUSES, NOT SYMPTOMS** — before coding a bug fix, explain why it could happen at the design level and confirm the fix removes that cause. If you can't explain why, say so and ask; do not write code yet.
+**FIX ROOT CAUSES, NOT SYMPTOMS** — before coding a bug fix, explain why it could happen at the design level and confirm the fix removes that cause. If you can't explain why, say so and ask; do not write code yet. When a tool stalls or fails on some input, shrinking or rerouting the input to dodge it is a workaround, not a fix; if you need one now, say it is a workaround and hand off the tool's own fix as a separate unit in the same turn.
