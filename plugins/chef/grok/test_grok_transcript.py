@@ -38,12 +38,42 @@ def test_find_transcript_rejects_unsafe_ids(session):
     assert grok_transcript.find_transcript(session) == ""
 
 
-def test_detection_requires_acp_update_not_generic_filename(tmp_path):
-    unrelated = write(tmp_path / "updates.jsonl", {"timestamp": 1800000000})
+def test_detection_requires_acp_update_in_updates_file(tmp_path):
+    unrelated = write(tmp_path / "unrelated/updates.jsonl", {"timestamp": 1800000000})
     assert not grok_transcript.is_transcript(unrelated)
-    path = write(tmp_path / "copy.jsonl", {"params": {"update": {}}}, update("turn_completed"))
+    path = write(tmp_path / "grok/updates.jsonl", {"params": {"update": {}}}, update("turn_completed"))
     assert grok_transcript.is_transcript(path)
     assert grok_transcript.session_id(path) == "sample-session"
+
+
+def test_detection_skips_content_for_other_file_names(tmp_path, monkeypatch):
+    claude = write(tmp_path / "11111111-2222-3333-4444-555555555555.jsonl", update("turn_completed"))
+    codex = write(tmp_path / "rollout-2026-01-01T00-00-00-11111111-2222-3333-4444-555555555555.jsonl", update("turn_completed"))
+    monkeypatch.setattr(grok_transcript, "entries", lambda *_: pytest.fail("content was read"))
+    assert not grok_transcript.is_transcript(claude)
+    assert not grok_transcript.is_transcript(codex)
+
+
+def test_detection_remembers_only_confirmed_transcripts(tmp_path, monkeypatch):
+    monkeypatch.setattr(grok_transcript, "CONFIRMED", set())
+    path = tmp_path / "grok/updates.jsonl"
+    path.parent.mkdir()
+    path.write_text("", encoding="utf-8")
+    assert not grok_transcript.is_transcript(path)
+    write(path, update("agent_message_chunk", "hello"))
+    assert grok_transcript.is_transcript(path)
+    monkeypatch.setattr(grok_transcript, "entries", lambda *_: pytest.fail("content was read again"))
+    assert grok_transcript.is_transcript(path)
+    assert grok_transcript.is_transcript(str(path))
+
+
+def test_detection_memory_stays_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(grok_transcript, "CONFIRMED", set())
+    monkeypatch.setattr(grok_transcript, "CONFIRMED_LIMIT", 3)
+    paths = [write(tmp_path / f"grok-{number}/updates.jsonl", update("turn_completed")) for number in range(5)]
+    for path in paths:
+        assert grok_transcript.is_transcript(path)
+    assert len(grok_transcript.CONFIRMED) <= 3
 
 
 def test_session_fallback_uses_directory_not_common_filename(tmp_path):

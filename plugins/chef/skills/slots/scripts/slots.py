@@ -89,6 +89,29 @@ def inside_root(root, path):
         return False
 
 
+REQUEST_PATHS = threading.local()
+
+
+@contextlib.contextmanager
+def request_realpaths():
+    nested = hasattr(REQUEST_PATHS, "memo")
+    if not nested:
+        REQUEST_PATHS.memo = {}
+    try:
+        yield
+    finally:
+        if not nested:
+            del REQUEST_PATHS.memo
+
+
+def request_realpath(path):
+    memo = getattr(REQUEST_PATHS, "memo", {})
+    key = os.fspath(path)
+    if key not in memo:
+        memo[key] = os.path.realpath(key)
+    return memo[key]
+
+
 def is_link(path):
     return os.path.islink(path) or getattr(os.path, "isjunction", lambda _: False)(path)
 

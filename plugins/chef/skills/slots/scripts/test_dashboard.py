@@ -1825,3 +1825,158 @@ def test_detail_question_originals_show_partial_answer_count_and_multiline_goal(
     assert "아직 답할 정책" in originals.text() and "이미 답한 정책" not in originals.text()
     assert any(node.text() == goal for node in root.elements("p"))
     assert (folder / "ask-1.md").read_text(encoding="utf-8") == question
+
+
+OLD_NS = 1_700_000_000 * 10**9
+
+
+def age_files(folder):
+    for path in folder.rglob("*"):
+        if path.is_file():
+            os.utime(path, ns=(OLD_NS, OLD_NS))
+
+
+def count_inspections(monkeypatch):
+    calls = []
+    original = question_records.inspect_document
+
+    def counted(*args):
+        calls.append(args[1])
+        return original(*args)
+
+    monkeypatch.setattr(question_records, "inspect_document", counted)
+    return calls
+
+
+@pytest.fixture
+def inspected(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "INSPECTIONS", {})
+    write_question(tmp_path, "ask-1.md", "첫 질문", [("결정", "pending")], answer="권장")
+    write_question(tmp_path, "ask-1.md", "첫 질문 개정", [("결정", "pending")], answer="권장")
+    age_files(tmp_path)
+    return tmp_path, count_inspections(monkeypatch)
+
+
+def inspect_saved(folder):
+    return dashboard.inspect_question(str(folder), "ask-1.md", (folder / "ask-1.md").read_text(encoding="utf-8"))
+
+
+def test_question_inspection_is_reused_while_no_input_file_changes(inspected):
+    folder, calls = inspected
+    first = inspect_saved(folder)
+    assert first[1] == "" and first[0].title == "첫 질문 개정"
+    assert inspect_saved(folder) == first
+    assert calls == ["ask-1.md"]
+
+
+@pytest.mark.parametrize("target", ["questions/ask-1.json", "details/history/ask-1.md", "questions/history/ask-1/1.json"])
+def test_question_inspection_recomputes_when_an_input_file_changes(inspected, target):
+    folder, calls = inspected
+    inspect_saved(folder)
+    os.utime(folder / target, ns=(OLD_NS + 10**9, OLD_NS + 10**9))
+    inspect_saved(folder)
+    assert len(calls) == 2
+    inspect_saved(folder)
+    assert len(calls) == 2
+
+
+def test_question_inspection_recomputes_for_added_removed_or_resized_inputs(inspected):
+    folder, calls = inspected
+    assert inspect_saved(folder)[1] == ""
+    extra = folder / "questions/history/ask-1/unrelated.json"
+    extra.write_text("{}", encoding="utf-8")
+    os.utime(extra, ns=(OLD_NS, OLD_NS))
+    assert inspect_saved(folder)[1] != ""
+    assert len(calls) == 2
+    extra.unlink()
+    assert inspect_saved(folder)[1] == ""
+    assert len(calls) == 2
+    archive = folder / "details/history/ask-1.md"
+    archive.write_text(archive.read_text(encoding="utf-8") + "changed", encoding="utf-8")
+    os.utime(archive, ns=(OLD_NS, OLD_NS))
+    assert inspect_saved(folder)[1] != ""
+    assert len(calls) == 3
+
+
+def test_question_inspection_recomputes_when_markdown_text_differs(inspected):
+    folder, calls = inspected
+    text = (folder / "ask-1.md").read_text(encoding="utf-8")
+    dashboard.inspect_question(str(folder), "ask-1.md", text)
+    changed = dashboard.inspect_question(str(folder), "ask-1.md", text + "changed")
+    assert len(calls) == 2 and changed[1] != ""
+    assert dashboard.inspect_question(str(folder), "ask-1.md", text)[1] == ""
+    assert len(calls) == 2
+
+
+def test_question_inspection_does_not_remember_recent_or_problem_results(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "INSPECTIONS", {})
+    write_question(tmp_path, "ask-1.md", "첫 질문", [("결정", "pending")], answer="권장")
+    calls = count_inspections(monkeypatch)
+    inspect_saved(tmp_path)
+    inspect_saved(tmp_path)
+    assert len(calls) == 2 and dashboard.INSPECTIONS == {}
+    age_files(tmp_path)
+    (tmp_path / "details/history/ask-1.md").unlink()
+    assert inspect_saved(tmp_path)[1] != ""
+    assert inspect_saved(tmp_path)[1] != ""
+    assert len(calls) == 4 and dashboard.INSPECTIONS == {}
+
+
+def test_question_inspection_returns_private_copies_and_stays_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "INSPECTIONS", {})
+    monkeypatch.setattr(dashboard, "INSPECTION_LIMIT", 2)
+    for number in range(1, 4):
+        write_question(tmp_path, f"ask-{number}.md", f"질문 {number}", [("결정", "pending")], answer="권장")
+    age_files(tmp_path)
+    texts = {f"ask-{number}.md": (tmp_path / f"ask-{number}.md").read_text(encoding="utf-8") for number in range(1, 4)}
+    first = dashboard.inspect_question(str(tmp_path), "ask-1.md", texts["ask-1.md"])
+    first[0].items.clear()
+    assert len(dashboard.inspect_question(str(tmp_path), "ask-1.md", texts["ask-1.md"])[0].items) == 1
+    for name, text in texts.items():
+        dashboard.inspect_question(str(tmp_path), name, text)
+    assert len(dashboard.INSPECTIONS) <= 2
+
+
+def test_question_inspection_cache_is_safe_under_concurrent_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "INSPECTIONS", {})
+    monkeypatch.setattr(dashboard, "INSPECTION_LIMIT", 3)
+    for number in range(1, 6):
+        write_question(tmp_path, f"ask-{number}.md", f"질문 {number}", [("결정", "pending")], answer="권장")
+    age_files(tmp_path)
+    failures = []
+
+    def work():
+        try:
+            for _ in range(20):
+                for number in range(1, 6):
+                    name = f"ask-{number}.md"
+                    summary, issue = dashboard.inspect_question(str(tmp_path), name, (tmp_path / name).read_text(encoding="utf-8"))
+                    assert issue == "" and summary.title == f"질문 {number}"
+        except Exception as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=work) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert failures == [] and len(dashboard.INSPECTIONS) <= 3
+
+
+def test_page_functions_share_one_realpath_memo_per_request(monkeypatch):
+    seen = []
+
+    @dashboard.request_scoped
+    def request():
+        seen.append(slots.request_realpath("."))
+        seen.append(slots.request_realpath("."))
+
+    calls = []
+    original = os.path.realpath
+    monkeypatch.setattr(os.path, "realpath", lambda path: calls.append(path) or original(path))
+    request()
+    request()
+    assert seen[0] == seen[1] == seen[2] == seen[3] and len(calls) == 2
+    slots.request_realpath(".")
+    slots.request_realpath(".")
+    assert len(calls) == 4

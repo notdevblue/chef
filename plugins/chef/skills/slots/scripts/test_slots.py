@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -2744,7 +2745,9 @@ def test_run_grok_dry_run_preserves_slot_state(project):
 
 def test_grok_resume_uses_native_session_and_refuses_other_runtime(recorded_session):
     config, folder, session, transcript = recorded_session
-    transcript.write_text(json.dumps({"params": {"sessionId": session, "update": {"sessionUpdate": "user_message_chunk"}}}) + "\n", encoding="utf-8")
+    grok_record = transcript.with_name("updates.jsonl")
+    grok_record.write_text(json.dumps({"params": {"sessionId": session, "update": {"sessionUpdate": "user_message_chunk"}}}) + "\n", encoding="utf-8")
+    (folder / "sessions.tsv").write_text("at\taction\tsession\ttranscript\nnow\topen\t" + session + "\t" + str(grok_record) + "\n", encoding="utf-8")
     assert slots.session_runtime(str(folder), session) == "grok"
     with pytest.raises(slots.UsageError, match="grok.*--new-session"):
         slots.resume_command(config, "a", folder.name)
@@ -2863,3 +2866,61 @@ def test_inject_dry_run_picks_live_leader(project, tmp_path, monkeypatch):
     code, out, _ = project.run("--runtime", "grok", "inject", "a", "--session", session, "--text", "answer", "--dry-run")
     assert code == slots.OK
     assert "리더 777" in out
+
+
+def count_realpaths(monkeypatch):
+    calls = []
+    original = os.path.realpath
+    monkeypatch.setattr(os.path, "realpath", lambda path: calls.append(path) or original(path))
+    return calls
+
+
+def test_request_realpath_is_memoized_only_inside_a_request_scope(tmp_path, monkeypatch):
+    calls = count_realpaths(monkeypatch)
+    slots.request_realpath(tmp_path)
+    slots.request_realpath(tmp_path)
+    assert len(calls) == 2
+    with slots.request_realpaths():
+        assert slots.request_realpath(tmp_path) == os.path.realpath(tmp_path)
+        slots.request_realpath(tmp_path)
+        with slots.request_realpaths():
+            slots.request_realpath(tmp_path)
+        slots.request_realpath(tmp_path)
+        assert len(calls) == 4
+    with slots.request_realpaths():
+        slots.request_realpath(tmp_path)
+    assert len(calls) == 5
+
+
+def test_request_realpath_follows_a_link_changed_between_requests(tmp_path):
+    first, second, link = tmp_path / "first", tmp_path / "second", tmp_path / "link"
+    first.mkdir()
+    second.mkdir()
+
+    def point(target):
+        if sys.platform == "win32":
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+        else:
+            link.symlink_to(target, target_is_directory=True)
+
+    point(first)
+    with slots.request_realpaths():
+        assert slots.request_realpath(link) == os.path.realpath(first)
+    if sys.platform == "win32":
+        os.rmdir(link)
+    else:
+        link.unlink()
+    point(second)
+    with slots.request_realpaths():
+        assert slots.request_realpath(link) == os.path.realpath(second)
+
+
+def test_request_realpath_scopes_do_not_leak_between_threads(tmp_path, monkeypatch):
+    calls = count_realpaths(monkeypatch)
+    with slots.request_realpaths():
+        slots.request_realpath(tmp_path)
+        worker = threading.Thread(target=lambda: [slots.request_realpath(tmp_path) for _ in range(2)])
+        worker.start()
+        worker.join()
+        slots.request_realpath(tmp_path)
+    assert len(calls) == 3

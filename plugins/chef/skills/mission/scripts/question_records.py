@@ -376,6 +376,37 @@ def inspect_document(folder, name, text_snapshot):
         return QuestionSummary(name, name, [], False, False, False), str(error)
 
 
+def file_stamp(path):
+    try:
+        status = os.stat(path)
+    except OSError:
+        return 0, -1
+    return status.st_mtime_ns, status.st_size
+
+
+def inspection_inputs(folder, name):
+    identifier = document_id(name)
+    folder = os.path.abspath(folder)
+    directory = Path(folder, "questions", "history", identifier)
+    inputs = [
+        os.path.join(folder, name),
+        os.path.join(folder, "questions", f"{identifier}.json"),
+        os.path.join(folder, "details", "history", f"{identifier}.md"),
+        *directory.glob("*.json"),
+    ]
+    for receipt in directory.glob("recovery/*/receipt.json"):
+        inputs.extend([receipt, receipt.with_name("before.json"), receipt.with_name("after.json")])
+    return sorted({os.fspath(path) for path in inputs})
+
+
+def inspection_stamp(folder, name, text_snapshot):
+    required_text(text_snapshot, "Markdown 본문")
+    stamps = tuple((path, os.path.realpath(path), *file_stamp(path)) for path in inspection_inputs(folder, name))
+    text_hash = hashlib.sha256(text_snapshot.encode("utf-8", errors="surrogatepass")).hexdigest()
+    newest = max((stamp[2] for stamp in stamps), default=0)
+    return (os.path.abspath(folder), os.path.realpath(folder), name, text_hash, stamps), newest
+
+
 def write_text(path, text):
     write_bytes(path, text.encode("utf-8"))
 

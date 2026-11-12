@@ -2,6 +2,8 @@ import copy
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -1035,3 +1037,119 @@ def test_restore_history_write_failure_rolls_back_other_targets(tmp_path, recove
         recovery[-1]()
     assert_recovery_originals(tmp_path, recovery)
     assert archive.read_bytes() == original
+
+
+def test_inspection_stamp_covers_every_input_the_inspection_reads(tmp_path):
+    publish_document(tmp_path, document())
+    publish_document(tmp_path, {**document(), "revision": 2, "title": "개정"}, 1)
+    text = render_document(read_document(tmp_path, "ask-1.md"))
+    base, _ = question_records.inspection_stamp(tmp_path, "ask-1.md", text)
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] == base
+    inputs = {os.path.relpath(path, tmp_path).replace(os.sep, "/") for path in question_records.inspection_inputs(tmp_path, "ask-1.md")}
+    assert {"questions/ask-1.json", "details/history/ask-1.md", "questions/history/ask-1/1.json"} <= inputs
+    for relative in sorted(inputs):
+        path = tmp_path / relative
+        before = path.stat().st_mtime_ns
+        os.utime(path, ns=(before + 10**9, before + 10**9))
+        assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base, relative
+        os.utime(path, ns=(before, before))
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text + "x")[0] != base
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] == base
+
+
+def test_inspection_stamp_notices_missing_added_and_recovery_inputs(tmp_path):
+    publish_document(tmp_path, document())
+    text = render_document(read_document(tmp_path, "ask-1.md"))
+    base, newest = question_records.inspection_stamp(tmp_path, "ask-1.md", text)
+    assert newest == max(os.stat(path).st_mtime_ns for path in question_records.inspection_inputs(tmp_path, "ask-1.md"))
+    receipt = tmp_path / "questions/history/ask-1/recovery/20260101T000000Z-a/receipt.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("{}", encoding="utf-8")
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base
+    receipt.unlink()
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] == base
+    question_records.history_path(tmp_path, "ask-1.md").unlink()
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base
+
+
+def test_inspection_stamp_rejects_unusable_names_and_text(tmp_path):
+    with pytest.raises(QuestionRecordError):
+        question_records.inspection_stamp(tmp_path, "notes.md", "text")
+    with pytest.raises(QuestionRecordError):
+        question_records.inspection_stamp(tmp_path, "ask-1.md", None)
+
+
+def link_directory(link, target):
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def unlink_directory(link):
+    if sys.platform == "win32":
+        os.rmdir(link)
+    else:
+        link.unlink()
+
+
+def test_inspection_stamp_changes_when_an_input_directory_becomes_a_link_to_identical_content(tmp_path):
+    publish_document(tmp_path, document())
+    publish_document(tmp_path, {**document(), "revision": 2, "title": "개정"}, 1)
+    text = render_document(read_document(tmp_path, "ask-1.md"))
+    base, _ = question_records.inspection_stamp(tmp_path, "ask-1.md", text)
+    history = tmp_path / "questions" / "history" / "ask-1"
+    copied = tmp_path / "copied-history"
+    shutil.copytree(history, copied)
+    shutil.rmtree(history)
+    link_directory(history, copied)
+    try:
+        assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base
+    finally:
+        unlink_directory(history)
+
+
+def test_inspection_stamp_changes_when_the_document_file_becomes_a_link_to_identical_content(tmp_path):
+    publish_document(tmp_path, document())
+    text = render_document(read_document(tmp_path, "ask-1.md"))
+    base, _ = question_records.inspection_stamp(tmp_path, "ask-1.md", text)
+    document_path = tmp_path / "ask-1.md"
+    copied = tmp_path / "copied.md"
+    shutil.copy2(document_path, copied)
+    document_path.unlink()
+    try:
+        document_path.symlink_to(copied)
+    except OSError:
+        pytest.skip("symlink 생성 권한 없음")
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base
+
+
+def test_inspection_inputs_follow_a_linked_recovery_directory_like_history_records(tmp_path):
+    publish_document(tmp_path, document())
+    elsewhere = tmp_path / "elsewhere"
+    receipt = elsewhere / "20260101T000000Z-a" / "receipt.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("{}", encoding="utf-8")
+    recovery = tmp_path / "questions" / "history" / "ask-1" / "recovery"
+    recovery.parent.mkdir(parents=True)
+    link_directory(recovery, elsewhere)
+    try:
+        text = render_document(read_document(tmp_path, "ask-1.md"))
+        base, _ = question_records.inspection_stamp(tmp_path, "ask-1.md", text)
+        inputs = {os.path.normcase(path) for path in question_records.inspection_inputs(tmp_path, "ask-1.md")}
+        assert os.path.normcase(str(recovery / "20260101T000000Z-a" / "receipt.json")) in inputs
+        assert os.path.normcase(str(recovery / "20260101T000000Z-a" / "after.json")) in inputs
+        os.utime(receipt, ns=(10**18, 10**18))
+        assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base
+    finally:
+        unlink_directory(recovery)
+
+
+def test_inspection_stamp_includes_the_resolved_path_of_the_document_file(tmp_path, monkeypatch):
+    publish_document(tmp_path, document())
+    text = render_document(read_document(tmp_path, "ask-1.md"))
+    base, _ = question_records.inspection_stamp(tmp_path, "ask-1.md", text)
+    document_path = os.path.normcase(str(tmp_path / "ask-1.md"))
+    original = os.path.realpath
+    monkeypatch.setattr(os.path, "realpath", lambda path: str(tmp_path / "other.md") if os.path.normcase(os.fspath(path)) == document_path else original(path))
+    assert question_records.inspection_stamp(tmp_path, "ask-1.md", text)[0] != base

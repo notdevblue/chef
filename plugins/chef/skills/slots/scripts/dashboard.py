@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import copy
+import functools
 import hashlib
 import html
 import json
@@ -7,6 +9,7 @@ import mimetypes
 import os
 import re
 import sys
+import threading
 import time
 import webbrowser
 from dataclasses import dataclass, field
@@ -47,6 +50,11 @@ MARKED_URL = "https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js
 QUESTION_NAME = re.compile(r"(?:ask-\d+|confirm-[ABC]\d*)\.md")
 MAX_TEXT_BYTES = 4 * 1024 * 1024
 BINARY_PROBE_BYTES = 8192
+INSPECTION_LIMIT = 2048
+INSPECTION_SETTLE_NS = 2 * 10**9
+NO_INSPECTION = ((), ())
+INSPECTIONS = {}
+INSPECTIONS_LOCK = threading.Lock()
 
 HTML_TYPE = "text/html; charset=utf-8"
 TEXT_TYPE = "text/plain; charset=utf-8"
@@ -700,6 +708,33 @@ def parse_time(value):
         return 0.0
 
 
+def request_scoped(function):
+    @functools.wraps(function)
+    def scoped(*args, **kwargs):
+        with slots.request_realpaths():
+            return function(*args, **kwargs)
+    return scoped
+
+
+def inspect_question(folder, name, text):
+    try:
+        key, newest = question_records.inspection_stamp(folder, name, text)
+    except question_records.QuestionRecordError:
+        return question_records.inspect_document(folder, name, text)
+    document = (key[0], key[2])
+    previous = INSPECTIONS.get(document, NO_INSPECTION)
+    if previous[0] == key:
+        return copy.deepcopy(previous[1])
+    result = question_records.inspect_document(folder, name, text)
+    # mtime 해상도 안에서 같은 크기로 또 바뀔 수 있어 막 바뀐 입력은 기억하지 않음
+    if result[1] == "" and time.time_ns() - newest > INSPECTION_SETTLE_NS:
+        with INSPECTIONS_LOCK:
+            if len(INSPECTIONS) >= INSPECTION_LIMIT:
+                INSPECTIONS.clear()
+            INSPECTIONS[document] = (key, copy.deepcopy(result))
+    return result
+
+
 def transcript_of(location, mission, sessions):
     session = location.active.session if mission.active else ""
     recorded = [row["transcript"] for row in sessions if not session or row["session"] == session]
@@ -857,7 +892,7 @@ def load_mission(location, mission_id):
         except READ_ERRORS as error:
             mission.question_issues[name] = f"Markdown 읽기 실패: {error}"
             continue
-        summary, issue = question_records.inspect_document(folder, name, text)
+        summary, issue = inspect_question(folder, name, text)
         if issue:
             if not os.path.lexists(os.path.join(folder, "questions", f"{name[:-3]}.json")):
                 issue = f"질문 JSON 정본 누락 · 정형 전환 필요: {issue}"
@@ -973,7 +1008,7 @@ def markdown_heading(text):
 def document_label(name, text, mission_title, folder=""):
     if QUESTION_NAME.fullmatch(name):
         if folder:
-            summary, issue = question_records.inspect_document(folder, name, text)
+            summary, issue = inspect_question(folder, name, text)
             if not issue:
                 return question_label(name, summary)
         return markdown_heading(text) or name
@@ -1520,6 +1555,7 @@ def message(status, text):
     return status, HTML_TYPE, page(str(status), f'<p>{esc(text)}</p><p><a href="/">← 개요</a></p>').encode("utf-8")
 
 
+@request_scoped
 def overview_page(config):
     found = collect(config)
     waiting = [(mission, name) for location in found for mission in location.missions if mission.state == RUNNING for name in mission.unanswered]
@@ -1585,6 +1621,7 @@ def file_links(folder, names, lead=(), mission_title=""):
     return f'<div class="list">{rows}</div>' if rows else '<p class="muted">없음</p>'
 
 
+@request_scoped
 def mission_page(config, slot, mission_id):
     if not (slot == MAIN_LABEL or slots.NAME_PATTERN.fullmatch(slot)) or not mission_guard.valid_mission_id(mission_id):
         return message(400, "slot·id 형식 오류")
@@ -1689,7 +1726,7 @@ def swap_file_link(match):
 
 
 def document_visible(folder, path, shared):
-    root, real = os.path.realpath(folder), os.path.realpath(path)
+    root, real = slots.request_realpath(folder), slots.request_realpath(path)
     if not slots.inside_root(root, real):
         return False
     requested = os.path.relpath(os.path.abspath(path), os.path.abspath(folder)).replace("\\", "/")
@@ -1702,7 +1739,7 @@ def document_visible(folder, path, shared):
         requested = os.path.relpath(os.path.abspath(path), root).replace("\\", "/")
     if os.path.isfile(os.path.join(folder, "mission.md")) and mission_state.auto_question_document(folder, requested):
         return True
-    return name in SYSTEM_DOCUMENTS or any(os.path.normcase(os.path.realpath(os.path.join(folder, item))) == os.path.normcase(real) for item in shared)
+    return name in SYSTEM_DOCUMENTS or any(os.path.normcase(slots.request_realpath(os.path.join(folder, item))) == os.path.normcase(real) for item in shared)
 
 
 def digest(data):
@@ -1710,9 +1747,9 @@ def digest(data):
 
 
 def shared_bytes_match(folder, path, data):
-    real = os.path.normcase(os.path.realpath(path))
+    real = os.path.normcase(slots.request_realpath(path))
     return any(
-        os.path.normcase(os.path.realpath(os.path.join(folder, row["path"]))) == real and digest(data) == row["sha256"]
+        os.path.normcase(slots.request_realpath(os.path.join(folder, row["path"]))) == real and digest(data) == row["sha256"]
         for row in mission_state.shared_document_rows(folder)
     )
 
@@ -1739,7 +1776,7 @@ def mission_folders(allowed, raw, real):
         for entry in entries:
             if not entry.is_dir() or not mission_guard.valid_mission_id(entry.name):
                 continue
-            folder = os.path.realpath(entry.path)
+            folder = slots.request_realpath(entry.path)
             requested_inside = slots.inside_root(os.path.abspath(entry.path), absolute)
             if not requested_inside and not slots.inside_root(folder, real):
                 continue
@@ -1755,11 +1792,11 @@ def read_allowed(config, raw):
     try:
         real = ""
         if raw and os.path.isabs(raw):
-            real = os.path.realpath(raw)
+            real = slots.request_realpath(raw)
     except ValueError:
         real = ""
     allowed = locations(config)
-    if not real or not any(slots.inside_root(os.path.realpath(root), real) for location in allowed for root in (location.root, location.state_dir)):
+    if not real or not any(slots.inside_root(slots.request_realpath(root), real) for location in allowed for root in (location.root, location.state_dir)):
         return real, b"", message(403, "허용된 작업 공간·미션 경로 밖 경로")
     if not os.path.isfile(real):
         return real, b"", message(404, "파일 없음")
@@ -1769,7 +1806,7 @@ def read_allowed(config, raw):
             return real, b"", message(404, "공유되지 않은 문서")
         with open(real, "rb") as f:
             data = f.read()
-        if any(os.path.relpath(real, os.path.realpath(folder)).replace("\\", "/") not in SYSTEM_DOCUMENTS and not mission_state.auto_question_document(folder, os.path.relpath(real, os.path.realpath(folder))) and not shared_bytes_match(folder, real, data) for folder in folders):
+        if any(os.path.relpath(real, slots.request_realpath(folder)).replace("\\", "/") not in SYSTEM_DOCUMENTS and not mission_state.auto_question_document(folder, os.path.relpath(real, slots.request_realpath(folder))) and not shared_bytes_match(folder, real, data) for folder in folders):
             return real, b"", message(404, "공유되지 않은 문서")
         return real, data, ()
     except (ValueError, mission_state.StateError):
@@ -1790,11 +1827,13 @@ def raw_type(real):
     return f"{guessed}; charset=utf-8" if guessed.startswith("text/") or guessed.endswith(UTF8_SUFFIXES) else guessed
 
 
+@request_scoped
 def raw_response(config, raw):
     real, data, failure = read_allowed(config, raw)
     return failure or (200, raw_type(real), data)
 
 
+@request_scoped
 def view_response(config, raw, embedded=False):
     real, data, failure = read_allowed(config, raw)
     if failure:
@@ -1812,8 +1851,8 @@ def view_response(config, raw, embedded=False):
     title = os.path.basename(real)
     if ext == ".md":
         title = document_label(os.path.basename(real), text, "", os.path.dirname(real))
-        boundaries = [item.root if slots.inside_root(os.path.realpath(item.root), real) else item.state_dir for item in locations(config)]
-        root = max((root for root in boundaries if slots.inside_root(os.path.realpath(root), real)), key=len, default=config.main)
+        boundaries = [item.root if slots.inside_root(slots.request_realpath(item.root), real) else item.state_dir for item in locations(config)]
+        root = max((root for root in boundaries if slots.inside_root(slots.request_realpath(root), real)), key=len, default=config.main)
         source_json = json.dumps(FILE_URL.sub(swap_file_link, text)).replace("<", "\\u003c")
         body = (
             f'<p class="muted document-path">{esc(real)}</p><script type="application/json" id="source" data-url="{esc(raw_url(real))}" data-root="{esc(raw_url(root) + "/")}">{source_json}</script>'

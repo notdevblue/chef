@@ -148,8 +148,8 @@ def canonical_document_path(folder, name):
     canonical = "/".join(parts)
     if canonical in SYSTEM_DOCUMENTS:
         raise StateError(f"시스템 파일은 공유할 수 없음: {name}")
-    root = os.path.realpath(folder)
-    target = os.path.realpath(os.path.join(folder, *parts))
+    root = slots.request_realpath(folder)
+    target = slots.request_realpath(os.path.join(folder, *parts))
     if not slots.inside_root(root, target):
         raise StateError(f"문서 경로가 미션 폴더 밖이거나 폴더 자체임: {name}")
     resolved = os.path.relpath(target, root).replace(os.sep, "/")
@@ -165,7 +165,7 @@ def shared_document_rows(folder):
     path = os.path.join(folder, SHARED_DOCUMENTS_FILE)
     if not os.path.lexists(path):
         return []
-    if not slots.inside_root(os.path.realpath(folder), os.path.realpath(path)) or not os.path.isfile(path):
+    if not slots.inside_root(slots.request_realpath(folder), slots.request_realpath(path)) or not os.path.isfile(path):
         raise StateError(f"{SHARED_DOCUMENTS_FILE} 경로가 잘못됨: {path}")
     try:
         text = read_text(path)
@@ -204,7 +204,7 @@ def shared_documents(folder):
 def auto_question_document(folder, name):
     try:
         canonical, target = canonical_document_path(folder, name)
-        root = os.path.realpath(folder)
+        root = slots.request_realpath(folder)
         resolved = os.path.relpath(target, root).replace("\\", "/")
         if os.path.normcase(canonical) != os.path.normcase(resolved) or not os.path.isfile(target):
             return False

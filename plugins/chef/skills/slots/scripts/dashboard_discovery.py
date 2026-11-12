@@ -54,12 +54,12 @@ class Workspace:
 
 
 def canonical(path):
-    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    return os.path.normcase(slots.request_realpath(os.path.abspath(path)))
 
 
 def mission_folder_allowed(state_dir, mission_id):
-    expected = os.path.join(os.path.realpath(state_dir), mission_id)
-    real = os.path.realpath(os.path.join(state_dir, mission_id))
+    expected = os.path.join(slots.request_realpath(state_dir), mission_id)
+    real = slots.request_realpath(os.path.join(state_dir, mission_id))
     return mission_guard.valid_mission_id(mission_id) and os.path.normcase(real) == os.path.normcase(expected)
 
 
@@ -68,8 +68,8 @@ def mission_metadata_allowed(state_dir, mission_id):
         return False
     folder = os.path.join(state_dir, mission_id)
     metadata = os.path.join(folder, "mission.md")
-    expected = os.path.join(os.path.realpath(folder), "mission.md")
-    return os.path.normcase(os.path.realpath(metadata)) == os.path.normcase(expected) and os.path.isfile(metadata)
+    expected = os.path.join(slots.request_realpath(folder), "mission.md")
+    return os.path.normcase(slots.request_realpath(metadata)) == os.path.normcase(expected) and os.path.isfile(metadata)
 
 
 def mission_ids(state_dir):

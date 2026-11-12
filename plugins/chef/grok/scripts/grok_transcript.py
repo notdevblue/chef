@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -9,6 +10,10 @@ MESSAGE_ROLES = {"user_message_chunk": "user", "agent_message_chunk": "assistant
 ACTIVE_UPDATES = {"user_message_chunk", "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update"}
 SUBAGENT_STATUSES = {"running", "completed", "failed", "cancelled"}
 ACTIVITY_TAIL_BYTES = 256 * 1024
+TRANSCRIPT_NAME = "updates.jsonl"
+CONFIRMED_LIMIT = 4096
+CONFIRMED = set()
+CONFIRMED_LOCK = threading.Lock()
 
 
 def inside(path, root):
@@ -61,13 +66,35 @@ def entries(path, tail_bytes=0):
                 yield entry
 
 
-def is_transcript(path):
+def has_update_line(path):
     for entry in entries(path):
         params = entry.get("params")
         if isinstance(params, dict) and isinstance(params.get("update"), dict):
             if isinstance(params["update"].get("sessionUpdate"), str):
                 return True
     return False
+
+
+def confirm_transcript(path):
+    key = os.path.normcase(os.path.abspath(path))
+    if key in CONFIRMED:
+        return True
+    # 갓 만든 빈 updates.jsonl 은 줄이 생기면 Grok 이 되므로 True 만 기억함
+    if has_update_line(path):
+        with CONFIRMED_LOCK:
+            if len(CONFIRMED) >= CONFIRMED_LIMIT:
+                CONFIRMED.clear()
+            CONFIRMED.add(key)
+        return True
+    return False
+
+
+def is_transcript(path):
+    # Grok 기록은 항상 updates.jsonl 이라 다른 이름은 내용을 읽지 않음
+    if os.path.basename(path) == TRANSCRIPT_NAME:
+        return confirm_transcript(path)
+    else:
+        return False
 
 
 def session_id(path):
