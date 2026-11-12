@@ -2438,12 +2438,15 @@ def test_launch_env_drops_parent_session_markers(monkeypatch):
     monkeypatch.setenv("AI_AGENT", "claude-code_agent")
     monkeypatch.setenv("MSYSTEM", "MINGW64")
     monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("FORCE_COLOR", "0")
+    monkeypatch.setenv("_ZO_DOCTOR", "0")
     monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
     env = slots.launch_env()
     assert "CLAUDE_CODE_CHILD_SESSION" not in env
     assert "CLAUDE_CODE_SESSION_ID" not in env
     assert "AI_AGENT" not in env and "MSYSTEM" not in env
     assert "NO_COLOR" not in env and "GIT_TERMINAL_PROMPT" not in env
+    assert "FORCE_COLOR" not in env and "_ZO_DOCTOR" not in env
     assert env["CLAUDE_CODE_DISABLE_MOUSE_CLICKS"] == "1"
 
 
