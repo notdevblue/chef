@@ -1,7 +1,7 @@
 {
   "name": "chef",
   "description": "Codex CLI 미션 오케스트레이션, 슬롯 워크스페이스, 어댑터와 미션 가드",
-  "version": "0.3.25",
+  "version": "0.3.26",
   "author": {
     "name": "han"
   },

@@ -134,6 +134,7 @@ h1,h2,h3{font-family:var(--serif);font-weight:400;letter-spacing:-.05em;margin:0
 .sec .eyebrow{color:var(--muted);font-family:"SFMono-Regular",Consolas,monospace}
 .sub{font-size:22px;margin:28px 0 4px}
 .muted{color:var(--muted)}
+.workspace-path{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px;color:var(--muted);overflow-wrap:anywhere;min-width:0;letter-spacing:0;text-transform:none}
 .list{border-bottom:1px solid var(--line)}
 .row{display:grid;grid-template-columns:40px 1fr 180px 24px;gap:16px;padding:14px 0;border-top:1px solid var(--line);text-decoration:none;color:inherit}
 .row .no{color:var(--muted)}
@@ -213,7 +214,8 @@ h1,h2,h3{font-family:var(--serif);font-weight:400;letter-spacing:-.05em;margin:0
 .card.turn .track .cur{background:var(--paper);color:var(--ink)}
 .card.turn .bar span,.card.turn .box.full{background:var(--paper)}
 .card.turn .warn{color:var(--paper)}
-.card-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.card-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 8px}
+.card-top .workspace-path{flex:1 1 220px}
 .card-top .slot{font-family:var(--serif);font-size:26px;letter-spacing:-.05em}
 .state{font-size:11px;letter-spacing:.08em;text-transform:uppercase;text-align:right}
 .card .title{font-family:var(--serif);font-size:21px;letter-spacing:-.04em;line-height:1.15;overflow-wrap:anywhere;text-decoration:none}
@@ -1450,7 +1452,7 @@ def slot_section(location):
     running = [mission for mission in location.missions if mission.state == RUNNING]
     folded = [mission for mission in location.missions if mission.state != RUNNING]
     rows = "".join(mission_row(mission, number) for number, mission in enumerate(running, start=1))
-    out = f'<h3 class="sub" title="{esc(location.root)}">{esc(label_text(location.label))}</h3><div>{meta}</div>'
+    out = f'<h3 class="sub" title="{esc(location.root)}">{esc(label_text(location.label))}</h3><div class="workspace-path">{esc(location.root)}</div><div>{meta}</div>'
     out += f'<div class="list">{rows}</div>' if rows else '<p class="muted">진행 중 미션 없음</p>'
     if folded:
         inner = "".join(mission_row(mission, number) for number, mission in enumerate(folded, start=1))
@@ -1489,6 +1491,7 @@ def stage_track(config, mission):
 def slot_card(config, location):
     running = [mission for mission in location.missions if mission.state == RUNNING]
     head = f'<div class="card-top"><span class="slot" title="{esc(location.root)}">{esc(label_text(location.label))}</span>'
+    head += f'<span class="workspace-path" title="{esc(location.root)}">{esc(location.root)}</span>'
     if not running:
         state = "ACTIVE 손상" if location.active.corrupt else "비어 있음"
         return f'<div class="card idle">{head}<span class="state">{state}</span></div><span class="counts">진행 중 미션 없음</span></div>'
