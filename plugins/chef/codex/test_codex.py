@@ -314,64 +314,29 @@ def test_installed_codex_hook_uses_config_registry_without_environment(project, 
     assert active["id"] == "test" and active["session"] == "installed-session"
 
 
-def test_codex_rules_are_opt_in_and_do_not_export_claude_env(tmp_path, monkeypatch):
+def test_codex_session_context_does_not_export_claude_env(tmp_path, monkeypatch):
     env_file = tmp_path / "env"
     monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ADAPTERS_DIR", "wrong")
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_INJECT_RULES", "on")
-    monkeypatch.delenv("HAN_CODEX_INJECT_RULES", raising=False)
-    monkeypatch.delenv("HAN_RULES_DISABLE", raising=False)
-    payload = {"hook_event_name": "SessionStart"}
-    assert not session_rules.decide(payload, "codex")
-    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", "on")
-    assert session_rules.decide(payload, "codex")["hookSpecificOutput"]["additionalContext"]
+    assert session_rules.decide({"hook_event_name": "SessionStart"}, "codex") == {}
     assert not env_file.exists()
-    monkeypatch.setenv("HAN_RULES_DISABLE", "1")
-    assert not session_rules.decide(payload, "codex")
 
 
-def test_codex_shared_value_drops_personal_rules_only(monkeypatch):
-    monkeypatch.delenv("HAN_RULES_DISABLE", raising=False)
-    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_INJECT_RULES", raising=False)
-    rules = PLUGIN / "codex/rules"
-    personal = (rules / "personal-rules.md").read_text(encoding="utf-8-sig").strip()
-    documents = (rules / "human-documents.md").read_text(encoding="utf-8-sig").strip()
-    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", "on")
-    full = session_rules.decide({"hook_event_name": "SessionStart"}, "codex")["hookSpecificOutput"]["additionalContext"]
-    assert personal in full
-    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", " Shared ")
-    for event, has_main in (("SessionStart", True), ("SubagentStart", False)):
-        context = session_rules.decide({"hook_event_name": event}, "codex")["hookSpecificOutput"]["additionalContext"]
-        assert personal not in context
-        assert documents in context and "## 사람용 문서 자료" in context
-        assert ("## Answering" in context) == has_main
-    monkeypatch.setenv("HAN_RULES_DISABLE", "1")
-    assert not session_rules.decide({"hook_event_name": "SessionStart"}, "codex")
-
-
-@pytest.mark.parametrize("disable", [False, True])
-def test_codex_transcript_context_is_available_without_personal_rules(tmp_path, monkeypatch, disable):
+@pytest.mark.parametrize("disable", ["0", "1"])
+def test_codex_transcript_context_ignores_legacy_rules_settings(tmp_path, monkeypatch, disable):
     env_file = tmp_path / "claude-env"
     monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
-    monkeypatch.delenv("HAN_CODEX_INJECT_RULES", raising=False)
-    monkeypatch.setenv("HAN_RULES_DISABLE", "1" if disable else "0")
+    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", "shared")
+    monkeypatch.setenv("HAN_RULES_DISABLE", disable)
     transcript = 'C:/대화 기록/quoted "session".jsonl'
-    output = session_rules.decide({"hook_event_name": "SessionStart", "transcript_path": transcript}, "codex")
-    context = output["hookSpecificOutput"]["additionalContext"]
-    assert json.dumps(transcript, ensure_ascii=False) in context
-    assert session_rules.HEADER not in context
+    payload = {"hook_event_name": "SessionStart", "transcript_path": transcript}
+    output = session_rules.decide(payload, "codex")
+    assert output["hookSpecificOutput"] == {
+        "hookEventName": "SessionStart",
+        "additionalContext": f"chef-distill 대화 기록 경로 (--transcript): {json.dumps(transcript, ensure_ascii=False)}",
+    }
+    assert session_rules.decide({**payload, "hook_event_name": "SubagentStart"}, "codex") == {}
     assert not env_file.exists()
-
-
-def test_codex_transcript_context_survives_rules_injection(tmp_path, monkeypatch):
-    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", "on")
-    monkeypatch.delenv("HAN_RULES_DISABLE", raising=False)
-    payload = {"hook_event_name": "SessionStart", "transcript_path": str(tmp_path / "current.jsonl")}
-    context = session_rules.decide(payload, "codex")["hookSpecificOutput"]["additionalContext"]
-    assert "current.jsonl" in context and session_rules.HEADER in context
-    subagent = {**payload, "hook_event_name": "SubagentStart"}
-    context = session_rules.decide(subagent, "codex")["hookSpecificOutput"]["additionalContext"]
-    assert "current.jsonl" not in context and session_rules.HEADER in context
 
 
 def test_codex_entrypoints_resolve_shared_code_from_another_cwd(project):
@@ -451,7 +416,7 @@ def test_codex_status_reads_unshared_questions_without_a_valid_manifest(project)
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex"])
-def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
+def test_hook_registration_keeps_session_paths_guards_and_integrity(runtime):
     path = PLUGIN / ("hooks/hooks.json" if runtime == "claude" else "codex/hooks.json")
     hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
     for event in ("PreToolUse",):
@@ -462,8 +427,8 @@ def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
         commands = [json.dumps(hook) for entry in hooks[event] for hook in entry["hooks"]]
         assert any("question_integrity.py" in command for command in commands)
         assert all(not hook.get("async", False) for entry in hooks[event] for hook in entry["hooks"])
-    assert set(hooks) == {"SessionStart", "SubagentStart", "PreToolUse", "Stop"}
-    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 5
+    assert set(hooks) == {"SessionStart", "PreToolUse", "Stop"}
+    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 4
     for removed in ("korean_reply.py", "memory_notice.py", "session_title.py"):
         assert removed not in json.dumps(hooks)
         assert not (PLUGIN / "hooks" / removed).exists()
@@ -471,7 +436,6 @@ def test_hook_registration_keeps_only_rules_guard_and_integrity(runtime):
     assert "mission_guard.py" in json.dumps(hooks["PreToolUse"])
     assert "subagent_allow.py" in json.dumps(hooks["PreToolUse"])
     assert "session_rules.py" in json.dumps(hooks["SessionStart"])
-    assert "session_rules.py" in json.dumps(hooks["SubagentStart"])
 
 
 @pytest.mark.parametrize("event,tool_name", [("Stop", ""), ("Stop", "Bash"), ("Stop", "apply_patch")])
@@ -639,8 +603,6 @@ def test_codex_reviewer_small_is_pinned_and_listed_with_routing():
     assert "codex/agents/chef-reviewer-small.toml" in roles
     assert "gpt-6.1-terra" in roles and "GPT-6.1 Terra / high 고정" in roles
     assert "변경 전 본 대비 diff" in roles
-    rules = (PLUGIN / "codex/rules/main-session.md").read_text(encoding="utf-8")
-    assert "chef:reviewer-small" in rules and "chef-*.toml" in rules
     mission = (PLUGIN / "codex/skills/chef-mission/SKILL.md").read_text(encoding="utf-8")
     assert "chef:reviewer-small" in mission and "roles.reviewSmall" in mission and "변경 전 본 대비 diff" in mission
 

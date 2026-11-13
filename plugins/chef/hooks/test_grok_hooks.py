@@ -139,7 +139,7 @@ def test_native_session_context_does_not_inherit_claude_rule_opt_in(project, mon
     output = session_rules.decide(value)
     context = output["hookSpecificOutput"]["additionalContext"]
     assert "C:/sessions/garden.json" in context
-    assert session_rules.HEADER not in context
+    assert context == 'chef-distill 대화 기록 경로 (--transcript): "C:/sessions/garden.json"'
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex"])
@@ -187,36 +187,16 @@ def test_native_manifest_exposes_only_grok_skills_and_agents():
         assert (root / skill / "SKILL.md").is_file()
 
 
-def test_session_start_sources_use_explicit_grok_rule_opt_in(project, monkeypatch, tmp_path):
-    rules = tmp_path / "bundle/rules"
-    rules.mkdir(parents=True)
-    (rules / "general.md").write_text("Shared rule", encoding="utf-8")
-    (rules / "main-session.md").write_text("Main rule", encoding="utf-8")
-    monkeypatch.setenv("GROK_PLUGIN_ROOT", str(rules.parent))
-    monkeypatch.setenv("HAN_GROK_INJECT_RULES", "on")
-    for source in ("new", "load"):
-        output = session_rules.decide({"hookEventName": "session_start", "source": source})
-        assert "Main rule" in output["hookSpecificOutput"]["additionalContext"]
-    output = session_rules.decide({"hookEventName": "subagent_start", "subagentType": "developer"})
-    assert output["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
-    assert "Shared rule" in output["hookSpecificOutput"]["additionalContext"]
-    assert "Main rule" not in output["hookSpecificOutput"]["additionalContext"]
-
-
-def test_grok_shared_value_drops_only_personal_rules(project, monkeypatch, tmp_path):
-    rules = tmp_path / "bundle/rules"
-    rules.mkdir(parents=True)
-    (rules / "general.md").write_text("Shared rule", encoding="utf-8")
-    (rules / "personal-rules.md").write_text("Personal rule", encoding="utf-8")
-    (rules / "main-session.md").write_text("Main rule", encoding="utf-8")
-    monkeypatch.setenv("GROK_PLUGIN_ROOT", str(rules.parent))
-    monkeypatch.setenv("HAN_GROK_INJECT_RULES", "shared")
-    start = session_rules.decide({"hookEventName": "session_start", "source": "new"})["hookSpecificOutput"]["additionalContext"]
-    assert "Shared rule" in start and "Main rule" in start
-    assert "Personal rule" not in start
-    child = session_rules.decide({"hookEventName": "subagent_start", "subagentType": "developer"})["hookSpecificOutput"]["additionalContext"]
-    assert "Shared rule" in child
-    assert "Main rule" not in child and "Personal rule" not in child
-    monkeypatch.setenv("HAN_GROK_INJECT_RULES", "on")
-    full = session_rules.decide({"hookEventName": "session_start", "source": "new"})["hookSpecificOutput"]["additionalContext"]
-    assert "Personal rule" in full
+@pytest.mark.parametrize("source", ["new", "load"])
+@pytest.mark.parametrize("mode", ["on", "shared"])
+def test_grok_session_start_only_delivers_transcript(project, monkeypatch, source, mode):
+    monkeypatch.setenv("HAN_GROK_INJECT_RULES", mode)
+    monkeypatch.setenv("HAN_RULES_DISABLE", "1")
+    value = {"hookEventName": "session_start", "source": source, "transcriptPath": "C:/sessions/garden.json"}
+    output = session_rules.decide(value)
+    assert output["hookSpecificOutput"] == {
+        "hookEventName": "SessionStart",
+        "additionalContext": 'chef-distill 대화 기록 경로 (--transcript): "C:/sessions/garden.json"',
+    }
+    assert session_rules.decide({"hookEventName": "session_start", "source": source}) == {}
+    assert session_rules.decide({**value, "hookEventName": "subagent_start", "subagentType": "developer"}) == {}

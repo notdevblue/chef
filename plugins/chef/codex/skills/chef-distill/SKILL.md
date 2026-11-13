@@ -22,4 +22,4 @@ description: Codex 세션이나 미션의 대화 기록에서 사용자 피드�
 - Codex의 `response_item` 대화 메시지를 읽고 중복 이벤트·도구 결과·추론·주입된 지침을 제외한다.
   Claude 기록도 읽으므로 런타임을 바꿔 이어받은 미션은 경로 전부를 전달한다.
 - 로그는 `HAN_DISTILL_LOG`, 기본 `<CODEX_HOME>/han/distill/log.tsv`이며 `CODEX_HOME`이 없으면 `~/.codex`다.
-- `rules` 후보가 있으면 Claude 사본도 같이 고칠지 따로 묻는다. 메모리는 현재 환경의 저장 규칙대로 쓰며 변경 노트를 요구하면 노트만 남긴다.
+- 메모리는 현재 환경의 저장 규칙대로 쓰며 변경 노트를 요구하면 노트만 남긴다.

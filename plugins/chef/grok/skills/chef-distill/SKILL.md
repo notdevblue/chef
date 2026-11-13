@@ -20,4 +20,4 @@ Grok은 Claude의 `HAN_TRANSCRIPT`를 자동 경로로 사용하지 않는다. e
 `--until`은 extract가 출력한 그 세션의 until이다. 로그는 `HAN_DISTILL_LOG`다. 비어 있으면 Grok은 `GROK_HOME/han/distill/log.tsv`에 기록하며 `GROK_HOME`이 비어 있으면 `~/.grok/han/distill/log.tsv`다.
 처음부터 다시 보려면 `--all`이다.
 
-- 메모리 저장과 개인 규칙의 다른 런타임 사본 반영은 현재 환경의 지침과 사용자 선택을 따른다.
+- 메모리 저장은 현재 환경의 지침을 따른다.

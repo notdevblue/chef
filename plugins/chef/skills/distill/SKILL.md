@@ -19,5 +19,4 @@ description: 세션(또는 미션)에서 사용자가 준 피드백을 대화 �
 - 미션은 `mission_state.py transcripts` 가 준 경로마다 `--transcript` 를 붙인다.
 - 일반 세션은 공통 extract 예시의 `--transcript`를 생략한다. 미션은 경로를 명시한다.
 - 로그는 `HAN_DISTILL_LOG`, 기본 `~/.claude/han/distill/log.tsv`다.
-- `rules` 후보가 있으면 Codex 사본도 같이 고칠지 따로 묻는다.
 - 메모리는 기존 파일이 있으면 고치고 새로 만들면 `MEMORY.md`에 한 줄 색인을 단다. 현재 환경의 더 구체적인 메모리 저장 규칙이 있으면 그 규칙을 따른다.

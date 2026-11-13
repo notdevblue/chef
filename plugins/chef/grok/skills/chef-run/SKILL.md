@@ -6,6 +6,7 @@ description: "Grok Bot과 Grok CLI가 프로젝트 작업을 실행하거나 이
 # chef 실행
 
 Bot과 CLI가 같은 티어별 절차를 쓴다. 상태 조회는 `chef-status`, 어댑터 점검은 `chef-doctor`다.
+리뷰 반복과 제안 처리는 [chef 리뷰 계약](../chef-mission/references/grok-roles.md#chef-리뷰-계약)을 따른다.
 다른 작업 루트의 실행 봇을 깨우는 인계만 `chef-mission-brief`로 한다.
 메인 작업 폴더 `<project>` 또는 슬롯 `<slot-path>`에서 실행 중인 Grok은 그 자리에서 처리하며 SendToAgent로 다시 넘기지 않는다.
 

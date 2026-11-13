@@ -36,8 +36,9 @@ python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록
 
 ## 3. 반영할 곳 정하기
 
-회사·고객·비공개 프로젝트의 지침·요구사항·사례는 `rules`·`plugin` 후보로 올리지 않는다.
+회사·고객·비공개 프로젝트의 지침·요구사항·사례는 공개 `plugin` 후보로 올리지 않는다.
 원문 복사뿐 아니라 요약·익명화한 내용을 공개 플러그인에 반영하는 것도 금지한다.
+개인 행동·코딩 취향도 공개 chef 규칙으로 옮기지 않는다.
 이 항목은 해당 자료를 둘 권한이 있는 비공개 프로젝트의 `guide` 또는 저장소 밖의 개인 로컬 설정·메모리로만
 분류한다. 허용된 위치를 확정할 수 없으면 반영을 보류하고 묻는다. 공개용 일반 규칙으로 바꿔 우회하지 않는다.
 
@@ -45,7 +46,7 @@ python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록
 | --- | --- | --- |
 | `guide` | 프로젝트 가이드·규칙 문서 | 팀 누구에게나 적용될 코드·네이밍·설계 규칙. 프로젝트 문서 규칙대로 쓴다 |
 | `memory` | 개인 메모리 | 이 사용자의 작업 습관·선호, 프로젝트 문서에 둘 성격이 아닌 사실 |
-| `rules` | chef 개인 규칙 | 프로젝트를 가리지 않는 사용자의 작업 원칙 |
+| `rules` | 저장소 밖의 개인 로컬 규칙 | 프로젝트를 가리지 않는 사용자의 작업 원칙. 현재 환경의 실제 경로를 확인한다 |
 | `plugin` | chef 플러그인(CLI·가드·스킬) | 미션·슬롯 절차 자체의 실수 |
 
 코드 규칙은 메모리가 아니라 `guide`가 기본이다. 프로젝트에 가이드 문서가 없으면 `memory`로 낮추고 이유를 적는다.
@@ -59,7 +60,8 @@ python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록
 
 - `guide`: AGENTS.md와 프로젝트 규칙·가이드 폴더
 - `memory`: 현재 환경이 제공한 메모리 색인과 관련 파일
-- `rules`·`plugin`: chef 원본 저장소(아래 "chef 원본 위치")
+- `rules`: 사용자가 지정한 저장소 밖의 개인 로컬 규칙
+- `plugin`: chef 원본 저장소(아래 "chef 원본 위치")
 - 지난 판정: 로그 TSV(`HAN_DISTILL_LOG` 또는 런타임 진입점의 기본 로그 경로)의 `기각` 줄.
   같은 내용이면 다시 올리지 않는다.
 
@@ -77,7 +79,7 @@ python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록
 - 고른 단계(구조·가드·테스트·문서)와 이유
 - 겹침 확인 결과(새 항목 / 있는데 안 지켜짐)
 
-`rules` 후보의 다른 런타임 사본 반영 여부는 현재 런타임 진입점대로 따로 묻는다.
+`rules` 후보의 대상 경로와 다른 런타임 반영 범위는 사용자 선택으로 확정한다. 이미 승인된 범위는 다시 묻지 않는다.
 
 ## 6. 반영과 기록
 
@@ -85,9 +87,8 @@ python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록
 - `guide`: 프로젝트의 파일 변경·문서 규칙대로. 버전 관리가 있으면 작업 단위(CL·브랜치)에 담고 제출은 하지 않는다.
   미션 중이면 그 미션의 작업 단위에 같이 담는다.
 - `memory`: 현재 환경의 메모리 저장 규칙대로 쓴다. 직접 수정 대신 변경 노트를 요구하면 그 위치에 노트만 남긴다.
-- `rules`: 주입 상한이 `CONTEXT_LIMIT`(`<plugin-root>/hooks/session_rules.py`, 10000자)다. 고친 뒤 8000자를 넘으면 추가 대신
-  기존 문장 정리를 먼저 제안한다.
-- `rules`·`plugin`을 고쳤으면 버전을 올리고 플러그인을 갱신해야 새 세션에 들어간다고 사용자에게 알린다.
+- `rules`: 확정된 개인 로컬 경로만 고친다. chef는 개인 규칙을 배포하거나 세션에 주입하지 않는다.
+- `plugin`을 고쳤으면 버전을 올리고 플러그인을 갱신해야 새 세션에 들어간다고 사용자에게 알린다.
   훅이 바뀌면 `/hooks`에서 다시 신뢰해야 한다. 커밋은 사용자가 요청할 때만.
 - 항목마다 로그에 남긴다. `--until`은 extract가 출력한 그 세션의 `until` 값이다.
 
@@ -100,10 +101,7 @@ python "<distill-script>" <distill-runtime> record --session <id> --until <ts> -
 
 ## chef 원본 위치
 
-기준 저장소는 `https://github.com/notdevblue/chef`다. `rules`·`plugin`은 이 저장소의 개발 체크아웃을 고친다.
+기준 저장소는 `https://github.com/notdevblue/chef`다. `plugin`은 이 저장소의 개발 체크아웃을 고친다. `rules`는 저장소 밖의 개인 로컬 경로에만 둔다.
 설치된 `<plugin-root>`의 플러그인 캐시와 마켓플레이스 clone은 설치·갱신용 사본이며 개발 원본으로 쓰지 않는다.
 기존 개발 체크아웃의 Git remote가 기준 저장소를 가리키는지 확인한다. 디렉터리 구조나 manifest가 있다는 이유로
 원본으로 판단하지 않는다. 개발 체크아웃의 경로를 확정할 수 없으면 사용자에게 묻는다.
-
-- Codex 개인 규칙: `plugins/chef/codex/rules/personal-rules.md`(서브에이전트에도 주입), `plugins/chef/codex/rules/main-session.md`(답변·계획·서브에이전트 파견처럼 메인 세션에만 주입)
-- Claude 개인 규칙: `plugins/chef/rules/` 아래 같은 두 파일(서브에이전트 파견 내용이 Codex 쪽과 다르다)

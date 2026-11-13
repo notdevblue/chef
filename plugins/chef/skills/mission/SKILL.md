@@ -17,6 +17,7 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 - `<distill-skill>`: `<plugin-root>/skills/distill/SKILL.md`. 슬롯은 `/chef:slots`, 어댑터는 `/chef:adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Claude 절을 따른다. `${CLAUDE_PLUGIN_ROOT}`를 실제 루트로 쓸 수 있다.
 - 조사·구현·검증 파견은 실제 등록된 Agent 역할과 도구를 쓴다. 검증은 `roles.verify`(없으면 `chef:verifier`), 심층 리뷰는 `roles.review`(없으면 `chef:code-reviewer`), 작은 리뷰는 `roles.reviewSmall`(없으면 `chef:reviewer-small`), 감사는 `roles.audit` 또는 `roles.review`다.
+- 지정된 역할·모델을 사용할 수 없거나 파견이 실패하면 대체하지 않고 근거·미완료 범위를 반환한다.
 - 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium, `chef:verifier`는 Sonnet 5.5 / low, `chef:dev-medium`은 high다. 첫 심층 리뷰·기록 감사·설계 판단은 Opus / high다.
 - 편집·리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고 ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속·검색이 미확인이면 검증 가능으로 보고하지 않는다. 도구 축소의 사용량 효과는 측정 전 미확인이다.
 

@@ -28,7 +28,7 @@ dry-run은 생성 예정 파일이 없어도 등록할 명시 인자를 표시�
 
 - Codex 슬롯 준비는 어댑터의 `runtimes.codex.slots.prepare`를 적용한다. 예시 어댑터 기본값은 동기화·캐시 복사·링크·임포트·빌드다.
   Claude 설정·메모리 junction은 만들지 않는다. 프로젝트 AGENTS.md는 VCS 동기화로 받고,
-  개인 Codex 규칙은 세션 훅으로 주입한다. Unity MCP는 Codex 설정에서 슬롯의 projectPath에 붙는지 확인한다.
+  Unity MCP는 Codex 설정에서 슬롯의 projectPath에 붙는지 확인한다.
   프로젝트 로컬 `.codex/config.toml`·개인 AGENTS.md가 필요하면 어댑터 준비 단계에 명시한다.
   매번 실행 전에 갱신해야 하는 로컬 지침은 `beforeRun` 단계에 둔다.
   새 폴더 신뢰 및 훅 신뢰 확인은 사용자가 한다. 전역 Codex 설정은 수정하지 않는다.

@@ -1,6 +1,6 @@
 # chef — 개인 Claude Code · Codex CLI · Grok CLI 플러그인
 
-개인 규칙, 파견용 에이전트, 미션 오케스트레이션을 한 플러그인으로 묶는다. 프로젝트 저장소에는 아무것도 올리지 않는다.
+파견용 에이전트와 미션 오케스트레이션을 한 플러그인으로 묶는다. 프로젝트 저장소에는 아무것도 올리지 않는다.
 Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 실행 봇에 작업을 넘길 수 있다. Claude와 Codex는 선택 경로다.
 
 개발·설치·업데이트의 기준은 [공개 저장소](https://github.com/notdevblue/chef)다.
@@ -11,7 +11,7 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 | 구성 | 위치 | 하는 일 |
 | --- | --- | --- |
 | 공통 스킬 절차 | `plugins/chef/shared/skills/` | 다섯 스킬의 단계·승인·검증·완료 정본. 런타임 진입점은 도구·역할·경로 차이만 둠 |
-| 개인 규칙 | `plugins/chef/rules/` | 플러그인 설정 `inject_rules`가 `on`이거나 `shared`일 때만(`shared`는 `personal-rules.md`를 뺀 나머지), 세션 시작·재개·압축 때 `SessionStart` 훅이, 서브에이전트 시작 때 `SubagentStart` 훅이 컨텍스트에 넣는다(예전 `~/.claude/CLAUDE.md`) |
+| 세션 경로 전달 | `plugins/chef/hooks/session_rules.py` | 대화 기록 경로를 전달하고 Claude의 어댑터 레지스트리 설정을 도구 환경에 넘긴다 |
 | 에이전트 | `plugins/chef/agents/` | `chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:code-reviewer`, `chef:reviewer-small` |
 | `/chef:mission` | `plugins/chef/skills/mission/` | 컨텐츠 확인 → PoC → 구현 → 검토, 사람 확인 A·B·C. 상태 파일은 `scripts/mission_state.py`로만 쓰고, 끝에 기록 감사 |
 | `/chef:distill` | `plugins/chef/skills/distill/` | 대화 기록에서 사용자 피드백을 뽑아 가이드·메모리·개인 규칙·플러그인 반영 후보로 분류, 고른 것만 반영. 미션은 확인 C 직전에 자동 |
@@ -19,13 +19,13 @@ Grok Bot은 바깥 코디네이터로 상태를 읽고, 메인 또는 슬롯의 
 | `/chef:slots` | `plugins/chef/skills/slots/` | 병렬 미션용 슬롯 워크스페이스 만들기·갱신·실행·삭제 |
 | `/chef:doctor` | `plugins/chef/skills/doctor/` | 읽기 전용 점검: python 스텁, 레지스트리·어댑터·local.json, guard-cases, ACTIVE 끊김 의심(닫기는 제안만), Unity 경로, 저장소·설치본 버전. Codex는 `chef-doctor` |
 | Grok 바깥 층 | `grok/` | 등록하지 않는 초안. 읽기 전용 셸 호출 목록. 실행 절차는 `plugins/chef/grok/` |
-| Grok | `plugins/chef/grok/` | 등록 스킬 여덟 개와 native 역할 여섯 개. 메인·슬롯 CLI가 역할별 하위 에이전트를 조율한다. SessionStart `new`·`load`와 미션 가드는 공유 훅 규칙을 따른다. `chef-watch`·`chef-handoff`는 등록하지 않는 안내 |
+| Grok | `plugins/chef/grok/` | 등록 스킬 여덟 개와 native 역할 여섯 개. 메인·슬롯 CLI가 역할별 하위 에이전트를 조율한다. SessionStart `new`·`load`의 대화 기록 경로 전달과 미션 가드는 공유 훅을 따른다. `chef-watch`·`chef-handoff`는 등록하지 않는 안내 |
 | 미션 가드 | `plugins/chef/hooks/mission_guard.py` | 미션 중 submit 등 금지 명령 차단(걸림줄) |
 | 서브에이전트 허용 목록 | `plugins/chef/hooks/subagent_allow.py` | 어댑터 `agents.allow`(이름 glob 목록)에 맞지 않는 서브에이전트 파견을 거부. 키가 없으면 제한 없음, 미션 진행과 무관 |
 | 질문 무결성 | `plugins/chef/hooks/question_integrity.py` | 미션 진행·완료·공유 전에 질문 정본·생성본 검사. 참여 세션의 답변 종료 전에도 전체 검사 |
 | 어댑터 | `adapters/<이름>/` | 프로젝트별 값(`adapter.json`)과 절차(`adapter.md`) |
 
-Claude·Codex 훅은 규칙 주입·미션 가드·서브에이전트 허용 목록·질문 무결성 4종이다. Grok은 SessionStart `new`·`load` 규칙 전달, 미션 가드, 서브에이전트 허용 목록을 지원한다. 세션 제목·메모리 안내·한국어 답변 차단 훅은 제공하지 않는다.
+Claude·Codex 훅은 세션 경로 전달·미션 가드·서브에이전트 허용 목록·질문 무결성 4종이다. Grok은 SessionStart `new`·`load` 경로 전달과 같은 가드를 지원한다. 개인 행동·코딩 규칙은 배포하거나 상시 주입하지 않는다. 사람용 문서 작성 안내는 미션의 문서 작성 단계에서 읽고 작성자·검토자 브리프에 실제 경로를 넘긴다. 세션 제목·메모리 안내·한국어 답변 차단 훅은 제공하지 않는다.
 슬롯 실행에서 지정하는 세션 이름은 유지한다.
 
 미션의 `confirm-*.md`·`ask-*.md`는 이번 변경·남은 질문·최신 승인 대상·승인 범위를 보여 주고, 개정할 때 현재 상태로 고쳐 쓴다.
@@ -53,7 +53,7 @@ Claude·Codex 훅은 규칙 주입·미션 가드·서브에이전트 허용 목
 ## Codex CLI에 설치
 
 Claude용과 같은 저장소에서 설치하며, Codex용 진입점은 `plugins/chef/.codex-plugin/plugin.json`이다.
-스킬·역할·개인 규칙은 `plugins/chef/codex/`, 가드·슬롯 구현은 Claude용과 공유한다.
+스킬·역할 진입점은 `plugins/chef/codex/`, 가드·슬롯 구현은 Claude용과 공유한다.
 CLI 0.162.1에서 별도 임시 사용자 폴더로 마켓플레이스 등록·설치를 검증했다.
 
 PowerShell에서 실행한다.
@@ -63,15 +63,10 @@ codex plugin marketplace add <repo>
 codex plugin add chef@chef-codex
 
 $env:HAN_ADAPTERS_DIR = '<repo>/adapters'
-$env:HAN_CODEX_INJECT_RULES = 'on'
 codex -C <project>
 ```
 
-`HAN_CODEX_INJECT_RULES`는 개인 규칙을 쓸 때만 설정한다. 기본값은 꺼짐이고 `HAN_RULES_DISABLE=1`이 우선한다.
-값 `on`(`true`·`1`·`yes`)은 `codex/rules/`의 규칙을 모두 넣고, `shared`는 `personal-rules.md`만 빼고 문서 규칙·메인 세션 규칙·사람용 문서 자료 안내를 넣는다.
-Grok의 `HAN_GROK_INJECT_RULES`도 같은 값을 쓴다.
-셸에서 지정한 환경변수 값은 Codex를 시작할 때 전달되어야 한다. SessionStart 훅이 부모 셸 환경을 바꾸지는 않는다.
-`HAN_ADAPTERS_DIR`은 이 셸 값이 우선한다. 지속 설정은 새 config key 없이 기존 Codex 설정의
+`HAN_ADAPTERS_DIR`은 Codex를 시작한 셸 값이 우선한다. SessionStart 훅은 부모 셸 환경을 바꾸지 않는다. 지속 설정은 새 config key 없이 기존 Codex 설정의
 `[shell_environment_policy.set]`에 둘 수 있다. Codex가 `CODEX_HOME`을 설정했으면 `<CODEX_HOME>/config.toml`, 아니면 `~/.codex/config.toml`이다.
 
 ```toml
@@ -190,7 +185,6 @@ python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider
 필요 조건: Windows, Windows Terminal(`wt.exe`), Python 3, Perforce CLI(`p4`), Unity(슬롯 임포트용),
 어댑터가 부르는 프로젝트 도구. 예시의 `Tool/VcsWrapper` 등은 가상의 이름이며 이 플러그인에 포함되지 않는다.
 `<repo>`는 이 저장소를 받은 폴더이고 `<project>`는 작업할 프로젝트 폴더다.
-개인 규칙(`inject_rules`)은 작성자 취향이라 보통 켜지 않는다. 취향 규칙 없이 문서 규칙·메인 세션 규칙·사람용 문서 자료 안내만 받으려면 `shared`를 쓴다.
 
 1. 이 저장소를 받는다(예: `D:/Work/chef`).
 2. Python 3이 PATH에 있는지 본다: `python <repo>/plugins/chef/skills/adapter-init/scripts/check_guard.py --doctor`.
@@ -199,12 +193,11 @@ python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider
    claude plugin marketplace add <repo>
    claude plugin install chef@chef --scope user --config adapters_dir=<repo>/adapters
    ```
-   개인 규칙을 쓰려면 `--config inject_rules=on`을, `personal-rules.md`만 빼려면 `--config inject_rules=shared`를 더한다.
    설치본은 플러그인 캐시에서 돌아서 플러그인 설정 `adapters_dir`(이 저장소의 `adapters` 폴더 경로)이 없으면
    가드가 어댑터를 못 찾는다. `install`이 이 값을 묻지 않을 수 있으니 설치할 때 같이 주거나 설치 뒤에 확인·저장한다.
    ```
    claude plugin configure chef@chef --json
-   echo '{"adapters_dir": "<repo>/adapters", "inject_rules": "on"}' | claude plugin configure chef@chef --values-stdin
+   echo '{"adapters_dir": "<repo>/adapters"}' | claude plugin configure chef@chef --values-stdin
    ```
    `configure --json`은 옵션과 아직 안 정한 것을 보여 주고, `--values-stdin`은 stdin의 JSON 값을 저장한다.
    `/plugin` 화면의 설정에서 넣어도 된다. 저장된 값은 `~/.claude/settings.json`의
@@ -220,10 +213,8 @@ python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider
    - `adapters/projects.json` — `adapters/projects.example.json`을 복사해 `adapter`를 내 어댑터 이름으로, `roots`를 내 프로젝트 폴더와 슬롯 폴더 glob으로 고친다.
    - `adapters/<내 프로젝트>/local.json` — `local.example.json`을 복사해 `slots.root`·`slots.client`·`slots.mainClient`·`vars.unityExe`·`vars.main`을
      내 경로와 작업 공간 이름(`ws-<이름>_{name}` 형태)으로 고친다.
-6. 기존 전역 `~/.claude/CLAUDE.md`·`~/.claude/agents/`에 같은 내용이 있으면 중복 로드되니 지우거나,
-   `inject_rules`를 비우거나 환경변수 `HAN_RULES_DISABLE=1`로 규칙 주입을 끈다(`HAN_RULES_DISABLE`이 `inject_rules`보다 우선).
-7. 슬롯을 쓰면 새 세션에서 `/chef:slots`로 `create`한다.
-8. 새 세션에서 확인: `/chef:mission`·`/chef:slots status`가 보이고 동작하는지, 에이전트 목록에 `chef:researcher`가 있는지, 규칙을 켰다면 규칙이 들어왔는지.
+6. 슬롯을 쓰면 새 세션에서 `/chef:slots`로 `create`한다.
+7. 새 세션에서 확인: `/chef:mission`·`/chef:slots status`가 보이고 동작하는지, 에이전트 목록에 `chef:researcher`가 있는지.
 
 업데이트는 저장소를 갱신하고 `claude plugin marketplace update chef`와 `/reload-plugins`를 한다.
 Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 경로·manifest를 push 커밋과 대조한다. 이전 이름(`han`)의 등록과 이 플러그인 전용 skills 경로·링크는 백업한 뒤 등록 해제하고, 다른 스킬 설정은 보존한다. 실행 중인 Grok 세션은 다시 연다.

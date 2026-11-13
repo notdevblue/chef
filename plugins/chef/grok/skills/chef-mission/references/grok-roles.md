@@ -30,7 +30,7 @@ native manifest는 `<plugin-root>/grok/agents` 폴더를 등록한다. 각 `.md`
 - audit: 누락이면 review 매핑을 따르고, 명시된 `chef:reviewer`, `chef:code-reviewer`, `chef_code_reviewer`, `code-reviewer`도 `chef:code-reviewer`다.
 
 다른 사용자 정의 역할은 실제 native 등록·지시·권한·모델·effort 계약을 읽고 확인한다.
-지원되지 않는 명시적 역할을 표의 기본값이나 `general-purpose`로 조용히 바꾸지 않는다. 필요한 역할을 사용할 수 없으면 그 단계를 미확인으로 반환한다.
+지원되지 않는 명시적 역할을 표의 기본값이나 `general-purpose`로 조용히 바꾸지 않는다. 필요한 역할을 사용할 수 없거나 파견이 실패하면 근거·미완료 범위와 함께 그 단계를 미확인으로 반환한다.
 프로젝트의 reviewLoopSkill은 실제 설치 파일을 읽되, 그 안의 Claude 모델·에이전트 이름·"일반/범용 에이전트" 지시·파견·중첩 실행은 이 Grok 매핑과 깊이 제한으로 대체한다. 리뷰 역할은 위 review 매핑, 그 밖의 용도는 해당 역할 매핑을 쓴다.
 
 ## 역할 정책
@@ -66,6 +66,10 @@ Claude의 `Task`·`TaskStop`·`SendMessage`, Codex의 `spawn_agent`·`wait_agent
 chef는 Grok의 기본 깊이 1에서 동작하도록 루트만 spawn한다. 런타임 설정이 더 깊은 파견을 허용해도 여섯 역할 모두 자식을 띄우지 않는다.
 분할이 필요하면 파일 경계·계약·선행 조건·검증을 담은 분할 브리프를 부모에게 반환하고, 부모가 새 단위를 파견한다.
 부모는 전체 파일 소유·각 결과·남은 범위를 모아 판정한다. 일부 반환·실패·턴 상한을 전체 완료나 새 승인 필요로 바꾸지 않는다.
+
+## chef 리뷰 계약
+
+chef 실행은 기본 `implement` 스킬의 제안·nits까지 모두 수정하는 반복 절차를 사용하지 않는다. 이 문서와 공통 미션의 finding·제안 분리, 리뷰 상한·멈춤 조건을 적용한다. 이를 위해 기본 스킬을 강제로 활성화하거나 런타임의 vendor 파일을 고치지 않는다.
 
 ## 적용 증거와 독립성
 

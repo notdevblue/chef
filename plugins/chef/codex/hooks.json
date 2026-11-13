@@ -6,11 +6,6 @@
         "hooks": [{ "type": "command", "command": "python \"${PLUGIN_ROOT}/codex/session_rules.py\"", "timeout": 10 }]
       }
     ],
-    "SubagentStart": [
-      {
-        "hooks": [{ "type": "command", "command": "python \"${PLUGIN_ROOT}/codex/session_rules.py\"", "timeout": 10 }]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|apply_patch|ApplyPatch",

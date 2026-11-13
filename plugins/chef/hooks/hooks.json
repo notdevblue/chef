@@ -1,21 +1,9 @@
 {
-  "description": "세션·서브에이전트 규칙과 대화 기록 경로 전달, 미션 명령·파일 쓰기 가드, 서브에이전트 허용 목록, 질문 기록 무결성 검사",
+  "description": "세션 대화 기록·어댑터 경로 전달, 미션 명령·파일 쓰기 가드, 서브에이전트 허용 목록, 질문 기록 무결성 검사",
   "hooks": {
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact|fork|new|load",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/session_rules.py"],
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
         "hooks": [
           {
             "type": "command",
