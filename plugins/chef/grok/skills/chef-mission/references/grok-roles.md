@@ -26,7 +26,7 @@ native manifest는 `<plugin-root>/grok/agents` 폴더를 등록한다. 각 `.md`
 - implement: 누락 또는 `chef:dev-medium`, `chef_developer_medium` → `chef:dev-medium`.
 - verify: 누락 또는 `chef:verifier`, `chef_verifier` → `chef:verifier`.
 - review: 누락 또는 `code-reviewer`, `chef:code-reviewer`, `chef_code_reviewer`, `chef:reviewer` → `chef:code-reviewer`.
-- reviewSmall(좁은 재리뷰): 누락 또는 `chef:reviewer-small`, `chef_reviewer_small` → `chef:reviewer-small`.
+- reviewSmall(좁은 재리뷰, 뜻·승인 범위가 그대로인 작은 문서 변경의 첫 리뷰): 누락 또는 `chef:reviewer-small`, `chef_reviewer_small` → `chef:reviewer-small`.
 - audit: 누락이면 review 매핑을 따르고, 명시된 `chef:reviewer`, `chef:code-reviewer`, `chef_code_reviewer`, `code-reviewer`도 `chef:code-reviewer`다.
 
 다른 사용자 정의 역할은 실제 native 등록·지시·권한·모델·effort 계약을 읽고 확인한다.

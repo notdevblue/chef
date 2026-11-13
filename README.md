@@ -66,6 +66,15 @@ $env:HAN_ADAPTERS_DIR = '<repo>/adapters'
 codex -C <project>
 ```
 
+기존 설치를 갱신할 때는 마켓플레이스를 먼저 갱신한 뒤 설치한다.
+
+```powershell
+codex plugin marketplace upgrade chef-codex
+codex plugin add chef@chef-codex
+```
+
+`add`만 실행하면 로컬 마켓플레이스에 남은 구버전이 다시 설치될 수 있다.
+
 `HAN_ADAPTERS_DIR`은 Codex를 시작한 셸 값이 우선한다. SessionStart 훅은 부모 셸 환경을 바꾸지 않는다. 지속 설정은 새 config key 없이 기존 Codex 설정의
 `[shell_environment_policy.set]`에 둘 수 있다. Codex가 `CODEX_HOME`을 설정했으면 `<CODEX_HOME>/config.toml`, 아니면 `~/.codex/config.toml`이다.
 
@@ -250,10 +259,13 @@ Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 �
   플러그인 업데이트(또는 `/reload-plugins`)로 반영한다. 버전을 올리면 확실히 갱신된다(`plugin.json`·`marketplace.json`).
   Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect` 결과로 반영을 확인한다.
 - 가드 테스트: `python -m pytest plugins/chef/hooks -q -p no:cacheprovider`
+- 공통 미션·검증 테스트: `python -m pytest plugins/chef/skills/mission/scripts -q -p no:cacheprovider`
+- doctor 테스트: `python -m pytest plugins/chef/skills/doctor/scripts -q -p no:cacheprovider`
 - 어댑터 회귀: `python plugins/chef/skills/adapter-init/scripts/check_guard.py <어댑터 이름>`
 - 슬롯 테스트: `python -m pytest plugins/chef/skills/slots/scripts -q -p no:cacheprovider`
 - Codex 런타임 테스트: `python -m pytest plugins/chef/codex/test_codex.py -q -p no:cacheprovider`
 - Grok 조회 테스트: `python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider`
+- Claude 훅은 공통 가드 테스트, Claude 미션·검증은 공통 미션 테스트에서 함께 검증한다. Codex·Grok 전용 테스트만 실행한 결과를 세 런타임 전체 검증으로 보고하지 않는다.
 - 공통 스킬 절차: `plugins/chef/shared/skills/*.md`가 단일 정본이며 Claude·Codex·Grok의 `SKILL.md`는 공통 문서를 읽고 런타임 실행 차이만 적용한다. 공통 참조·양식은 `plugins/chef/skills/mission/references`에 한 벌만 둔다. Codex 기존 참조 경로는 정본 링크 포인터다. `python plugins/chef/codex/sync_shared.py`로 진입점·정본·포인터를 검사하고, `--write`는 참조 포인터를 갱신한다.
   검사는 런타임 참조 폴더의 불필요한 사본과 공백을 정규화한 120자 이상 비코드 문단의 재복제를 잡는다. 의역이나 짧은 구절의 의미 중복까지 판정하지 않는다.
 - 설치·어댑터 점검: `python plugins/chef/skills/doctor/scripts/doctor.py`

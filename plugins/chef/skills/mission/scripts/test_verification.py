@@ -353,11 +353,11 @@ def test_readiness_runs_before_receipt_reuse_and_only_substitutes_project(missio
     first = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
     second = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
     assert first[1]["status"] == "pass" and second[2] is True and first[0] == second[0]
-    assert (root / "ready-runs").read_text() == "xx" and (root / "runs").read_text() == "x"
+    assert (root / "ready-runs").read_text(encoding="utf-8") == "xx" and (root / "runs").read_text(encoding="utf-8") == "x"
     settings["readiness"]["pytest-pass"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(3)"]
     failed = verification.run(root, folder, "M1", plan, allow_command, settings=settings)
     assert failed[1]["failure"]["category"] == "readiness_exit" and failed[0] != first[0]
-    assert (root / "runs").read_text() == "x"
+    assert (root / "runs").read_text(encoding="utf-8") == "x"
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -378,7 +378,7 @@ def test_verification_child_utf8_defaults_preserve_parent_and_explicit_values(mi
     expected = {"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     if explicit:
         expected = keys
-    assert json.loads((root / "child.json").read_text()) == expected
+    assert json.loads((root / "child.json").read_text(encoding="utf-8")) == expected
 
 
 def test_reference_bundle_preflight_and_receipt_reuse_require_current_sources(mission):
@@ -398,7 +398,7 @@ def test_reference_bundle_preflight_and_receipt_reuse_require_current_sources(mi
                                            expected_sha256=verification.file_hash(root / "references.json"))
     second = verification.run(root, folder, "M1", plan, allow_command)
     assert second[1]["status"] == "pass" and second[0] != first[0]
-    assert (root / "runs").read_text() == "xx"
+    assert (root / "runs").read_text(encoding="utf-8") == "xx"
 
 
 def test_reference_bundle_recapture_metadata_invalidates_receipt_and_stage_identity(mission):
@@ -476,7 +476,7 @@ def test_policy_and_readiness_tools_invalidate_receipt_and_stage_reuse(mission, 
     assert second[1]["executionCounts"] == {"executed": 1, "reused": 0}
     assert second[1]["runner"] != first[1]["runner"]
     assert second[1]["steps"][0]["key"] != first[1]["steps"][0]["key"]
-    assert (root / "runs").read_text() == "xx"
+    assert (root / "runs").read_text(encoding="utf-8") == "xx"
 
 
 def test_machine_observation_does_not_invalidate_receipt_or_run_readiness_at_review(mission, monkeypatch):
@@ -543,7 +543,7 @@ def mission(tmp_path, monkeypatch):
 def verify(mission):
     root, folder, _ = mission
     code = mission_state.main(["verify", "M1", "--plan", str(root / "plan.json")])
-    path = Path(json.loads((folder / "verification/M1.latest.json").read_text())["receipt"])
+    path = Path(json.loads((folder / "verification/M1.latest.json").read_text(encoding="utf-8"))["receipt"])
     return code, path
 
 
@@ -555,39 +555,39 @@ def review(mission, receipt, status="clean"):
         "review", "M1", "--receipt", str(receipt), "--evidence", str(evidence),
         "--reviewer", "fresh-reviewer", "--kind", "unit", "--status", status,
     ]) == 0
-    return Path(json.loads((folder / "verification/M1.review.latest.json").read_text())["review"])
+    return Path(json.loads((folder / "verification/M1.review.latest.json").read_text(encoding="utf-8"))["review"])
 
 
 def test_review_counts_match_status_and_preserve_unknown_legacy_values(mission):
     root, folder, _ = mission
     _, receipt = verify(mission)
     previous = review(mission, receipt)
-    assert json.loads(previous.read_text())['findingsCount'] == -1
+    assert json.loads(previous.read_text(encoding="utf-8"))['findingsCount'] == -1
     args = ['review', 'M1', '--receipt', str(receipt), '--evidence', str(root / 'review.md'),
             '--reviewer', 'fresh-reviewer', '--kind', 'unit', '--status', 'clean',
             '--findings-count', '0', '--fixed-count', '2']
     assert mission_state.main(args) == 0
-    path = Path(json.loads((folder / 'verification/M1.review.latest.json').read_text())['review'])
-    record = json.loads(path.read_text())
+    path = Path(json.loads((folder / 'verification/M1.review.latest.json').read_text(encoding="utf-8"))['review'])
+    record = json.loads(path.read_text(encoding="utf-8"))
     assert record['findingsCount'] == 0 and record['fixedCount'] == 2 and record['recordedAt']
     args[args.index('--findings-count') + 1] = '1'
     assert mission_state.main(args) == 1
-    assert json.loads((folder / 'verification/M1.review.latest.json').read_text())['review'] == str(path)
+    assert json.loads((folder / 'verification/M1.review.latest.json').read_text(encoding="utf-8"))['review'] == str(path)
 
 
 def test_unchanged_verification_is_reused_and_source_or_environment_change_runs_again(mission):
     root, _, plan = mission
     first_code, first = verify(mission)
-    assert first_code == 0 and (root / "runs").read_text() == "x"
+    assert first_code == 0 and (root / "runs").read_text(encoding="utf-8") == "x"
     assert verify(mission) == (0, first)
-    assert (root / "runs").read_text() == "x"
+    assert (root / "runs").read_text(encoding="utf-8") == "x"
     (root / "src.py").write_text("value = 2\n")
     assert verify(mission)[1] != first
-    assert (root / "runs").read_text() == "xx"
+    assert (root / "runs").read_text(encoding="utf-8") == "xx"
     plan["environment"]["target"] = "other"
     (root / "plan.json").write_text(json.dumps(plan))
     verify(mission)
-    assert (root / "runs").read_text() == "xxx"
+    assert (root / "runs").read_text(encoding="utf-8") == "xxx"
 
 
 def test_complete_requires_clean_review_and_current_verification_and_is_idempotent(mission):
@@ -601,11 +601,11 @@ def test_complete_requires_clean_review_and_current_verification_and_is_idempote
     clean = review(mission, receipt)
     command[command.index(str(findings))] = str(clean)
     assert mission_state.main(command) == 0
-    lines = (folder / "ledger.tsv").read_text().splitlines()
+    lines = (folder / "ledger.tsv").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2 and "\tpass\tpytest-pass\t" in lines[-1]
-    assert (folder / "units.tsv").read_text().rstrip().endswith("\tdone")
+    assert (folder / "units.tsv").read_text(encoding="utf-8").rstrip().endswith("\tdone")
     assert mission_state.main(command) == 0
-    assert (folder / "ledger.tsv").read_text().splitlines() == lines
+    assert (folder / "ledger.tsv").read_text(encoding="utf-8").splitlines() == lines
     (root / "src.py").write_text("value = 9\n")
     assert mission_state.main(command) == 1
 
@@ -629,7 +629,7 @@ def test_failure_is_not_cached_and_guard_rejection_never_runs_command(mission):
     plan["commands"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(7)"]
     (root / "plan.json").write_text(json.dumps(plan))
     first_code, first = verify(mission)
-    assert first_code == 1 and json.loads(first.read_text())["exitCodes"] == [7]
+    assert first_code == 1 and json.loads(first.read_text(encoding="utf-8"))["exitCodes"] == [7]
     assert verify(mission)[1] != first
     plan["commands"][0]["argv"] = [sys.executable, "-c", "from pathlib import Path; Path('runs').write_text('BAD')", "submit"]
     (root / "plan.json").write_text(json.dumps(plan))
@@ -658,7 +658,7 @@ def test_complete_rejects_superseded_clean_review(mission, runtime, latest_statu
         assert all((folder / name).read_bytes() == data for name, data in before.items())
         command[command.index("--review") + 1] = str(review(mission, receipt))
     assert mission_state.main(command, runtime=runtime) == 0
-    assert (folder / "units.tsv").read_text().rstrip().endswith("\tdone")
+    assert (folder / "units.tsv").read_text(encoding="utf-8").rstrip().endswith("\tdone")
 
 
 def test_complete_requires_latest_review_pointer(mission):
@@ -694,7 +694,7 @@ def test_editmode_rejects_zero_tests_wrong_project_and_stale_result(mission):
 def test_changed_during_run_and_tampered_results_are_rejected(mission):
     root, folder, plan = mission
     _, receipt = verify(mission)
-    data = json.loads(receipt.read_text())
+    data = json.loads(receipt.read_text(encoding="utf-8"))
     Path(data["log"]).write_text("changed")
     with pytest.raises(verification.VerificationError, match="로그"):
         verification.validate_receipt(str(root), str(folder), "M1", data)
@@ -712,7 +712,7 @@ def test_review_scope_reports_additions_and_deletions(mission):
     (root / "plan.json").write_text(json.dumps(plan))
     _, receipt = verify(mission)
     review(mission, receipt)
-    plan["unitBrief"] = json.loads(receipt.read_text())["plan"]["unitBrief"]
+    plan["unitBrief"] = json.loads(receipt.read_text(encoding="utf-8"))["plan"]["unitBrief"]
     assert verification.review_scope(str(root), str(folder), "M1", plan) == []
     (source / "b.py").write_text("b")
     (source / "a.py").unlink()
@@ -737,8 +737,8 @@ def test_context_is_bounded_and_keeps_history_outside_prompt(mission, capsys):
 def test_codex_entrypoint_uses_same_receipts(mission):
     root, _, _ = mission
     assert mission_state.main(["verify", "M1", "--plan", str(root / "plan.json")], runtime="codex") == 0
-    assert (root / "runs").read_text() == "x"
-    assert verify(mission)[0] == 0 and (root / "runs").read_text() == "x"
+    assert (root / "runs").read_text(encoding="utf-8") == "x"
+    assert verify(mission)[0] == 0 and (root / "runs").read_text(encoding="utf-8") == "x"
 
 
 def test_inputs_outside_project_are_rejected(mission):
@@ -817,7 +817,7 @@ def test_later_argv_fix_reuses_only_valid_prefix_and_original_result(mission):
     save_plan(mission)
     code, final = verify(mission)
     record = receipt_data(final)
-    assert code == 0 and (root / "build_runs").read_text() == "x"
+    assert code == 0 and (root / "build_runs").read_text(encoding="utf-8") == "x"
     assert record["executionCounts"] == {"executed": 1, "reused": 1}
     assert record["steps"][0]["sourceReceipt"] == str(first)
     verification.validate_receipt(root, folder, "M1", record)
@@ -853,7 +853,7 @@ def test_reuse_invalidates_changed_evidence_and_dependencies(mission, monkeypatc
     plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
     save_plan(mission)
     assert verify(mission)[0] == 0
-    assert (root / "build_runs").read_text() == "xx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xx"
 
 
 def runtime_key_in_new_process(mission, cwd, extra):
@@ -884,7 +884,7 @@ def test_undeclared_environment_change_still_reuses_receipt_and_steps(mission, m
     monkeypatch.setenv("CLAUDE_SESSION_ID", "other-session")
     monkeypatch.setenv("FICTIONAL_CHECK_MODE", "changed")
     assert verify(mission) == (0, first)
-    assert (root / "runs").read_text() == "x"
+    assert (root / "runs").read_text(encoding="utf-8") == "x"
     clean = review(mission, first)
     assert mission_state.main(["complete", "M1", "--receipt", str(first), "--review", str(clean),
                                "--done-evidence", "checked"]) == 0
@@ -896,7 +896,7 @@ def test_undeclared_environment_change_still_reuses_receipt_and_steps(mission, m
     monkeypatch.setenv("FICTIONAL_CHECK_MODE", "changed-again")
     record = receipt_data(verify(mission)[1])
     assert [step["status"] for step in record["steps"]] == ["reused", "failed"]
-    assert (root / "build_runs").read_text() == "x"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "x"
 
 
 def test_declared_environment_value_is_part_of_runtime_identity(mission, monkeypatch):
@@ -910,10 +910,10 @@ def test_declared_environment_value_is_part_of_runtime_identity(mission, monkeyp
     with pytest.raises(verification.VerificationError, match="런타임"):
         verification.validate_receipt(root, mission[1], "M1", receipt_data(first))
     second = verify(mission)[1]
-    assert second != first and (root / "runs").read_text() == "xx"
+    assert second != first and (root / "runs").read_text(encoding="utf-8") == "xx"
     assert verify(mission) == (0, second)
     monkeypatch.setenv("FICTIONAL_CHECK_MODE", "lenient")
-    assert verify(mission)[1] != second and (root / "runs").read_text() == "xxx"
+    assert verify(mission)[1] != second and (root / "runs").read_text(encoding="utf-8") == "xxx"
 
 
 def test_declared_environment_value_invalidates_reusable_step(mission, monkeypatch):
@@ -925,7 +925,7 @@ def test_declared_environment_value_invalidates_reusable_step(mission, monkeypat
     verify(mission)
     monkeypatch.setenv("FICTIONAL_CHECK_MODE", "lenient")
     verify(mission)
-    assert (root / "build_runs").read_text() == "xx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xx"
 
 
 @pytest.mark.parametrize("value", ["PATH", ["A", "A"], [""], ["A=B"], [1], ["A\nB"]])
@@ -952,7 +952,7 @@ def test_receipt_with_old_runtime_fingerprint_is_not_trusted_and_reruns(mission)
         "--reviewer", "fresh-reviewer", "--kind", "unit", "--status", "clean",
     ]) == 1
     second = verify(mission)[1]
-    assert second != receipt and (root / "runs").read_text() == "xx"
+    assert second != receipt and (root / "runs").read_text(encoding="utf-8") == "xx"
     assert receipt_data(second)["runnerVersion"] == verification.RUNNER_VERSION
 
 
@@ -963,13 +963,13 @@ def test_force_and_default_nonreusable_steps_execute_again(mission):
     save_plan(mission)
     verify(mission)
     verify(mission)
-    assert (root / "build_runs").read_text() == "xx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xx"
     plan["commands"][0]["reusable"] = True
     plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
     save_plan(mission)
     assert verify(mission)[0] == 0
     assert mission_state.main(["verify", "M1", "--plan", str(root / "plan.json"), "--force"]) == 0
-    assert (root / "build_runs").read_text() == "xxxx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xxxx"
 
 
 def test_reexecuted_earlier_step_forces_later_reusable_step_to_execute(mission):
@@ -982,7 +982,7 @@ def test_reexecuted_earlier_step_forces_later_reusable_step_to_execute(mission):
     save_plan(mission)
     verify(mission)
     verify(mission)
-    assert (root / "runs").read_text() == "xxxx"
+    assert (root / "runs").read_text(encoding="utf-8") == "xxxx"
 
 
 def test_script_after_interpreter_flags_is_part_of_reuse_identity(mission):
@@ -994,7 +994,7 @@ def test_script_after_interpreter_flags_is_part_of_reuse_identity(mission):
     script = root / "build.py"
     script.write_text(script.read_text(encoding="utf-8") + "\nvalue=3\n", encoding="utf-8")
     verify(mission)
-    assert (root / "build_runs").read_text() == "xx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xx"
 
 
 @pytest.mark.parametrize("later_exit", [False, True])
@@ -1024,7 +1024,7 @@ def test_failed_run_with_mutated_input_cannot_reuse_steps_after_source_restorati
     record = receipt_data(second)
     assert code == 1 and record["executionCounts"]["reused"] == 0
     assert record["failure"]["category"] == "input_changed"
-    assert (root / "artifact").read_text() == "changed"
+    assert (root / "artifact").read_text(encoding="utf-8") == "changed"
     with pytest.raises(verification.VerificationError):
         verification.validate_receipt(root, folder, "M1", record)
 
@@ -1043,7 +1043,7 @@ def test_later_failing_command_mutation_invalidates_earlier_valid_prefix(mission
     plan["commands"][1]["argv"] = [sys.executable, "-c", "pass"]
     save_plan(mission)
     assert verify(mission)[0] == 0
-    assert (root / "build_runs").read_text() == "xx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xx"
 
 
 def test_failed_receipt_without_global_integrity_proof_cannot_supply_prefix(mission):
@@ -1054,7 +1054,7 @@ def test_failed_receipt_without_global_integrity_proof_cannot_supply_prefix(miss
     record.pop("cacheIntegrity")
     verification.write_json(first, record)
     verify(mission)
-    assert (root / "build_runs").read_text() == "xx"
+    assert (root / "build_runs").read_text(encoding="utf-8") == "xx"
 
 
 @pytest.mark.parametrize("flags", [[], ["-B"], ["-X", "utf8", "-W", "ignore"]])
@@ -1116,7 +1116,7 @@ def test_result_freshness_is_checked_at_its_producer_not_later_command(mission):
     record = receipt_data(path)
     assert code == 1 and record["failure"]["category"] == "result_invalid"
     assert record["steps"][1]["status"] == "not_run"
-    assert json.loads((root / "result.json").read_text())["status"] == "passed"
+    assert json.loads((root / "result.json").read_text(encoding="utf-8"))["status"] == "passed"
 
 
 @pytest.mark.parametrize("change,category", [("control", "preflight"), ("cwd-missing", "preflight"),
@@ -1143,7 +1143,7 @@ def test_prelaunch_failures_supersede_old_pass_and_never_execute(mission, change
     record = receipt_data(path)
     assert code == 1 and path != old and record["failure"]["category"] == category
     assert record["startedAt"] and record["finishedAt"] and record["recordedAt"]
-    assert (root / "runs").read_text() == "x"
+    assert (root / "runs").read_text(encoding="utf-8") == "x"
     assert mission_state.main(["complete", "M1", "--receipt", str(old), "--review", str(checked),
                                "--done-evidence", "old proof"]) == 1
     assert receipt_data(folder / "verification/M1.latest.json")["receipt"] == str(path)

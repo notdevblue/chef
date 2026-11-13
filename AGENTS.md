@@ -17,7 +17,7 @@
 
 ## 세 런타임 동시 반영
 
-플러그인 동작을 바꾸는 변경은 Claude·Codex·Grok 세 런타임에 함께 반영한다. 한 런타임에 대응 역할·기능이 없으면 만들고, 만들 모델·설정이 결정 사항이면 사용자에게 묻는다. 한 런타임 전용으로 두지 않는다.
+공통 미션·역할·가드 계약을 바꾸면 Claude·Codex·Grok 세 런타임에 함께 반영한다. 공통 계약에 필요한 역할·기능이 없으면 대응 기능을 만들고, 모델·설정이 결정 사항이면 사용자에게 묻는다. sandbox·native 역할 등록·Advisor처럼 런타임 자체 기능에 의존하는 설정은 해당 런타임에만 적용하고, 적용 범위와 다른 런타임의 동작을 문서에 명시한다.
 
 ## 완료 절차
 
@@ -28,7 +28,7 @@
 - 플러그인 배포 내용이 바뀌면 해당 버전을 올리고 Claude의 plugin·marketplace 버전을 맞춘다. 공통 코드 변경이면 양쪽 버전을 올린다. 저장소 지침처럼 배포 내용이 그대로인 변경에는 불필요하게 버전을 올리지 않는다.
 - 커밋을 push하고 원격 브랜치의 SHA가 일치하는지 확인한다. force push는 하지 않는다.
 - Claude는 `claude plugin marketplace update chef`와 `claude plugin update chef@chef`를 실행한다.
-- Codex는 `codex plugin add chef@chef-codex`로 설치본을 갱신한다.
+- Codex는 `codex plugin marketplace upgrade chef-codex` 뒤 `codex plugin add chef@chef-codex`로 설치본을 갱신한다. add만 실행하면 기존 마켓플레이스의 구버전을 다시 설치할 수 있다.
 - Grok은 `~/.grok/plugins/chef`가 이번 push 체크아웃의 `plugins/chef`를 가리키도록 등록한다. 기존 대상이 있으면 실제 대상을 확인하고 덮어쓰지 않는다. 전환 전 `~/.grok/config.toml`과 `~/.grok/skills/han-*`·`chef-*` 링크 정보를 저장하고, 이전 이름(`han`)의 `~/.grok/plugins/han` 등록과 이 플러그인 전용 `[skills].paths` 항목, `han-*`·`chef-*` 링크만 등록 해제한다. 다른 스킬 설정은 보존한다.
 - Codex 역할 등록이 하나라도 있으면(`$CODEX_HOME/agents`, 없으면 `~/.codex/agents/`) 이번 push 체크아웃의 `plugins/chef/codex/agents/`에 있는 chef 역할 toml 전부(새로 생긴 역할 포함)를 같게 복사하고 `diff`로 차이가 없는지 확인한다. 등록이 없으면 만들지 않는다. 그 폴더의 다른 사용자 파일은 건드리지 않고, 플러그인에 없는 `chef-` 역할 파일(옛 이름 `chef-developer-*.toml` 포함)은 지우지 않고 알린다.
 - `grok inspect`에서 native `chef`가 이번 체크아웃을 선택하고 스킬 8개·훅 1개와 native 역할 6개(`chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:code-reviewer`, `chef:reviewer-small`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `provides.agents`는 등록 경로 수이므로 역할 수로 판단하지 않는다. `chef-watch`·`chef-handoff`가 없어야 한다. `grok plugin install` 성공만으로 선택된 플러그인을 판단하지 않는다. compat `chef`가 native 경로보다 우선할 수 있다.

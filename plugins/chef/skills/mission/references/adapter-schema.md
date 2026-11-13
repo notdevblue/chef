@@ -201,6 +201,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `roles.review` | 첫 심층 리뷰를 맡을 읽기 전용 역할. 프로젝트 리뷰어와 기본·작은 리뷰 라우팅·모델은 런타임 역할 계약. 작은 문서 첫 리뷰의 뜻·승인 범위 조건은 공통 mission 절차 |
 | `roles.reviewSmall` | 직전 리뷰 이후의 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경의 첫 리뷰를 맡을 읽기 전용 역할. 없으면 `chef:reviewer-small`. 프로젝트 리뷰 규약이 `roles.review`만 읽게 정하면 그 규약이 우선 |
 | `roles.audit` | 미션 끝 기록 감사(SKILL §6의 4)를 맡을 읽기 전용 에이전트. 없으면 `roles.review`. 구현 역할과 다른 모델이면 더 좋다 |
+| `roles.reviewLoopSkill` | 선택. 미션 전체 리뷰에 사용할 프로젝트 스킬 이름. 에이전트 역할이 아니므로 `agents.allow`의 파견 이름에 포함하지 않는다. 해당 스킬을 읽고 현재 런타임의 역할·리뷰 종료 계약을 적용한다. 없으면 공통 mission 절차의 전체 리뷰를 따른다 |
 | `rolePolicy` | 선택. 이 플러그인 스킬이 역할을 파견할 때의 정책 `{"model": "definition" 또는 "inherit", "subagents": true 또는 false}`. 없거나 키가 없으면 `model: "definition"`, `subagents: true`(기존 동작). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.rolePolicy`·`runtimes.grok.rolePolicy`가 기존 깊은 병합으로 최상위 값을 덮는다. `roles`의 이름 매핑은 바꾸지 않는다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다 |
 | `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex는 등록된 역할의 TOML 모델이 적용되어 부모 상속을 지킬 수 없으므로 그 사실을 보고하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
 | `rolePolicy.subagents` | `false`면 하위 파견을 허용하던 역할(Claude `chef:dev-medium`, Codex `chef:dev-medium`)의 파견 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다. 해당 역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막는 강제 차단은 아니다. Grok 역할은 어차피 자식을 띄우지 않는다 |
