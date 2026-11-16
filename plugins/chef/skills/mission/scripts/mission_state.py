@@ -1152,7 +1152,7 @@ def cmd_document_list(ctx, args):
 
 
 def cmd_inspect(ctx, args):
-    if args.plan:
+    if args.plan is not None:
         summary = verification.inspect_artifact(args.plan, "plan")
     else:
         summary = verification.inspect_artifact(args.receipt, "receipt")
@@ -1184,8 +1184,8 @@ def build_parser():
     leaf(sub, "schema", cmd_schema)
     inspect = leaf(sub, "inspect", cmd_inspect)
     source = inspect.add_mutually_exclusive_group(required=True)
-    source.add_argument("--plan", default="")
-    source.add_argument("--receipt", default="")
+    source.add_argument("--plan", default=None)
+    source.add_argument("--receipt", default=None)
     brief = leaf(sub, "brief", cmd_brief)
     brief.add_argument("id")
     brief.add_argument("--references", default="")

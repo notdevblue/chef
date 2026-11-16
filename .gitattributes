@@ -1,0 +1,4 @@
+# Reproducible source/artifact hashes across Windows and POSIX checkouts.
+* text=auto eol=lf
+# Published candidates are evidence: preserve even originally submitted CRLF bytes.
+examples/lab/**/candidates/*.py -text diff

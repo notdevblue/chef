@@ -270,3 +270,15 @@ will be recorded below.
 Pending: remote Windows/Linux CI and commit/push/installed-version
 evidence. No reboot or relogin has been performed;
 file-backed persistence and process-level tests are distinct from those checks.
+
+The first remote matrix exposed three additional portability defects (2026-11-17):
+Python 3.11 argparse treats an explicitly supplied empty string equal to its default
+as absent in a required mutually exclusive group; inspection now uses `None` as
+the absence sentinel. Windows Python 3.11 lacks native junction detection;
+`is_link` now checks nofollow reparse attributes when that API is unavailable.
+Git checkout newline conversion changed published candidate bytes and broke hash
+verification; `.gitattributes` preserves exact candidate bytes and sets LF for
+ordinary source files. Original tests remain unchanged, and the matrix is rerun.
+The initial workflow's runner-context placement error was also corrected by
+initializing runtime homes in a running step, following
+[GitHub context availability](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability).
