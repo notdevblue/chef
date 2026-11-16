@@ -1,0 +1,202 @@
+{
+  "schema": 1,
+  "mode": "recommendations_only",
+  "baseline": "single-a",
+  "strata": [
+    {
+      "runtime": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "role": "unknown",
+      "kind": "multi",
+      "taskKind": "synthetic_interval_union",
+      "samples": 2,
+      "knownOutcomes": 2,
+      "successes": 2,
+      "successRate": 1.0,
+      "wilson95": [
+        0.34237195288961925,
+        1.0
+      ],
+      "meanSeconds": 0.032456717500053855,
+      "latencyKnown": 2,
+      "tokens": {},
+      "tokenCoverage": {},
+      "credits": null,
+      "cost": null
+    },
+    {
+      "runtime": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "role": "unknown",
+      "kind": "single",
+      "taskKind": "synthetic_interval_union",
+      "samples": 2,
+      "knownOutcomes": 2,
+      "successes": 2,
+      "successRate": 1.0,
+      "wilson95": [
+        0.34237195288961925,
+        1.0
+      ],
+      "meanSeconds": 0.03253916699986803,
+      "latencyKnown": 2,
+      "tokens": {},
+      "tokenCoverage": {},
+      "credits": null,
+      "cost": null
+    }
+  ],
+  "comparisons": [
+    {
+      "baseline": "single-a",
+      "alternative": "reviewed-a",
+      "conditionKey": "[\"{\\\"evaluator\\\":\\\"interval-union-v1\\\",\\\"generation\\\":1,\\\"holdoutHash\\\":\\\"d4f8fbdfcb885db9fe6a81ca279636b26fd3a806a37e550f1a1e50cc25b089d3\\\"}\",\"synthetic_interval_union\"]",
+      "matched": true,
+      "baselineSummary": {
+        "samples": 1,
+        "knownOutcomes": 1,
+        "successes": 1,
+        "successRate": 1.0,
+        "wilson95": [
+          0.20654329147389294,
+          1.0
+        ],
+        "meanSeconds": 0.032573186999798054,
+        "latencyKnown": 1,
+        "tokens": {},
+        "tokenCoverage": {},
+        "credits": null,
+        "cost": null
+      },
+      "alternativeSummary": {
+        "samples": 1,
+        "knownOutcomes": 1,
+        "successes": 1,
+        "successRate": 1.0,
+        "wilson95": [
+          0.20654329147389294,
+          1.0
+        ],
+        "meanSeconds": 0.03247021800007133,
+        "latencyKnown": 1,
+        "tokens": {},
+        "tokenCoverage": {},
+        "credits": null,
+        "cost": null
+      },
+      "status": "insufficient_evidence",
+      "fixture": false,
+      "usageComparison": "unknown",
+      "recommendation": "retain_baseline_pending_evidence"
+    },
+    {
+      "baseline": "single-a",
+      "alternative": "reviewed-b",
+      "conditionKey": "[\"{\\\"evaluator\\\":\\\"interval-union-v1\\\",\\\"generation\\\":1,\\\"holdoutHash\\\":\\\"d4f8fbdfcb885db9fe6a81ca279636b26fd3a806a37e550f1a1e50cc25b089d3\\\"}\",\"synthetic_interval_union\"]",
+      "matched": true,
+      "baselineSummary": {
+        "samples": 1,
+        "knownOutcomes": 1,
+        "successes": 1,
+        "successRate": 1.0,
+        "wilson95": [
+          0.20654329147389294,
+          1.0
+        ],
+        "meanSeconds": 0.032573186999798054,
+        "latencyKnown": 1,
+        "tokens": {},
+        "tokenCoverage": {},
+        "credits": null,
+        "cost": null
+      },
+      "alternativeSummary": {
+        "samples": 1,
+        "knownOutcomes": 1,
+        "successes": 1,
+        "successRate": 1.0,
+        "wilson95": [
+          0.20654329147389294,
+          1.0
+        ],
+        "meanSeconds": 0.032443217000036384,
+        "latencyKnown": 1,
+        "tokens": {},
+        "tokenCoverage": {},
+        "credits": null,
+        "cost": null
+      },
+      "status": "insufficient_evidence",
+      "fixture": false,
+      "usageComparison": "unknown",
+      "recommendation": "retain_baseline_pending_evidence"
+    },
+    {
+      "baseline": "single-a",
+      "alternative": "single-b",
+      "conditionKey": "[\"{\\\"evaluator\\\":\\\"interval-union-v1\\\",\\\"generation\\\":1,\\\"holdoutHash\\\":\\\"d4f8fbdfcb885db9fe6a81ca279636b26fd3a806a37e550f1a1e50cc25b089d3\\\"}\",\"synthetic_interval_union\"]",
+      "matched": true,
+      "baselineSummary": {
+        "samples": 1,
+        "knownOutcomes": 1,
+        "successes": 1,
+        "successRate": 1.0,
+        "wilson95": [
+          0.20654329147389294,
+          1.0
+        ],
+        "meanSeconds": 0.032573186999798054,
+        "latencyKnown": 1,
+        "tokens": {},
+        "tokenCoverage": {},
+        "credits": null,
+        "cost": null
+      },
+      "alternativeSummary": {
+        "samples": 1,
+        "knownOutcomes": 1,
+        "successes": 1,
+        "successRate": 1.0,
+        "wilson95": [
+          0.20654329147389294,
+          1.0
+        ],
+        "meanSeconds": 0.032505146999938006,
+        "latencyKnown": 1,
+        "tokens": {},
+        "tokenCoverage": {},
+        "credits": null,
+        "cost": null
+      },
+      "status": "insufficient_evidence",
+      "fixture": false,
+      "usageComparison": "unknown",
+      "recommendation": "retain_baseline_pending_evidence"
+    }
+  ],
+  "coverage": {
+    "inputRecords": 4,
+    "eligibleRecords": 4,
+    "matchedComparisons": 3,
+    "unmatchedComparisons": 0,
+    "labCandidates": 4,
+    "excludedCandidates": 0
+  },
+  "diagnostics": {},
+  "credits": null,
+  "cost": null,
+  "limitations": [
+    "No runtime configuration is changed.",
+    "Tokens are not credits or provider billing.",
+    "Wilson intervals describe observed candidate outcomes; independence is not established.",
+    "A nonoverlapping interval is evidence for this explicit condition only.",
+    "No claim of general quality gains follows from synthetic or fixture runs.",
+    "Latency is measured evaluation time, not unrecorded development time.",
+    "Lab strategy model/effort labels are configuration metadata; actual runtime application is unverified.",
+    "One candidate artifact is one outcome; holdout cases are not independent agent trials."
+  ],
+  "source": "lab_completed_holdout",
+  "modelMetadataBasis": "configured_strategy_not_observed_runtime"
+}

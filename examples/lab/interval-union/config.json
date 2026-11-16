@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "generations": 1,
+  "candidates": 4,
+  "maxEvaluations": 12,
+  "maxSeconds": 120,
+  "maxConcurrent": 2,
+  "seed": 17,
+  "costPolicy": "unknown-no-paid-launches",
+  "strategies": [
+    {
+      "name": "single-a",
+      "kind": "single",
+      "runtime": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    {
+      "name": "single-b",
+      "kind": "single",
+      "runtime": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    {
+      "name": "reviewed-a",
+      "kind": "multi",
+      "runtime": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    {
+      "name": "reviewed-b",
+      "kind": "multi",
+      "runtime": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "evaluator": "interval-union-v1",
+  "configHash": "7de8c8afe0cd8bfa426bc66d26c6ae758300260731d50d20fb5b1adf4ef9fe1f",
+  "holdoutHash": "d4f8fbdfcb885db9fe6a81ca279636b26fd3a806a37e550f1a1e50cc25b089d3",
+  "phase": "complete",
+  "stopped": false,
+  "generation": 1,
+  "evaluations": 8,
+  "elapsedSeconds": 0.25915486099984264,
+  "selections": [
+    "g01-c02"
+  ],
+  "results": [
+    {
+      "passed": 26,
+      "total": 26,
+      "seconds": 0.03182135999986713,
+      "status": "scored",
+      "split": "development",
+      "id": "g01-c00",
+      "generation": 1,
+      "strategy": {
+        "name": "single-a",
+        "kind": "single",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      "codeHash": "e80a68a0fd344cc0aa16d6a111ae3bc0fd34c12386e8a0ca7f8deebcd2af1b4e",
+      "holdout": {
+        "passed": 106,
+        "total": 106,
+        "seconds": 0.032573186999798054,
+        "status": "scored",
+        "split": "holdout"
+      }
+    },
+    {
+      "passed": 26,
+      "total": 26,
+      "seconds": 0.031935429999975895,
+      "status": "scored",
+      "split": "development",
+      "id": "g01-c01",
+      "generation": 1,
+      "strategy": {
+        "name": "single-b",
+        "kind": "single",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      "codeHash": "7f8076157eda6da3e939a769c9368f4ff10e64a2eafd87fb4e466aa8e3ec5413",
+      "holdout": {
+        "passed": 106,
+        "total": 106,
+        "seconds": 0.032505146999938006,
+        "status": "scored",
+        "split": "holdout"
+      }
+    },
+    {
+      "passed": 26,
+      "total": 26,
+      "seconds": 0.03179451000005429,
+      "status": "scored",
+      "split": "development",
+      "id": "g01-c02",
+      "generation": 1,
+      "strategy": {
+        "name": "reviewed-a",
+        "kind": "multi",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      "codeHash": "9cb1f9473db029c5db4e98f3dc5a4de6ccd8ac4b0e8bdfc7ea00cfada7133c04",
+      "holdout": {
+        "passed": 106,
+        "total": 106,
+        "seconds": 0.03247021800007133,
+        "status": "scored",
+        "split": "holdout"
+      }
+    },
+    {
+      "passed": 26,
+      "total": 26,
+      "seconds": 0.03183434999982637,
+      "status": "scored",
+      "split": "development",
+      "id": "g01-c03",
+      "generation": 1,
+      "strategy": {
+        "name": "reviewed-b",
+        "kind": "multi",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      "codeHash": "beb3d5d2e54fb59ed956bae263bb9f735f8d64cfce68ab64060c583f5d365f2d",
+      "holdout": {
+        "passed": 106,
+        "total": 106,
+        "seconds": 0.032443217000036384,
+        "status": "scored",
+        "split": "holdout"
+      }
+    }
+  ],
+  "config": {
+    "schema": 1,
+    "generations": 1,
+    "candidates": 4,
+    "maxEvaluations": 12,
+    "maxSeconds": 120,
+    "maxConcurrent": 2,
+    "seed": 17,
+    "costPolicy": "unknown-no-paid-launches",
+    "strategies": [
+      {
+        "name": "single-a",
+        "kind": "single",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      {
+        "name": "single-b",
+        "kind": "single",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      {
+        "name": "reviewed-a",
+        "kind": "multi",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      {
+        "name": "reviewed-b",
+        "kind": "multi",
+        "runtime": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      }
+    ]
+  },
+  "credits": null,
+  "cost": null,
+  "limitations": [
+    "Artifacts are produced separately through normal approved development workflows.",
+    "Evaluation time excludes development; tokens/credits are unknown without runtime records.",
+    "Small synthetic task; no general quality improvement can be inferred.",
+    "Public cases select parents; holdout scored once after all selections.",
+    "Released holdout cannot be reused as an unseen benchmark.",
+    "Candidate execution is serial and bounded; maxConcurrent is an upper bound."
+  ]
+}
