@@ -450,7 +450,7 @@ def cmd_init(ctx, args):
 
 
 def poc_relative_path(project, value):
-    given = require_text("--poc", value)
+    given = require_text("--poc", value).replace("\\", "/")
     root = os.path.abspath(project)
     target = os.path.abspath(os.path.join(root, given))
     if not slots.inside_root(os.path.realpath(root), os.path.realpath(target)):
@@ -1137,6 +1137,10 @@ def cmd_document_list(ctx, args):
     require_folder(ctx)
     automatic = sorted(auto_question_documents(ctx.folder))
     result = []
+    manifest = ctx.path(SHARED_DOCUMENTS_FILE)
+    if os.path.lexists(manifest) and (not slots.inside_root(slots.request_realpath(ctx.folder), slots.request_realpath(manifest))
+                                     or not os.path.isfile(manifest)):
+        raise StateError(f"{SHARED_DOCUMENTS_FILE} 경로가 잘못됨: {manifest}")
     try:
         names = sorted(shared_documents(ctx.folder))
         result.append(f"공유 중: {', '.join(names) or '없음'}")

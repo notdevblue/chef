@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import errno
 import json
 import os
 import re
@@ -215,45 +216,98 @@ def thread_lock_of(path):
 
 
 class FileLock:
+    """PID marker protected by a permanent kernel-locked ``.gate`` sidecar.
+
+    The gate must never be unlinked: replacing its inode would split callers
+    across independent locks. The kernel releases it when its owner exits.
+    Use the context manager; acquire() is an internal PID-marker operation.
+    """
     def __init__(self, path, label, timeout=0):
-        self.path = path
+        self.path = os.path.realpath(os.path.abspath(os.fspath(path)))
         self.label = label
         self.timeout = timeout
         self.holder = ""
-        self.thread_lock = thread_lock_of(path)
+        self.thread_lock = thread_lock_of(self.path)
+        self.gate_fd = None
+        self.deadline = 0
 
     def __enter__(self):
+        self.deadline = time.monotonic() + self.timeout
         if not self.thread_lock.acquire(timeout=self.timeout):
             raise LockBusy(f"{self.label} 잠금 사용 중 (같은 프로세스의 다른 작업)")
         try:
+            self.acquire_gate()
             self.acquire()
         except BaseException:
-            self.thread_lock.release()
+            try:
+                self.release_gate()
+            finally:
+                self.thread_lock.release()
             raise
         return self
 
     def __exit__(self, *_):
         try:
-            if self.read_pid() == os.getpid():
-                os.remove(self.path)
-        except OSError:
-            pass
-        self.thread_lock.release()
+            try:
+                if self.read_pid() == os.getpid():
+                    os.remove(self.path)
+            except OSError:
+                pass
+        finally:
+            try:
+                self.release_gate()
+            finally:
+                self.thread_lock.release()
+
+    def acquire_gate(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.gate_fd = os.open(self.path + ".gate", os.O_CREAT | os.O_RDWR, 0o600)
+        if os.fstat(self.gate_fd).st_size == 0:
+            os.write(self.gate_fd, b"\0")
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(self.gate_fd, 0, os.SEEK_SET)
+                    msvcrt.locking(self.gate_fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.gate_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError as error:
+                if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                remaining = self.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LockBusy(f"{self.label} 잠금 사용 중 (kernel gate)") from error
+                time.sleep(min(LOCK_POLL_SECONDS, remaining))
+
+    def release_gate(self):
+        # Closing the descriptor releases flock/byte locks, including failed
+        # acquisitions. Keep the sidecar itself for the next caller.
+        if self.gate_fd is not None:
+            descriptor, self.gate_fd = self.gate_fd, None
+            os.close(descriptor)
 
     def acquire(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        deadline = time.monotonic() + self.timeout
+        if self.gate_fd is None:
+            raise RuntimeError("FileLock.acquire requires the context manager kernel gate")
         while True:
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
                 if self.reclaim_if_stale():
                     continue
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= self.deadline:
                     raise LockBusy(f"{self.label} 잠금 사용 중 ({self.holder})")
                 time.sleep(LOCK_POLL_SECONDS)
                 continue
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            try:
+                marker = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+            except BaseException:
+                os.close(fd)
+                raise
+            with marker as f:
                 f.write(f"{os.getpid()}\t{datetime.now().isoformat(timespec='seconds')}\n")
             return
 

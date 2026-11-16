@@ -1,0 +1,74 @@
+name: Synthetic validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      # A fresh runner supplies no developer adapters, credentials, or runtime homes.
+      HAN_ADAPTERS_DIR: ${{ runner.temp }}/chef-empty-registry
+      CODEX_HOME: ${{ runner.temp }}/chef-codex-home
+      CLAUDE_CONFIG_DIR: ${{ runner.temp }}/chef-claude-home
+      GROK_HOME: ${{ runner.temp }}/chef-grok-home
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Check shared runtime contracts
+        id: shared
+        run: python plugins/chef/codex/sync_shared.py
+      - name: Run full synthetic suite
+        if: ${{ !cancelled() }}
+        id: pytest
+        run: python -m pytest -q -p no:cacheprovider --junitxml=test-results.xml
+      - name: Publish test summary
+        if: always()
+        env:
+          SHARED_RESULT: ${{ steps.shared.outcome }}
+          PYTEST_RESULT: ${{ steps.pytest.outcome }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          lines = ['## Synthetic validation', '',
+                   f"Shared contracts: {os.environ['SHARED_RESULT']}",
+                   f"Pytest step: {os.environ['PYTEST_RESULT']}", '']
+          report = Path('test-results.xml')
+          if report.exists():
+              suites = list(ET.parse(report).getroot().iter('testsuite'))
+              counts = {key: sum(int(s.get(key, 0)) for s in suites)
+                        for key in ('tests', 'failures', 'errors', 'skipped')}
+              lines.append(' | '.join(f'{key}: {value}' for key, value in counts.items()))
+          else:
+              lines.append('JUnit report unavailable; inspect the failed setup or test step.')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('\n'.join(lines) + '\n')
+          PY
+        shell: bash
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-${{ matrix.os }}-py${{ matrix.python }}
+          path: test-results.xml
+          if-no-files-found: warn
