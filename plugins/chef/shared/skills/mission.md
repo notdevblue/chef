@@ -1,7 +1,7 @@
 # 미션 공통 절차
 
-실행 품질을 비교할 때는 [공통 관측·실험 안내](../../skills/mission/references/autonomous-lab.md)를 따른다. 공통 도구는
-`<plugin-root>/skills/mission/scripts/observatory.py`·`supervisor.py`·`routing.py`·`lab.py`이며,
+실행 품질을 비교할 때는 [실행 통계·작업 대기열·모델 선택 추천](../../skills/mission/references/autonomous-lab.md)을 따른다. 공통 도구는
+`<plugin-root>/skills/mission/scripts/run_metrics.py`·`task_queue.py`·`model_recommendations.py`이며,
 세 런타임에서 같은 구현을 쓴다. 이 도구의 기록·추천·평가는 아래 A/B/C 승인과 독립 검토를 대체하지 않는다.
 관측되지 않은 토큰·모델 적용·과금·크레딧은 추정하지 않는다.
 

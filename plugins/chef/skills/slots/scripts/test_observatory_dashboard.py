@@ -40,6 +40,8 @@ def test_observatory_get_is_sanitized_read_only_and_versioned(report):
     status, _, body = dashboard.route(config, '/observatory.csv')
     assert status == 200 and b'recordType' in body
     assert source.read_bytes() == before and set(source.parent.iterdir()) == files
+    for suffix in ('', '.json', '.csv'):
+        assert dashboard.route(config, '/run-metrics' + suffix) == dashboard.route(config, '/observatory' + suffix)
 
 
 @pytest.mark.parametrize('quality', [[1], [{'reviews': [None]}], [{'verificationAttempts': [1]}]])
@@ -58,7 +60,7 @@ def test_actual_http_server_only_serves_reads(report):
     thread.start()
     base = f'http://127.0.0.1:{server.server_port}'
     try:
-        with urlopen(base + '/observatory.json', timeout=3) as response:
+        with urlopen(base + '/run-metrics.json', timeout=3) as response:
             assert response.status == 200 and json.load(response)['schema'] == 2
         with pytest.raises(HTTPError) as error:
             urlopen(Request(base + '/observatory', data=b'approve=true', method='POST'), timeout=3)

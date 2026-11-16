@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in bounded slot dispatch. Owns its queue, never mission or approval records.
+"""Task Queue & Dispatch (작업 대기열·배정): bounded dispatch through existing slots.
 
 Configuration schema 1 has projects {name: {path, slots, runtimes, resources}}
 and budgets {maxRuns, maxConcurrent, maxSeconds, launchTimeoutSeconds}.

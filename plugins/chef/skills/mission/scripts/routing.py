@@ -1,4 +1,4 @@
-"""Measured routing recommendations only; never writes role or runtime configuration."""
+"""Model Recommendations (모델 선택 추천): measured advice, without changing runtime configuration."""
 import argparse
 import json
 import math
@@ -198,7 +198,7 @@ def analyze_lab(report, baseline=None, min_samples=5):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lab-report', type=Path)
-    parser.add_argument('--observatory-report', type=Path)
+    parser.add_argument('--run-metrics-report', '--observatory-report', dest='observatory_report', type=Path)
     parser.add_argument('--baseline')
     parser.add_argument('--min-samples', type=int, default=5)
     parser.add_argument('--output', required=True, type=Path)

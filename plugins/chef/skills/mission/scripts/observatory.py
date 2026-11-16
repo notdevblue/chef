@@ -1,4 +1,4 @@
-"""Read-only, explicitly selected runtime telemetry. Never export transcript content."""
+"""Run Metrics (실행 통계): collect explicitly selected runtime metadata, read-only."""
 import argparse
 import csv
 import io

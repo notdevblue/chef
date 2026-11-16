@@ -1,4 +1,16 @@
-# Autonomous Development Lab
+# 실행 통계·작업 대기열·모델 선택 추천
+
+Current scope (2026-11-17): **실행 통계 (Run Metrics)**, **작업 대기열·배정
+(Task Queue & Dispatch)** and **모델 선택 추천 (Model Recommendations)**.
+Lab is excluded from further development and experiments. Existing Lab code,
+fixtures and historical results below are retained as records.
+
+Canonical CLI entrypoints are `run_metrics.py`, `task_queue.py` and
+`model_recommendations.py`; they delegate to the existing implementations.
+The original `observatory.py`, `supervisor.py`, `routing.py`, `/observatory`
+routes and `--observatory-report` flags remain supported. Internal module/class
+names, report schemas, `CHEF_SUPERVISOR_HOME`, queue paths and saved data do not
+change. The historical document path is also retained for existing links.
 
 ## Scope and architecture
 
@@ -34,7 +46,7 @@ The code already implements Claude usage deduplication, activity mapping,
 verification timing/failure/reuse records, structured review findings, Git/Perforce
 and NoVcs slots, three runtime guards and read-only mission discovery. Reuse those
 implementations. Missing capabilities were cross-runtime normalized reports,
-Supervisor queues, controlled experiments, measured routing and CI.
+Task Queue & Dispatch queues, controlled experiments, measured routing and CI.
 
 Initial full suite on Linux/Python 3.13.18 in an isolated pytest environment:
 **2309 passed, 7 failed, 10 skipped, 59 subtests passed** (98.72s).
@@ -49,9 +61,9 @@ No Windows execution has been performed locally; the CI matrix provides that gat
 | Step | Reuse and additions | Validation / exit evidence |
 | --- | --- | --- |
 | M0 investigation | Existing runtime, mission, slots, guards, verification, Distill and dashboard audit | Baseline above; source and public boundary review |
-| M1 Observatory | Extend existing usage and quality readers with versioned, metadata-only runtime adapters and export | Partial/malformed logs, unknown coverage, deduplication, migration, privacy tests |
+| M1 Run Metrics | Extend existing usage and quality readers with versioned, metadata-only runtime adapters and export | Partial/malformed logs, unknown coverage, deduplication, migration, privacy tests |
 | M2 validation | Repair baseline portability defects; add isolated kill/contention/corruption tests and Windows/Linux CI | Full unchanged existing suite plus new tests; JUnit artifacts |
-| M3 Supervisor | Persistent bounded queue, dependency/priority selection, registered ready slots, durable reservations; existing slots launcher only | Conflict, launch ambiguity, recovery and approval-boundary tests |
+| M3 Task Queue & Dispatch | Persistent bounded queue, dependency/priority selection, registered ready slots, durable reservations; existing slots launcher only | Conflict, launch ambiguity, recovery and approval-boundary tests |
 | M4 routing | Compare observed success/latency/usage within matched task conditions | Coverage and uncertainty tests; recommendations only, no config mutation |
 | M5 Lab | Synthetic projects in existing NoVcs slots, immutable candidate artifacts, sealed holdout evaluation, bounded generations | Reproducible full experiment, hashes, baseline comparison and honest limitations |
 | M6 integration | Dashboard GET reports, three runtime documentation, naming compatibility, deployment | Full suite, public diff/history review, versioned commit/push, installed-content checks |
@@ -63,12 +75,12 @@ created from scratch; no private adapter or real project is an experiment input.
 ## Safety and remaining design constraints
 
 `slots run` returning success proves launch request delivery, not child startup.
-Supervisor must reserve before launch, wait for evidence and retain uncertain
+Task Queue & Dispatch must reserve before launch, wait for evidence and retain uncertain
 reservations for operator review. It must never retry an ambiguous launch or take
 over a session. Verification resource locks intentionally fail closed after owner
 death; report them for deliberate recovery instead of deleting them.
 
-Mission approvals are procedural contracts, not just state labels. The Supervisor
+Mission approvals are procedural contracts, not just state labels. The Task Queue & Dispatch
 must enter through normal runtime mission workflows and cannot manufacture
 approval by editing a mission header. Dashboard reports never execute or approve.
 
@@ -96,11 +108,11 @@ They work identically from Claude, Codex and Grok shells; no new native roles,
 skills or hooks are registered. Existing role definitions and the eight Grok
 skills remain unchanged.
 
-### Observatory
+### Run Metrics
 
 ```bash
-python observatory.py --source claude=<session.jsonl> --source codex=<rollout.jsonl> --source grok=<updates.jsonl> --output <report.json>
-python observatory.py --source manual=<metadata.jsonl> --output <report.csv> --format csv
+python run_metrics.py --source claude=<session.jsonl> --source codex=<rollout.jsonl> --source grok=<updates.jsonl> --output <report.json>
+python run_metrics.py --source manual=<metadata.jsonl> --output <report.csv> --format csv
 ```
 
 Run these using the full shared script path or from its directory. Sources are
@@ -133,11 +145,11 @@ Schema 2 reports validate on import/export and recompute summaries. Schema 1
 legacy usage reports migrate in memory to aggregate evidence with **unknown
 coverage**; no fabricated per-response records or historical zero certainty.
 Original files are preserved. Newer unknown schemas fail closed. CSV exports
-escape spreadsheet formula prefixes. The dashboard `--observatory-report` option
-adds GET-only HTML/JSON/CSV views through the same serialization layer; requests
+escape spreadsheet formula prefixes. The dashboard `--run-metrics-report` option
+adds GET-only HTML/JSON/CSV views at `/run-metrics` through the same serialization layer; requests
 do not run collectors, launch tasks, save answers or change files.
 
-### Supervisor
+### Task Queue & Dispatch
 
 Use one explicitly configured authority home for all supervising runtimes:
 `CHEF_SUPERVISOR_HOME` (absolute directory), default `~/.chef/supervisor`.
@@ -154,11 +166,11 @@ positive integer `maxRuns`, `maxConcurrent`, `maxSeconds`, `launchTimeoutSeconds
 No command template or executable supplied by a task is accepted.
 
 ```bash
-python supervisor.py --config <config.json> --state <home>/queue.json enqueue task-a --project sample --goal 'Implement the approved task' --priority 10
-python supervisor.py --config <config.json> --state <home>/queue.json enqueue task-b --project sample --goal 'Verify the approved follow-up' --after task-a
-python supervisor.py --config <config.json> --state <home>/queue.json plan
-python supervisor.py --config <config.json> --state <home>/queue.json dispatch --execute
-python supervisor.py --config <config.json> --state <home>/queue.json reconcile
+python task_queue.py --config <config.json> --state <home>/queue.json enqueue task-a --project sample --goal 'Implement the approved task' --priority 10
+python task_queue.py --config <config.json> --state <home>/queue.json enqueue task-b --project sample --goal 'Verify the approved follow-up' --after task-a
+python task_queue.py --config <config.json> --state <home>/queue.json plan
+python task_queue.py --config <config.json> --state <home>/queue.json dispatch --execute
+python task_queue.py --config <config.json> --state <home>/queue.json reconcile
 ```
 
 Without `--execute`, dispatch is a proposal. Execution invokes only existing
@@ -175,12 +187,11 @@ the existing mission workflow and deliberate queue correction after backing up;
 no unattended override endpoint exists. Time budgets stop future dispatch; they
 do not kill a child mission. The queue is local metadata, not an authorization token.
 
-### Routing
+### Model Recommendations
 
-`routing.py --lab-report <report.json> --baseline <name> --output <routing.json>`
-compares completed held-out candidate outcomes under matching evaluator, hidden
-dataset and generation. Generic records require explicit `conditionKey`, `strategy`
-and boolean `success`; ordinary token-only Observatory records cannot imply task
+`model_recommendations.py --run-metrics-report <comparison.json> --baseline <name> --output <recommendations.json>`
+compares explicitly matched execution records. Records require `conditionKey`, `strategy`
+and boolean `success`; ordinary token-only Run Metrics records cannot imply task
 success. The report stratifies runtime/model/effort/role/strategy, shows candidate
 sample counts, Wilson intervals, latency and token coverage, and preserves unknown
 usage. Fewer than five independent candidate outcomes per condition defaults to
@@ -188,7 +199,7 @@ insufficient evidence. Test cases are not independent agent runs. Fixture and
 unmatched comparisons cannot recommend a quality improvement. No role/model/effort
 configuration is written; retaining old defaults is also the rollback.
 
-### Lab
+### Archived Lab (excluded from further work)
 
 `lab.py --root <new-root> prepare --config <config.json>` creates a fresh synthetic
 project and ordinary NoVcs slots. Config schema 1 specifies `generations` (1–10,
@@ -288,7 +299,7 @@ initializing runtime homes in a running step, following
 Version **0.4.1**, implementation/payload commit
 `2ac39b7978003a762fcd462249b821fdf79219eb`, pushed to canonical `notdevblue/chef`
 main; remote SHA equality checked. The earlier four implementation commits separate
-locking/CI, Observatory/Supervisor, Lab/routing and runtime documentation.
+locking/CI, Run Metrics/Task Queue & Dispatch, Lab/routing and runtime documentation.
 
 [Full remote validation](https://github.com/notdevblue/chef/actions/runs/43892059282)
 passed all four jobs: Windows/Linux × Python 3.11/3.13. Shared contract checks and
@@ -322,3 +333,19 @@ existing approved orchestration rather than a new autonomous paid-launch API;
 development-agent filesystem access is an operator boundary. Native Grok usage,
 actual billing/credit counters and unrecorded development efficiency remain unknown.
 No global routing default was changed and no general quality improvement is claimed.
+
+## Functional names (0.4.2, 2026-11-17)
+
+README, bundled runtime guidance, CLI help and dashboard labels now use the three
+functional names at the top of this document. The dashboard's canonical report
+route is `/run-metrics` with JSON/CSV variants and `--run-metrics-report`;
+existing routes and flags remain aliases. Canonical CLI files are thin entrypoints
+to the same implementations, so no second queue, collector or recommendation
+engine is introduced. Saved records and private configuration need no migration.
+Lab code and historical fixtures are untouched and excluded from further work.
+
+Validation: 286 existing metrics/queue/recommendation/dashboard tests passed,
+including a real HTTP request and parity between new and legacy report routes.
+All three new entrypoint help commands, both dashboard report flags, shared
+runtime-reference checks and whitespace checks passed. These are naming and
+compatibility checks; no new Lab experiment or model benchmark was run.

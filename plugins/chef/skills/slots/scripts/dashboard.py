@@ -1570,7 +1570,7 @@ def overview_page(config):
     cards = [slot_card(config, location) for location in occupied]
     body = section_head(1, "미션 작업 공간")
     if getattr(config, 'observatory_report', None):
-        body += '<p><a href="/observatory">Usage &amp; Quality Observatory →</a></p>'
+        body += '<p><a href="/run-metrics">실행 통계 →</a></p>'
     body += "".join(f'<p class="warn">{esc(location.problem)}</p>' for location in found if location.problem)
     body += f'<div class="board">{"".join(cards)}</div>'
     if idle:
@@ -1877,19 +1877,19 @@ def view_response(config, raw, embedded=False):
 def observatory_response(config, format='html'):
     source = getattr(config, 'observatory_report', None)
     if not source:
-        return message(404, '관측 보고서가 설정되지 않음')
+        return message(404, '실행 통계 보고서가 설정되지 않음')
     try:
         if os.path.getsize(source) > MAX_TEXT_BYTES:
             raise ValueError('report too large')
         with open(source, encoding='utf-8') as stream:
             report = observatory.normalize_report(json.load(stream))
     except (OSError, ValueError, TypeError, KeyError):
-        return message(422, '관측 보고서 형식·버전·무결성 확인 필요')
+        return message(422, '실행 통계 보고서 형식·버전·무결성 확인 필요')
     if format == 'json':
         return 200, 'application/json; charset=utf-8', observatory.serialize_report(report).encode('utf-8')
     if format == 'csv':
         return 200, 'text/csv; charset=utf-8', observatory.serialize_report(report, 'csv').encode('utf-8')
-    body = '<p><a href="/">← 미션</a> · <a href="/observatory.json">JSON</a> · <a href="/observatory.csv">CSV</a></p>'
+    body = '<p><a href="/">← 미션</a> · <a href="/run-metrics.json">JSON</a> · <a href="/run-metrics.csv">CSV</a></p>'
     body += '<p>파일에 기록된 관측만 표시합니다. unknown은 미관측이며 토큰은 과금·크레딧이 아닙니다.</p>'
     rows = report.get('byModel', [])
     peak = max([sum(row['tokens'].get(key) or 0 for key in ('input_tokens', 'output_tokens')) for row in rows] or [1]) or 1
@@ -1903,13 +1903,14 @@ def observatory_response(config, format='html'):
     body += '</tbody></table>'
     body += '<h2>검증·리뷰 품질</h2><pre>' + esc(json.dumps(report.get('qualitySummary', {}), ensure_ascii=False, indent=2)) + '</pre>'
     body += '<h2>관측 범위</h2><pre>' + esc(json.dumps(report.get('capabilities', {}), ensure_ascii=False, indent=2)) + '</pre>'
-    return 200, HTML_TYPE, page('Observatory', body).encode('utf-8')
+    return 200, HTML_TYPE, page('실행 통계', body).encode('utf-8')
 
 
 def route(config, target):
     parsed = urlsplit(target)
     query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
-    if parsed.path in ('/observatory', '/observatory.json', '/observatory.csv'):
+    if parsed.path in ('/run-metrics', '/run-metrics.json', '/run-metrics.csv',
+                       '/observatory', '/observatory.json', '/observatory.csv'):
         return observatory_response(config, parsed.path.rsplit('.', 1)[-1] if '.' in parsed.path else 'html')
     if parsed.path == "/":
         return overview_page(config)
@@ -1965,7 +1966,8 @@ def build_parser():
     parser.add_argument("--project", help="어댑터를 찾기 시작할 폴더 (기본: 현재 폴더)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--open", action="store_true", help="브라우저로 열기")
-    parser.add_argument("--observatory-report", help="명시한 로컬 관측 보고서만 읽기 전용 표시")
+    parser.add_argument("--run-metrics-report", "--observatory-report", dest="observatory_report",
+                        help="명시한 로컬 실행 통계 보고서만 읽기 전용 표시")
     return parser
 
 
