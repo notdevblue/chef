@@ -229,6 +229,27 @@ python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider
 Grok은 native `~/.grok/plugins/chef`의 대상과 `grok inspect`가 선택한 경로·manifest를 push 커밋과 대조한다. 이전 이름(`han`)의 등록과 이 플러그인 전용 skills 경로·링크는 백업한 뒤 등록 해제하고, 다른 스킬 설정은 보존한다. 실행 중인 Grok 세션은 다시 연다.
 `projects.json`·`local.json`은 git에 없어서 덮이지 않는다.
 
+## Autonomous Development Lab
+
+기존 미션·슬롯·가드 위에 관측, 안전한 작업 대기열, 실측 라우팅 추천과 가상 과제 평가를 제공한다.
+[구조·진행·지원 범위·CLI·검증 기록](docs/autonomous-lab.md)과
+[실제 단일/리뷰 에이전트 비교 결과](examples/lab/interval-union/README.md)를 따른다.
+새 도구는 `plugins/chef/skills/mission/scripts/`의 공통 구현을 세 런타임에서 직접 호출한다.
+미션 A/B/C, 모델 기본값, Distill 반영 권한과 대시보드 읽기 전용 계약은 유지한다.
+
+```bash
+python plugins/chef/skills/mission/scripts/observatory.py --source codex=<rollout.jsonl> --output <report.json>
+python plugins/chef/skills/slots/scripts/dashboard.py --project <project> --observatory-report <report.json>
+python plugins/chef/skills/mission/scripts/routing.py --lab-report examples/lab/interval-union/report.json --baseline single-a --output <routing.json>
+python plugins/chef/skills/mission/scripts/lab.py --root examples/lab/interval-union replay
+```
+
+후보 코드의 격리 실행은 Linux와 bubblewrap이 필요하다. Windows에서는 관측·대기열·추천과
+공통 계약 테스트를 지원하며, 격리 없는 후보 실행으로 대체하지 않는다.
+Supervisor의 실제 실행은 기존 `slots run`과 Windows Terminal 준비 조건을 따른다.
+새 테스트 환경은 `python -m pip install -r requirements-dev.txt` 후
+`python -m pytest plugins/chef -q -p no:cacheprovider`로 실행한다.
+
 ## 고친 뒤
 
 - Claude 메인 슬롯 새 세션·재개는 기본 500000토큰, Codex는 200000토큰에서 압축한다. `slots.autocompact`로 100000~1000000 사이에서 바꾼다.

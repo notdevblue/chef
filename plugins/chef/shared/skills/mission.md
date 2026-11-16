@@ -1,5 +1,10 @@
 # 미션 공통 절차
 
+실행 품질을 비교할 때는 [공통 관측·실험 안내](../../skills/mission/references/autonomous-lab.md)를 따른다. 공통 도구는
+`<plugin-root>/skills/mission/scripts/observatory.py`·`supervisor.py`·`routing.py`·`lab.py`이며,
+세 런타임에서 같은 구현을 쓴다. 이 도구의 기록·추천·평가는 아래 A/B/C 승인과 독립 검토를 대체하지 않는다.
+관측되지 않은 토큰·모델 적용·과금·크레딧은 추정하지 않는다.
+
 런타임 진입점의 실행 계약과 함께 읽는다. 경로·도구·역할·모델·로그 차이는 진입점이 정하며, 공통 단계·승인 범위·독립성·증거 요구를 바꾸지 않는다. `<mission-entry>`·`<mission-entry-runtime>`·`<mission-state>`·`<mission-state-runtime>`·`<p4-wrapper>`·`<distill-skill>`은 진입점의 실제 경로·인자로 치환한다.
 
 작업은 어댑터의 `stages` 순서로 흐른다. 기본은 컨텐츠 확인 → PoC → 구현 → 검토다.
