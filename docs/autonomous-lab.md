@@ -80,7 +80,8 @@ credit consumption is inferred from configured role names.
 
 ## Progress and resume
 
-M0–M5 implemented and locally tested. M6 integration/deployment is in progress.
+M0–M5 implemented and tested. M6 integration and Codex/Grok deployment are verified;
+Claude installation verification remains unavailable because its CLI is absent.
 The live experiment and reproducible artifacts are in
 [`examples/lab/interval-union`](../examples/lab/interval-union/README.md).
 Four independent candidates all passed 26 public and 106 holdout cases; the two
@@ -267,8 +268,7 @@ preserves sidecar identity across killed-owner recovery and retains fail-closed
 verification resource recovery. Final release tests and installation evidence
 will be recorded below.
 
-Pending: remote Windows/Linux CI and commit/push/installed-version
-evidence. No reboot or relogin has been performed;
+No reboot or relogin has been performed;
 file-backed persistence and process-level tests are distinct from those checks.
 
 The first remote matrix exposed three additional portability defects (2026-11-17):
@@ -282,3 +282,43 @@ ordinary source files. Original tests remain unchanged, and the matrix is rerun.
 The initial workflow's runner-context placement error was also corrected by
 initializing runtime homes in a running step, following
 [GitHub context availability](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability).
+
+## Release verification (2026-11-17)
+
+Version **0.4.1**, implementation/payload commit
+`2ac39b7978003a762fcd462249b821fdf79219eb`, pushed to canonical `notdevblue/chef`
+main; remote SHA equality checked. The earlier four implementation commits separate
+locking/CI, Observatory/Supervisor, Lab/routing and runtime documentation.
+
+[Full remote validation](https://github.com/notdevblue/chef/actions/runs/43892059282)
+passed all four jobs: Windows/Linux × Python 3.11/3.13. Shared contract checks and
+the complete existing/new pytest suite ran in each job; JUnit reports and step
+summaries were published. Windows exercised the real junction guard and kernel
+lock branch. Bubblewrap evaluation remains Linux-only; local real isolation and
+published experiment replay passed. A fresh `core.autocrlf=true` checkout also
+reproduced all four 106/106 holdout scores with identical code hashes. The affected
+Python 3.11 local suites passed 210 tests; the junction/slot suites passed 433 tests
+with 9 platform skips. Earlier complete local release validation is recorded above.
+
+| Deployment surface | Observed result |
+| --- | --- |
+| Codex | Marketplace registration/upgrade then add succeeded; installed 0.4.1, all 170 tracked plugin files matched pushed payload bytes. Existing model, effort, provider and profiles unchanged. No native role directory was present, so none was created. |
+| Grok | Existing native link already selected `<checkout>/plugins/chef`; no re-registration needed. Inspect confirmed 8 skills, 1 hook and the six actual role names/source paths, without watch/handoff. Manifest, skills and all shared payload files matched pushed bytes. |
+| Claude | Both required update commands failed with exit 127 (`claude: command not found`). No Claude install/cache exists in this validation environment; installation and live runtime reflection remain **unverified**. |
+| Dashboard | No pre-existing dashboard process was running. Tests started a real localhost HTTP server, read report JSON and verified POST rejection; no approval/run endpoint was added. |
+
+Open new Codex/Grok sessions to read updated skill instructions and use the common
+lock implementation; existing sessions were not restarted automatically. Verify
+hook trust in the new session. Plugin files/marketplace configuration persist on
+disk; a fresh CLI process listed the enabled Codex installation. This is not a
+reboot/relogin validation. Private installation backup/restoration instructions
+are maintained outside this public repository; no local configuration or cache
+contents were copied here.
+
+Remaining research scope is explicit: the included live-model study is one
+generation with four candidates, not a five-to-ten-generation model tournament.
+The multi-generation coordinator is tested using fixtures. Provider workers use
+existing approved orchestration rather than a new autonomous paid-launch API;
+development-agent filesystem access is an operator boundary. Native Grok usage,
+actual billing/credit counters and unrecorded development efficiency remain unknown.
+No global routing default was changed and no general quality improvement is claimed.
