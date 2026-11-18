@@ -156,6 +156,7 @@ def prose_length(text):
 def check(path, source_path="", archive_path=""):
     text = ""
     issues = []
+    record = {}
     try:
         text, record = read_document(path)
         if source_path:
@@ -179,15 +180,14 @@ def check(path, source_path="", archive_path=""):
                 else:
                     check_migration(record, text, source_path, issues)
             elif source_path.suffix.lower() == ".json":
-                if question_records.normalize_markdown(text) != question_records.normalize_markdown(source):
+                if question_records.matches_current_render(source_record, text):
+                    record = source_record
+                else:
                     issues.append("생성 Markdown이 원본 질문 JSON의 렌더 결과와 다릅니다")
             elif answer(source) != answer(text):
                 issues.append("기존 답 절이 달라졌습니다: 원문의 답과 날짜를 그대로 보존하세요")
             current_tables = schema_tables(text)
-            current_record = record
-            if not current_record and source_record and question_records.normalize_markdown(text) == question_records.normalize_markdown(source):
-                current_record = source_record
-            current_fields = current_field_blocks(current_record)
+            current_fields = current_field_blocks(record)
             current_contract = bool(current_tables or current_fields)
             source_tables = source
             if source_record:
@@ -204,7 +204,13 @@ def check(path, source_path="", archive_path=""):
             issues.append("전체 이력 보존 검사에는 --source가 필요합니다")
     except (question_records.QuestionRecordError, OSError, UnicodeError) as error:
         issues.append(f"문서 검사 실패: {error}")
-    return {"path": str(path), "prose_characters": prose_length(text), "issues": issues, "semantic_review_required": True}
+    return {
+        "path": str(path),
+        "prose_characters": prose_length(text),
+        "issues": issues,
+        "decision_review": question_records.decision_review_notes(record) if record else [],
+        "semantic_review_required": True,
+    }
 
 
 def main(argv=None):

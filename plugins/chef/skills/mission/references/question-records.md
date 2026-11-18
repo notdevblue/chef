@@ -36,7 +36,7 @@
 | `detail_blocks` | 선택. 자동으로 생성할 상세 블록. 필요할 때만 사용 |
 
 문항은 하나 이상이어야 하며 정해진 필드 외의 키는 거부한다. 문항의 선택 필드 `heading`은 기존 절 제목을 보존할 때 쓴다.
-문항 `id`는 개정 뒤에도 유지한다. `body`에는 권장·대안·남는 위험을 항목마다 한 줄 `주장 — 이유`로 쓰고 `status`에 상태를 적는다.
+문항 `id`는 개정 뒤에도 유지한다. 선택지는 `options`, 판단에 필요한 맥락은 문항 `body`, 상태는 `status`에 쓴다. 기존 자유형 질문의 권장·대안은 문항 `body`에서 렌더한다.
 새 미답 문항은 `pending`과 빈 `answer`로 만들며, `answered`·`withdrawn`에는 답·적용 범위 또는 철회 근거가 필요하다.
 `approval`은 이 문서에 추가로 남은 승인 여부다. 문항에 답했다고 미션 전체 단계가 승인되지는 않는다.
 조건부 승인은 `approval.status: pending`과 `reason`에 남은 조건을 적는다.
@@ -61,7 +61,7 @@
 
 문항은 선택적으로 `options: [{"id": "blue", "label": "Blue", "description": "설명", "impact": "영향"}]`를 갖는다.
 `id`·`label`은 필수, `description`·`impact`는 선택이다. 중복 id·알 수 없는 필드는 거부한다.
-답 갱신에 `"selected": "blue"`를 명시하면 현재 문항에도 저장하고, 답변 완료 문항의 현재 선택·설명·영향을 도구가 출력한다.
+현재 문서는 각 옵션을 `선택 이름 — 이유와 영향` 한 줄로 출력한다. 답 갱신에 `"selected": "blue"`를 명시하면 현재 문항에도 저장하고, 완료 문항의 현재 선택을 한 줄로 보여준다. 옵션 id는 JSON의 답 기록과 생성 이력에서 확인한다.
 `selected`는 존재하는 옵션 id이면서 `status: answered`일 때만 허용한다. 자유답은 기존 `answer`를 사용하고 `selected`를 생략한다.
 최초 발행에 selected를 미리 넣을 수 없다. 먼저 질문을 발행한 뒤 명시적인 답 기록으로 선택을 설정한다. 기존 schema 1의 selected 없는 답·상태 이관은 유지한다.
 도구는 답 산문에서 선택·승인을 추론하지 않는다. 같은 문항에 새 답 갱신을 할 때 `selected`를 생략하면 이전 선택도 제거한다.
@@ -122,6 +122,7 @@ python "<mission-cli>" question publish --input draft-r2.json --expect-revision 
 
 `preflight`는 publish와 같은 revision·답 원문·legacy·승인·옵션·상세 소유·출력 검사를 읽기 전용으로 실행한다.
 `--editorial`은 publish와 같은 의미다. 정본·Markdown·이력·상세·잠금을 만들지 않으며 이후 동시 변경에 대한 발행 예약은 아니다.
+미답이 5개를 넘거나 정형 선택지와 본문 선택지가 함께 있으면 `preflight`와 발행 결과에 답변 부담 확인이 나온다. 공통 검사기는 이를 `decision_review`로 반환한다. 선행 답과 함께 승인할 이유, 표·일괄 승인 안의 개별 결정은 작성자와 코디네이터가 미리보기에서 확인한다.
 실제 publish는 쓰기 잠금과 저장 직전 바이트 검사를 다시 수행한다. 사람이 의미와 승인 범위를 독립 검토하는 절차도 유지한다.
 전체 옵션은 `question patch --help`, `question preflight --help`, `question publish --help`에서 확인한다.
 
@@ -295,7 +296,7 @@ Claude·Codex의 `PreToolUse` 가드는 참여 중인 미션 세션에서 질문
 `open`·`resume`·`close` 마커는 참여 여부 판정보다 먼저 처리하며 비어 있지 않은 세션 id가 필요하다.
 `Stop` 훅은 ACTIVE를 인계하거나 기록·heartbeat를 쓰지 않는다.
 
-유효한 미답 문항과 별도 승인 대기는 검사에 통과한다. JSON 누락·손상과 생성본 불일치만 기록 문제로 다루며,
+유효한 미답 문항과 별도 승인 대기는 검사에 통과한다. 이전 표 출력이 같은 정본·이력에 정확히 일치하면 현재 검사에서도 유효하다. 대시보드 문서 보기에는 새 형식이 표시되고, `question render`는 저장된 현재 문서의 표시를 갱신한다. JSON 누락·손상과 생성본 불일치만 기록 문제로 다루며,
 훅이 질문·답을 자동 생성하거나 산문·대화 기록에서 승인 의미를 추론하지 않는다.
 Markdown에만 남은 답은 원문을 보존하고 실제 답·대상 개정을 확인한다. 현재 질문 정의·개정이 같고 답 기록만 빠졌으면
 `question answer <문서.md> --input <reply.json>`으로 원문과 `updates`를 기록한다. 누락된 문항·설계까지 복구해야 하면 위 `question restore` 절차를 따른다.

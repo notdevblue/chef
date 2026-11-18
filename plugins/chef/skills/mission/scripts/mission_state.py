@@ -1080,7 +1080,8 @@ def cmd_question_preflight(ctx, args):
     record = question_records.preflight_document(
         ctx.folder, verification.read_json(args.input), getattr(args, "expect_revision", ""), editorial=args.editorial,
     )
-    return [f"질문 발행 검사 통과: {record['id']}.md (revision {record['revision']})"]
+    return [f"질문 발행 검사 통과: {record['id']}.md (revision {record['revision']})",
+            *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record))]
 
 
 def cmd_question_publish(ctx, args):
@@ -1088,7 +1089,8 @@ def cmd_question_publish(ctx, args):
     record = question_records.publish_document(
         ctx.folder, verification.read_json(args.input), getattr(args, "expect_revision", ""), editorial=args.editorial,
     )
-    return [f"질문 저장: {record['id']}.md (revision {record['revision']})"]
+    return [f"질문 저장: {record['id']}.md (revision {record['revision']})",
+            *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record))]
 
 
 def cmd_question_answer(ctx, args):

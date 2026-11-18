@@ -10,8 +10,8 @@
       "title": "팔레트 선택",
       "body": "각 선택의 표시 효과를 비교해 주세요.",
       "options": [
-        {"id": "blue", "label": "Blue", "description": "차가운 색조", "impact": "차분한 표시"},
-        {"id": "amber", "label": "Amber", "description": "따뜻한 색조", "impact": "강조 표시"}
+        {"id": "blue", "label": "권장: 파란색", "description": "차가운 색조", "impact": "차분한 표시"},
+        {"id": "amber", "label": "대안: 호박색", "description": "따뜻한 색조", "impact": "강조 표시"}
       ],
       "status": "pending",
       "answer": ""

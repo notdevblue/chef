@@ -1,6 +1,7 @@
 """Validate and render optional, domain-neutral question document blocks."""
 
 import re
+from html import escape
 
 
 class QuestionRecordError(ValueError):
@@ -154,3 +155,13 @@ def render_options(options):
 def render_selection(item):
     option = next(option for option in item["options"] if option["id"] == item["selected"])
     return table(("문항", "선택 id", "현재 선택", "설명", "영향"), [[item["title"], option["id"], option["label"], option.get("description", ""), option.get("impact", "")]])
+
+
+def option_prose(option):
+    label = " ".join(option["label"].split())
+    details = dict.fromkeys(" ".join(option.get(key, "").split()) for key in ("description", "impact"))
+    details.pop("", None)
+    details.pop(label, None)
+    if details:
+        label += " — " + " · ".join(details)
+    return escape(label, quote=False)

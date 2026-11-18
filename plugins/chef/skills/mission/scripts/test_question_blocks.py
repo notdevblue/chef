@@ -43,13 +43,43 @@ def test_structured_blocks_and_explicit_selected_render_without_body_rewriting(t
     current = (tmp_path / "ask-palette.md").read_text(encoding="utf-8")
     assert "| A\\|B | line 1<br>line 2 |" in current
     assert "| Parent | string |  | palette.Id | Optional |" in current
+    assert "### 1. Color" in current
+    assert "- Blue — Cool · Low contrast\n- Amber" in current
+    assert "| id | 선택 |" not in current
     saved = questions.answer_document(tmp_path, "ask-palette.md", reply())
     rendered = questions.render_document(saved)
-    assert "## 현재 선택" in rendered and "| Color | blue | Blue | Cool | Low contrast |" in rendered
+    assert "## 현재 선택\n\n- Color · Blue — Cool · Low contrast" in rendered
+    assert "| 문항 | 선택 id |" not in rendered
     assert "amber" not in rendered and saved["blocks"] == original["blocks"] and saved["body"] == ""
     assert reply()["text"] not in rendered and saved["answers"] == [reply()]
     assert reply()["text"] in (tmp_path / "details/history/ask-palette.md").read_text(encoding="utf-8")
     assert not questions.inspect_document(tmp_path, "ask-palette.md", rendered)[1]
+
+
+def test_current_render_elides_exact_option_repeat_and_retains_distinct_context():
+    record = draft()
+    item = record["items"][0]
+    item["options"][0].update(label="권장: Blue", description="Cool\ncolor", impact="Cool color")
+    item["body"] = "- 권장: Blue — Cool color\n\nUse the alternate palette outdoors."
+    current = questions.render_document(record)
+    assert current.count("- 권장: Blue — Cool color") == 1
+    assert "Use the alternate palette outdoors." in current
+    assert "- Amber" in current
+    assert "본문과 options" in questions.decision_review_notes(record)[0]
+
+
+def test_existing_option_table_is_valid_until_current_document_is_regenerated(tmp_path):
+    questions.publish_document(tmp_path, draft())
+    record = questions.answer_document(tmp_path, "ask-palette.md", reply())
+    name = "ask-palette.md"
+    original = files(tmp_path)
+    old = questions.render_document(record, tabular_choices=True)
+    assert "| Color | blue | Blue | Cool | Low contrast |" in old
+    (tmp_path / name).write_bytes(old.encode("utf-8"))
+    assert not questions.inspect_document(tmp_path, name, old)[1]
+    assert questions.inspect_document(tmp_path, name, old.replace("Low contrast", "High contrast"))[1]
+    questions.render_saved_document(tmp_path, name)
+    assert files(tmp_path) == original
 
 
 @pytest.mark.parametrize("change", [

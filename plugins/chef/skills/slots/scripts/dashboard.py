@@ -1876,7 +1876,16 @@ def view_response(config, raw, embedded=False):
     text = data.decode("utf-8-sig", errors="replace")
     title = os.path.basename(real)
     if ext == ".md":
-        title = document_label(os.path.basename(real), text, "", os.path.dirname(real))
+        folder = os.path.dirname(real)
+        if ("| id | 선택 | 설명 | 영향 |" in text or "| 문항 | 선택 id | 현재 선택 |" in text) and (
+            os.path.isfile(os.path.join(folder, "mission.md")) and mission_state.auto_question_document(folder, title)
+        ):
+            try:
+                record = question_records.checked_document(folder, title, text)
+                text = question_records.render_document(record)
+            except (question_records.QuestionRecordError, OSError):
+                pass
+        title = document_label(title, text, "", folder)
         boundaries = [item.root if slots.inside_root(slots.request_realpath(item.root), real) else item.state_dir for item in locations(config)]
         root = max((root for root in boundaries if slots.inside_root(slots.request_realpath(root), real)), key=len, default=config.main)
         source_json = json.dumps(FILE_URL.sub(swap_file_link, text)).replace("<", "\\u003c")

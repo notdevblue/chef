@@ -937,6 +937,20 @@ def test_question_patch_is_standalone_and_never_loads_or_writes_mission_state(op
     assert before == {str(path): path.read_bytes() for path in opened.root.rglob("*") if path.is_file()}
 
 
+def test_question_preflight_flags_only_pending_workload_and_keeps_existing_contract(opened):
+    record = opened.question_record()
+    item = record["items"][0]
+    record["items"] = [{**item, "id": str(index), "title": f"Choice {index}"} for index in range(1, 7)]
+    record["items"][-1].update(status="withdrawn", answer="Deferred.")
+    draft = opened.json_input("decision-review.json", record)
+    assert "답변 부담 확인" not in opened.ok("question", "preflight", "--input", draft)
+    record["items"][-1].update(status="pending", answer="")
+    draft = opened.json_input("decision-review.json", record)
+    report = opened.ok("question", "preflight", "--input", draft)
+    assert "검사 통과" in report and "미답 6문항" in report
+    assert "미답 6문항" in opened.ok("question", "publish", "--input", draft)
+
+
 def test_question_preflight_matches_publish_checks_without_lock_or_side_effects(opened, monkeypatch):
     saved = opened.publish_question(statuses=("answered",))
     revised = {**saved, "revision": 2, "body": "Reworded fictional contract."}

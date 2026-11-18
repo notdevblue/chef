@@ -282,6 +282,28 @@ def test_view_renders_markdown_text_and_images(world):
     assert (status, content_type, body) == (200, "image/png", b"\x89PNG\r\n")
 
 
+def test_view_updates_verified_tabular_questions_without_changing_raw_files(world):
+    folder = world.mission("slot1", "choice-review")
+    name = "ask-1.md"
+    write_question(folder, name, "Palette", [("Choose a color", "pending")])
+    record = question_records.read_document(folder, name)
+    record["revision"] += 1
+    record["items"][0]["options"] = [{"id": "blue", "label": "Blue", "impact": "Higher contrast."}]
+    question_records.publish_document(folder, record, 1)
+    old = question_records.render_document(record, tabular_choices=True).encode("utf-8")
+    path = folder / name
+    path.write_bytes(old)
+    view = dashboard.view_url(path)
+    source = detail_dom(world.get(view)[1]).elements("script", id="source")[0]
+    assert "- Blue — Higher contrast." in json.loads(source.text())
+    assert b"| id |" in dashboard.route(world.config, dashboard.raw_url(path))[2]
+    assert path.read_bytes() == old
+    path.write_bytes(old.replace(b"Higher contrast.", b"Edited outside publication."))
+    source = detail_dom(world.get(view)[1]).elements("script", id="source")[0]
+    assert "| Blue |" in json.loads(source.text())
+    assert "- Blue — Higher contrast." not in json.loads(source.text())
+
+
 def test_broken_files_do_not_break_the_overview(world):
     folder = world.mission("slot1", "broken-1")
     (folder / "units.tsv").write_text("엉터리 헤더\nM1\t하나\n", encoding="utf-8")

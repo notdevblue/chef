@@ -10,8 +10,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from question_summary import QuestionItem, QuestionSummary
-from question_blocks import QuestionRecordError, validate_blocks, validate_options, render_blocks, render_options, render_selection
+from question_summary import QuestionItem, QuestionSummary, markdown_lines
+from question_blocks import (
+    QuestionRecordError, option_prose, render_blocks, render_options, render_selection,
+    validate_blocks, validate_options,
+)
 
 
 DOCUMENT_ID = re.compile(r"(?:ask|confirm)-[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -24,6 +27,7 @@ DOCUMENT_FIELDS = ("schema", "id", "revision", "title", "intro", "items", "body"
 ITEM_FIELDS = ("id", "title", "body", "status", "answer")
 UPDATE_FIELDS = ("id", "status", "answer")
 ANSWER_FIELDS = ("schema", "id", "revision", "at", "text", "updates")
+CHOICE_LEAD = re.compile(r"^\s*(?:[-*+]\s+)?\**(?:권장|대안)(?:\s+[\w-]+)?\**\s*[:：·—]")
 
 
 def validate_identifier(value, label, pattern=RECORD_ID):
@@ -228,8 +232,30 @@ def item_heading(item):
     return f"{item['id']}. {title}"
 
 
-def render_document(record, *, legacy_layout=False):
+def unmatched_options(item):
+    body_lines = {line.strip() for line in markdown_lines(item["body"])}
+    return [line for option in item.get("options", [])
+            if (line := f"- {option_prose(option)}") not in body_lines and line[2:] not in body_lines]
+
+
+def decision_review_notes(record):
+    """Flag review workload and overlapping choice prose without changing approval status."""
+    pending = [item for item in record["items"] if item["status"] == "pending"]
+    notes = []
+    if len(pending) > 5:
+        notes.append(f"미답 {len(pending)}문항: 이번에 답해야 할 선행 결정부터 묻고, "
+                     "함께 승인해야 하는 이유와 표·묶음 승인 안의 개별 판단 수를 확인하세요.")
+    for item in pending:
+        if item.get("options") and any(CHOICE_LEAD.match(line) for line in markdown_lines(item["body"])):
+            notes.append(f"문항 {item['id']}: 본문과 options에 선택지가 있습니다. "
+                         "선택과 영향은 한 번만 쓰고 본문에는 판단에 필요한 맥락을 남기세요.")
+    return notes
+
+
+def render_document(record, *, legacy_layout=False, tabular_choices=False):
     record = validate_document(record)
+    old_choices = legacy_layout or tabular_choices
+    number_items = all(not item["id"].isdecimal() and "heading" not in item for item in record["items"])
     summary = summarize_document(record)
     approval = record["approval"]
     status = "답변 완료"
@@ -244,22 +270,34 @@ def render_document(record, *, legacy_layout=False):
         sections.append(record["intro"])
     if summary.pending_count or legacy_layout:
         sections.append("## 결정할 것")
-    for item in record["items"]:
+    for number, item in enumerate(record["items"], 1):
         if item["status"] != "pending":
             continue
         heading = item_heading(item)
+        if not old_choices and number_items and "options" in item:
+            heading = f"{number}. {item['title']}"
         sections.append(f"### {heading}")
         if item["body"]:
             sections.append(item["body"])
-        if "options" in item:
+        if old_choices and "options" in item:
             sections.append(render_options(item["options"]))
-        sections.append(f"- 상태: {STATUS_LABELS[item['status']]}")
+        elif "options" in item and (choices := unmatched_options(item)):
+            sections.append("\n".join(choices))
+        if old_choices or "options" not in item:
+            sections.append(f"- 상태: {STATUS_LABELS[item['status']]}")
         if item["answer"]:
             sections.extend(["답 내용:", item["answer"]])
     selected = [item for item in record["items"] if "selected" in item]
     if selected:
         sections.append("## 현재 선택")
-        sections.extend(render_selection(item) for item in selected)
+        if old_choices:
+            sections.extend(render_selection(item) for item in selected)
+        else:
+            choices = []
+            for item in selected:
+                option = next(option for option in item["options"] if option["id"] == item["selected"])
+                choices.append(f"- {item['title']} · {option_prose(option)}")
+            sections.append("\n".join(choices))
     if "blocks" in record:
         sections.append(render_blocks(record["blocks"]))
     elif record["body"]:
@@ -391,20 +429,31 @@ def normalize_markdown(text):
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def matches_current_render(record, text):
+    if not isinstance(text, str):
+        return False
+    text = normalize_markdown(text)
+    return (text == normalize_markdown(render_document(record))
+            or text == normalize_markdown(render_document(record, tabular_choices=True))
+            or text == normalize_markdown(render_document(record, legacy_layout=True)))
+
+
+def checked_document(folder, name, text_snapshot):
+    record = read_document(folder, name)
+    contained_path(folder, name)
+    if not matches_current_render(record, text_snapshot):
+        raise QuestionRecordError(f"생성 Markdown과 질문 JSON 불일치: {name}")
+    validate_history_archive(history_path(folder, name), record)
+    if record.get("detail_blocks"):
+        detail = contained_path(folder, "details", name)
+        if detail.read_bytes() != render_detail_document(record).encode("utf-8"):
+            raise QuestionRecordError(f"생성 상세와 질문 JSON 불일치: {name}")
+    return record
+
+
 def inspect_document(folder, name, text_snapshot):
     try:
-        record = read_document(folder, name)
-        contained_path(folder, name)
-        if not isinstance(text_snapshot, str) or normalize_markdown(text_snapshot) not in (
-            normalize_markdown(render_document(record)), normalize_markdown(render_document(record, legacy_layout=True)),
-        ):
-            raise QuestionRecordError(f"생성 Markdown과 질문 JSON 불일치: {name}")
-        validate_history_archive(history_path(folder, name), record)
-        if record.get("detail_blocks"):
-            detail = contained_path(folder, "details", name)
-            if detail.read_bytes() != render_detail_document(record).encode("utf-8"):
-                raise QuestionRecordError(f"생성 상세와 질문 JSON 불일치: {name}")
-        return summarize_document(record), ""
+        return summarize_document(checked_document(folder, name, text_snapshot)), ""
     except (QuestionRecordError, OSError) as error:
         return QuestionSummary(name, name, [], False, False, False), str(error)
 
