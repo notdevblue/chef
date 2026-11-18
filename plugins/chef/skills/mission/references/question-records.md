@@ -14,9 +14,9 @@
 - 이전 개정: `<미션>/questions/history/<id>/<revision>.json`
 
 정본과 생성본을 직접 편집하지 않는다. 작성자는 정본 밖의 draft JSON과 상세를 쓰고 코디네이터가 발행한다.
-생성본 상태 머리글·남은 질문·전체 이력 링크는 CLI가 만들고 문서 `body`는 그대로 출력한다. 완료 문항의 답을 현재 문서에 다시 생성하지 않는다. 사람용 Markdown 양식·예시는 작성자가 채울 산문의 문체·순서·승인 범위에만 참고한다.
+생성본 상태 머리글·남은 질문·전체 이력 링크는 CLI가 만들고 문서 `body` 또는 정형 `blocks`를 출력한다. 완료 문항의 답 원문은 현재 문서에 다시 생성하지 않고, 명시 selected의 현재 선택만 표시한다. 사람용 Markdown 양식·예시는 작성자가 채울 산문의 문체·순서·승인 범위에만 참고한다.
 현재 문서에는 현재 목적·남은 질문과 선택지/영향·최신 승인 대상 한 벌·승인 범위와 제외 조건을 둔다.
-끝난 문항의 실제 현재 선택·유효 조건은 작성자가 문서 `body`에 간결히 쓴다. 다른 절에서 명확하면 별도 `## 현재 결과`로 반복하지 않는다. 답 원문·옛 선택지·폐기 표·변경 일지는 생성 이력과 기존 개정 보관으로 연결한다.
+끝난 정형 문항의 현재 선택은 selected에서 생성한다. 자유답의 현재 유효 조건은 작성자가 문서 `body` 또는 `blocks`에 간결히 쓴다. 다른 절에서 명확하면 별도 `## 현재 결과`로 반복하지 않는다. 답 원문·옛 선택지·폐기 표·변경 일지는 생성 이력과 기존 개정 보관으로 연결한다.
 예시의 사실·선택지·승인을 새 질문으로 가져오지 않는다.
 
 정본 `schema: 1`의 필드는 다음과 같다.
@@ -32,12 +32,98 @@
 | `approval` | `status: none\|pending\|complete`, `reason`. `pending`이면 남은 조건을 반드시 적음 |
 | `answers` | 사용자 원문·대상 개정·문항 갱신의 누적 이력 |
 | `legacy_markdown` | 기존 질문을 전환할 때 보존하는 원문. 선택 필드 |
+| `blocks` | 선택. 문단·표·필드 정의를 한 번 작성해 현재 본문과 이력으로 렌더. 존재하면 `body`는 빈 문자열 |
+| `detail_blocks` | 선택. 자동으로 생성할 상세 블록. 필요할 때만 사용 |
 
 문항은 하나 이상이어야 하며 정해진 필드 외의 키는 거부한다. 문항의 선택 필드 `heading`은 기존 절 제목을 보존할 때 쓴다.
 문항 `id`는 개정 뒤에도 유지한다. `body`에는 권장·대안·남는 위험을 항목마다 한 줄 `주장 — 이유`로 쓰고 `status`에 상태를 적는다.
 새 미답 문항은 `pending`과 빈 `answer`로 만들며, `answered`·`withdrawn`에는 답·적용 범위 또는 철회 근거가 필요하다.
 `approval`은 이 문서에 추가로 남은 승인 여부다. 문항에 답했다고 미션 전체 단계가 승인되지는 않는다.
 조건부 승인은 `approval.status: pending`과 `reason`에 남은 조건을 적는다.
+
+## 정형 블록과 명시 선택
+
+기존 schema 1의 `body`만 있는 문서는 같은 방식으로 렌더한다. 정형 문서는 [정형 초안](templates/question-structured.json)을 쓴다.
+`blocks`가 있으면 자유형 문서 `body`를 함께 작성할 수 없다. `intro`와 문항 `body`는 짧은 안내에 사용하고 표·계약을 복제하지 않는다.
+블록마다 `id`와 `type`이 필수이며 `title`은 선택인 한 줄 제목이다. 아래 키 외의 필드는 거부한다.
+
+| type | 필수 내용 | 의미 |
+| --- | --- | --- |
+| `paragraph` | `text` 문자열 | Markdown 문단 |
+| `table` | `columns`: 비어 있지 않은 문자열 배열, `rows`: 문자열 행 배열 | 열 수와 행의 칸 수가 같아야 함 |
+| `fields` | `fields`: 비어 있지 않은 정의 배열 | 정의는 `name`, `type` 문자열 필수, `key`, `ref`, `description` 문자열 선택 |
+
+블록·선택지 id와 필드 name은 영문자·숫자로 시작하며 영문자·숫자·밑줄·하이픈만 쓴다.
+블록 id는 `blocks`·`detail_blocks`를 합쳐 고유해야 하고 필드 name은 같은 블록 안에서 고유해야 한다.
+필드 `ref`는 같은 문서의 실제 필드를 `블록id.필드name`으로 가리킨다. 외부 경로·코드·표현식을 실행하지 않는다.
+`key`와 `type`은 작성자의 일반 문자열이며 특정 저장소·도메인의 정책으로 해석하지 않는다.
+표의 `|`·역슬래시·줄바꿈·HTML 문자는 렌더러가 이스케이프한다. JSON 안에 Markdown 표를 따로 만들지 않는다.
+
+문항은 선택적으로 `options: [{"id": "blue", "label": "Blue", "description": "설명", "impact": "영향"}]`를 갖는다.
+`id`·`label`은 필수, `description`·`impact`는 선택이다. 중복 id·알 수 없는 필드는 거부한다.
+답 갱신에 `"selected": "blue"`를 명시하면 현재 문항에도 저장하고, 답변 완료 문항의 현재 선택·설명·영향을 도구가 출력한다.
+`selected`는 존재하는 옵션 id이면서 `status: answered`일 때만 허용한다. 자유답은 기존 `answer`를 사용하고 `selected`를 생략한다.
+최초 발행에 selected를 미리 넣을 수 없다. 먼저 질문을 발행한 뒤 명시적인 답 기록으로 선택을 설정한다. 기존 schema 1의 selected 없는 답·상태 이관은 유지한다.
+도구는 답 산문에서 선택·승인을 추론하지 않는다. 같은 문항에 새 답 갱신을 할 때 `selected`를 생략하면 이전 선택도 제거한다.
+
+`detail_blocks`가 비어 있지 않으면 `details/<id>.md`와 현재 문서의 상세 링크를 자동 생성한다.
+기존 상세를 교체하려면 이전 정본에 자동 상세 정의가 있고 파일 바이트가 그 정본에서 만든 출력과 정확히 같아야 한다.
+생성 마커만 붙인 수동 파일이나 사람이 편집한 자동 상세는 거부한다. 별도 수동 상세가 있으면 자동 상세를 켜기 전에 사람이 위치를 정한다.
+자동 상세가 없어진 개정은 소유가 확인된 기존 자동 상세만 제거한다. 수동 상세는 그대로 둔다.
+저장 오류는 JSON·현재 Markdown·개정 snapshot·생성 이력·자동 상세에서 이번 실행이 쓴 바이트를 원복한다.
+외부 변경은 덮어쓰지 않고 롤백 확인 필요 오류를 반환한다. 프로세스 강제 종료까지 원자적으로 보장하지는 않는다.
+
+## 작은 변경과 발행 전 검사
+
+`question patch`는 유효한 draft와 변경 JSON을 받아 새 draft JSON만 stdout에 출력한다. 어댑터·미션 없이도 실행하며 정본·이력에 쓰지 않는다.
+revision은 자동으로 올리지 않는다. 실제 개정이면 `set.revision`에 새 값을 명시하고 발행 때 현재 revision을 검사한다.
+
+```json
+{
+  "set": {"revision": 2, "title": "팔레트 선택"},
+  "upsert_blocks": [{"id": "scope", "type": "paragraph", "text": "최신 적용 범위"}],
+  "request_approval": {"reason": "바뀐 적용 범위를 확인해 주세요."}
+}
+```
+
+허용하는 최상위 변경 키는 다음뿐이다. 임의 경로·Python·코드·JSON Pointer 연산은 받지 않는다.
+
+| 키 | 입력·효과 |
+| --- | --- |
+| `set` | `revision`, `title`, `intro`, `body` 중 바꿀 필드만 지정 |
+| `upsert_items` | `id`, `title`, `body` 필수와 `heading`, `options` 선택으로 문항 정의 전체를 추가·교체. 기존 답·상태·선택 보존, 새 문항은 pending/빈 answer |
+| `remove_items` | 제거할 문항 id 배열 |
+| `reopen_items` | 명시적으로 다시 물을 문항 id 배열. pending/빈 answer로 바꾸고 selected 제거. 원래 answers 보존 |
+| `upsert_blocks`, `upsert_detail_blocks` | 블록 정의 전체 배열. 같은 id는 제자리 교체, 새 id는 끝에 추가 |
+| `remove_blocks`, `remove_detail_blocks` | 제거할 블록 id 배열. 마지막 본문 블록 제거 시 blocks 필드도 제거하여 body 방식으로 돌아갈 수 있음 |
+| `request_approval` | 비어 있지 않은 `reason`만 받음. 별도 승인을 pending으로 명시 요청 |
+
+`schema`, 문서 `id`, `answers`, `legacy_markdown` 직접 변경과 approval none/complete 설정은 patch로 할 수 없다.
+문항 upsert에 `status`, `answer`, `selected`를 끼워 넣어도 거부한다. 선택 답은 `question answer`로 기록한다.
+같은 작업에서 한 id를 중복 upsert/remove하거나 없는 id를 remove/reopen하면 거부한다.
+patch는 승인 의미를 추론하지 않는다. 일반 patch에서 기존 문항 정의가 바뀌면 현재 상태와 관계없이 `reopen_items`에 해당 id를 명시한다. 같은 정의의 upsert와 새 문항에는 필요하지 않다.
+의미가 같은 문체 변경은 `question patch --editorial`로 기존 답을 보존한 draft를 만들고 `preflight`·`publish`에도 `--editorial`을 명시한다. patch 결과에도 기존 발행의 editorial 보호 검사를 적용하므로 옵션·선택·답·상태·이력·승인 상태·table/fields 구조를 바꿀 수 없다.
+실제 질문 정의·옵션 변경이면 일반 patch의 `reopen_items`로 다시 묻는다. 전체 범위 변경에 기존 해결 문항을 유지하면 `request_approval`도 명시한다.
+
+```sh
+python "<mission-cli>" question patch --input draft.json --changes changes.json > draft-r2.json
+python "<mission-cli>" question preflight --input draft-r2.json --expect-revision 1
+python "<mission-cli>" question preview --input draft-r2.json > preview.md
+python "<mission-cli>" question publish --input draft-r2.json --expect-revision 1
+```
+
+문체만 바꾸는 경우는 같은 명령 흐름에 의도를 명시한다.
+
+```sh
+python "<mission-cli>" question patch --input draft.json --changes wording.json --editorial > draft-r2.json
+python "<mission-cli>" question preflight --input draft-r2.json --expect-revision 1 --editorial
+python "<mission-cli>" question publish --input draft-r2.json --expect-revision 1 --editorial
+```
+
+`preflight`는 publish와 같은 revision·답 원문·legacy·승인·옵션·상세 소유·출력 검사를 읽기 전용으로 실행한다.
+`--editorial`은 publish와 같은 의미다. 정본·Markdown·이력·상세·잠금을 만들지 않으며 이후 동시 변경에 대한 발행 예약은 아니다.
+실제 publish는 쓰기 잠금과 저장 직전 바이트 검사를 다시 수행한다. 사람이 의미와 승인 범위를 독립 검토하는 절차도 유지한다.
+전체 옵션은 `question patch --help`, `question preflight --help`, `question publish --help`에서 확인한다.
 
 ## 처음 발행하기
 
@@ -69,6 +155,8 @@ python "<mission-cli>" question check
 자동 보존 검사는 JSON 초안과 이전 JSON 또는 최초 이관 Markdown을 비교한다. 과거 표를 정리할 때 생성 이력이 정본·보관 개정과 정확히 일치하는지도 확인한다.
 현재 본문에는 최신 승인 대상의 컬럼·타입·키·제약 또는 요청·응답이 직접 있어야 한다. 이력 보관은 이 표·계약을 변경점만으로 대체할 근거가 아니다.
 원문에 스키마 표가 있는데 현재 문서에 하나도 없으면 이력 보관과 무관하게 검사를 통과하지 못한다. 어떤 표가 최신 한 벌인지와 컬럼·조건의 일치는 작성자·별도 검토자가 의미를 대조한다.
+정형 문서에서는 본문 `blocks`의 fields를 현재 정의로 검사하고 상세 `detail_blocks`는 현재 승인 본문으로 세지 않는다.
+기존 한국어 표의 이름·타입·키·참조·설명처럼 확인 가능한 컬럼은 실제 fields 값과 대조한다. 대응을 증명할 수 없는 표의 교체는 검증된 이력과 현재 정의를 요구하며 의미 검토도 유지한다.
 발행된 문서를 고쳐야 하면 생성본을 편집하지 말고 초안으로 돌아간다. 자동 표시 자체는 검토·공유·승인 증거가 아니다.
 
 ## 답을 받는 즉시 기록하기
@@ -106,7 +194,7 @@ python "<mission-cli>" question check
 
 `question answer` 한 번으로 원문 이력·문항 상태·문서의 추가 승인 상태와 생성본을 함께 갱신한다.
 부분 답도 전체 해결까지 미루지 않는다. 상태·답 원문 이력은 이 호출로 보존하며 현재 문서에 완료 답을 재출력하지 않는다.
-현재 선택·유효 조건이 본문에 없거나 달라졌으면 작성자가 정본 밖의 초안에서 문서 `body`를 고친 뒤 검토·문체 개정 절차로 발행한다. `권장안대로`나 합동답 원문을 반복하지 않고 실제 선택을 쓴다. 다른 절에 이미 명확하면 별도 요약은 만들지 않는다.
+정형 옵션의 현재 선택은 명시 selected에서 자동 표시하므로 본문을 수동 갱신하지 않는다. 자유답의 현재 유효 조건이 본문에 없거나 달라졌으면 작성자가 정본 밖의 초안에서 문서 `body` 또는 `blocks`를 고친 뒤 검토·문체 개정 절차로 발행한다. `권장안대로`나 합동답 원문을 반복하지 않고 실제 선택을 쓴다. 다른 절에 이미 명확하면 별도 요약은 만들지 않는다.
 `items`·`answers`·상태·승인 범위는 바꾸지 않고 원문·날짜·대상 개정은 전체 이력에서 확인한다. 상세에는 현재 승인 근거·적용 범위와 생성 이력의 위치를 연결한다. 미션 전체 승인 조건이 충족됐는지는 코디네이터가 별도로 확인한다.
 
 ## 개정과 복구
@@ -127,12 +215,13 @@ python "<mission-cli>" question check
 - 내용 개정은 입력 `revision`을 현재보다 크게 하고 `--expect-revision`에 현재 값을 준다.
   초안·상세는 현재 상태로 고쳐 검토한 뒤 발행하며 이전 개정은 history에 남긴다. 기존 `answers` 이력은 앞부분 그대로 유지하고 legacy 원문도 보존한다.
   현재 문서에 과거 버전·답 원문을 덧붙이지 않는다. 생성 이력은 CLI가 정본과 보관 개정에서 만들고, 상세의 옛 근거·폐기 표는 기존 보관 위치로 연결한다.
-- 일반 개정에서 문항의 `title`·`body`·`heading`을 바꾸면 그 문항은 `pending` 또는 명시적 `withdrawn`으로 둔다.
-  바뀐 질문의 답을 이전 승인에서 가져오지 않고 새 개정에서 `question answer`로 기록한다.
-- `intro`·문서 `body`의 전체 계약이 바뀌었는데 해결된 문항을 유지하려면 문서 `approval.status`를 `pending`으로 두고
+- 일반 개정에서 문항의 `title`·`body`·`heading`·`options`를 바꾸면 그 문항을 `pending`·빈 `answer`·selected 없음으로 다시 연다. patch에서는 해당 id를 `reopen_items`에 명시한다.
+  이전 상태가 answered 또는 withdrawn이어도 이전 답·철회 사유를 새 정의에 승계하지 않는다. 원래 답 이력은 보존하고 새 개정에서 `question answer`로 기록한다.
+- `intro`·문서 `body`·`blocks`·`detail_blocks`의 전체 계약이 바뀌었는데 해결된 문항을 유지하려면 문서 `approval.status`를 `pending`으로 두고
   `reason`에 남은 확인 이유·범위를 적는다. 개별 답을 유지한 것과 바뀐 전체 계약을 승인한 것은 다르다.
 - 문체만 바꾸고 의미·승인 범위가 같으면 `question publish --input draft-r2.json --expect-revision 1 --editorial`로 명시한다.
   기존 문서의 개정에만 쓸 수 있고 문항 id 집합·상태·`answer`, 문서 `approval.status`·`answers`는 바꿀 수 없다.
+  `options`·`selected`도 그대로 보존한다. `blocks`·`detail_blocks`의 table/fields 내용은 제목을 제외하고 같아야 한다. 문단·제목 표현은 의미가 같을 때만 고친다.
   `approval.reason`은 같은 승인 범위·남은 조건의 현재 설명으로 고칠 수 있다. 원문은 답 이력·개정 보관에 남기며, 조건의 추가·삭제나 승인 변경은 문체 개정이 아니다.
   개정 증가·현재 개정 확인 규칙은 같다. 의미 변경을 `--editorial`로 포장하지 않는다.
 - 답 기록은 질문 개정을 올리지 않는다. 답이 끝난 ask에 새 결정을 덧붙이지 않고 다음 ask로 묻는다.
@@ -158,15 +247,16 @@ python "<mission-cli>" question check
 - 기존 JSON과 Markdown이 모두 있어야 한다. 입력의 문서 id와 revision은 현재 정본과 같아야 하며, 과거 답의 `revision`·`at`·`text`는 실제 기록대로 유지한다.
   현재 개정으로 날짜나 승인 대상을 다시 붙이지 않는다. JSON 누락·손상의 자동 복구에는 쓰지 않는다.
 - `--source`에는 저장한 원본 Markdown을 준다. 실행 시 현재 Markdown과 바이트 단위로 같아야 하며 줄바꿈·BOM 차이도 거부한다.
-  `--expect-revision`과 `--expect-sha256`은 현재 JSON 개정과 원본 바이트의 SHA256이다. CLI는 기존 미션 쓰기 잠금 안에서 검사하고 백업 뒤에도 JSON·현재 문서·생성 이력 세 파일의 바이트와 이력의 기존 존재 여부를 다시 대조한다.
+  `--expect-revision`과 `--expect-sha256`은 현재 JSON 개정과 원본 바이트의 SHA256이다. CLI는 기존 미션 쓰기 잠금 안에서 검사하고 백업 뒤에도 JSON·현재 문서·생성 이력과 관리 중인 자동 상세의 바이트·기존 존재 여부를 다시 대조한다.
 - 기존 문항 id는 모두 유지한다. 기존 `answers`는 내용·순서가 정확히 같은 앞부분으로 유지하고 `legacy_markdown`의 존재와 원문도 바꾸지 않는다.
   추가하는 각 답의 원문은 근거 Markdown에 있어야 한다. 이 대조에서만 줄바꿈을 통일하고 앞뒤 공백을 제거한다.
-- 추가 이력을 순서대로 적용한 결과가 최종 문항 상태·답·approval과 일치해야 한다. 새 해결 문항, 기존 답의 변경·철회·대기 복귀와 승인 상태 변경에는 대응하는 추가 이력이 필요하다.
+- 추가 이력을 순서대로 적용한 결과가 최종 문항 상태·답·selected·approval과 일치해야 한다. 새 해결 문항, 기존 답·선택의 변경·철회·대기 복귀와 승인 상태 변경에는 대응하는 추가 이력이 필요하다.
   문자열 포함 검사는 사실·날짜·대상·승인 의미의 진위를 판정하지 않으므로 독립 검토가 필요하다. 기존 `publish`·`answer`의 개정·답 보호 규칙은 그대로다.
 - `<미션>/questions/history/<id>/recovery/<UTC시각>-<고유id>/`에 `before.json`·`before.md` 원본 바이트와 `input.json` 검토 입력,
   생성될 `after.json`·`after.md`, 생성 이력의 `before-history.md`·`after-history.md`, `receipt.json`을 보존한다. 영수증에는 수리 시각·문서 개정·각 파일 SHA256·기존 이력의 존재 여부(`before_history_existed`)와 `prepared`·`complete`·`rolled_back`·`rollback_failed` 상태가 남는다.
+  자동 상세가 대상이면 `before-detail.md`·`after-detail.md`와 `before_detail_existed`·`after_detail_existed`도 보존한다. 수동 상세 보호는 발행과 같다.
   기존 복구 폴더를 덮어쓰지 않는다. 원본을 온전히 보존하므로 미션의 비공개 자료와 같은 경계로 취급한다.
-- 검증·전제 조건 실패 시 JSON·현재 문서·생성 이력을 쓰지 않는다. 저장 도중 실패하면 백업을 유지하고 세 파일 중 이 실행이 쓴 내용만 원본 바이트로 되돌린다. 처음 없던 생성 이력은 이 실행이 쓴 바이트와 같을 때 제거한다.
+- 검증·전제 조건 실패 시 JSON·현재 문서·생성 이력·자동 상세를 쓰지 않는다. 저장 도중 실패하면 백업을 유지하고 대상 중 이 실행이 쓴 내용만 원본 바이트로 되돌린다. 처음 없던 생성 이력·자동 상세는 이 실행이 쓴 바이트와 같을 때 제거한다.
   외부 변경이나 저장 오류로 롤백하지 못하면 백업 위치와 확인 필요 오류를 보고한다. 프로세스 강제 종료 때에는 `prepared` 영수증과 원본을 대조해 수동 확인한다.
 - 성공 뒤 같은 명령의 재시도는 이전 SHA256이 맞지 않아 거부된다. 이미 현재 정본과 같은 입력도 새 복구 없이 거부한다. `question check`로 완료를 확인한다.
 

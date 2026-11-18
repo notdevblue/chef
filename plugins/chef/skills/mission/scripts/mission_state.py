@@ -1066,6 +1066,23 @@ def cmd_question_preview(ctx, args):
     return [question_records.render_document(record).rstrip("\n")]
 
 
+def cmd_question_patch(ctx, args):
+    """Apply bounded changes to a draft and print JSON; never publish or execute code."""
+    record = question_records.patch_document(
+        verification.read_json(args.input), verification.read_json(args.changes), editorial=args.editorial,
+    )
+    return [json.dumps(record, ensure_ascii=False, indent=2)]
+
+
+def cmd_question_preflight(ctx, args):
+    """Run publication and output-ownership checks without writes or a mission lock."""
+    require_folder(ctx)
+    record = question_records.preflight_document(
+        ctx.folder, verification.read_json(args.input), getattr(args, "expect_revision", ""), editorial=args.editorial,
+    )
+    return [f"질문 발행 검사 통과: {record['id']}.md (revision {record['revision']})"]
+
+
 def cmd_question_publish(ctx, args):
     require_folder(ctx)
     record = question_records.publish_document(
@@ -1215,6 +1232,16 @@ def build_parser():
     question = sub.add_parser("question").add_subparsers(dest="action", required=True)
     preview = leaf(question, "preview", cmd_question_preview)
     preview.add_argument("--input", required=True)
+    patch = leaf(question, "patch", cmd_question_patch)
+    patch.description = "제한된 draft 변경 JSON을 적용해 stdout JSON 출력. 정본·이력·revision 자동 변경 없음."
+    patch.add_argument("--input", required=True, help="유효한 질문 draft JSON")
+    patch.add_argument("--changes", required=True, help="set/upsert/remove/reopen_items/request_approval 변경 JSON")
+    patch.add_argument("--editorial", action="store_true", help="기존 답·선택·승인 범위를 보존하는 문체 patch")
+    question_preflight = leaf(question, "preflight", cmd_question_preflight)
+    question_preflight.description = "publish와 같은 개정·승인·답 보존·상세 소유 검사를 읽기 전용 실행."
+    question_preflight.add_argument("--input", required=True)
+    question_preflight.add_argument("--expect-revision", type=int, default=argparse.SUPPRESS)
+    question_preflight.add_argument("--editorial", action="store_true")
     publish = leaf(question, "publish", cmd_question_publish)
     publish.add_argument("--input", required=True)
     publish.add_argument("--expect-revision", type=int, default=argparse.SUPPRESS)
@@ -1310,8 +1337,8 @@ def main(argv=None, runtime="claude"):
             args = build_parser().parse_args(argv)
         except SystemExit:
             return OK
-        if args.handler == cmd_inspect:
-            for line in cmd_inspect({}, args):
+        if args.handler in (cmd_inspect, cmd_question_patch):
+            for line in args.handler({}, args):
                 print(line)
             return OK
         runtime = getattr(args, "runtime", None) or runtime
@@ -1336,7 +1363,7 @@ def main(argv=None, runtime="claude"):
             raise StateError(f"미션 id 형식 오류: {mission_id}")
         readonly = args.handler in (
             cmd_status, cmd_context, cmd_transcripts, cmd_unit_list, cmd_review_scope, cmd_document_list, cmd_active,
-            cmd_question_preview, cmd_question_show, cmd_question_check,
+            cmd_question_preview, cmd_question_show, cmd_question_check, cmd_question_preflight,
             cmd_preflight, cmd_schema, cmd_brief, cmd_handoff, cmd_reference_show, cmd_reference_check,
         )
         lock_name = mission_id

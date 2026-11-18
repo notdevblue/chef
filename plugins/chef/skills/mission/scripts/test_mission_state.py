@@ -911,6 +911,47 @@ def test_question_preview_show_and_check_are_readonly(opened, monkeypatch):
     assert opened.ok("question", "check") == "질문 기록 정상: 1개"
 
 
+@pytest.mark.parametrize("editorial", [False, True])
+def test_question_patch_is_standalone_and_never_loads_or_writes_mission_state(opened, monkeypatch, editorial):
+    record = opened.question_record(statuses=("answered",))
+    draft = opened.json_input("draft-patch.json", record)
+    change_input = {"set": {"title": "Fictional wording", "revision": 2}}
+    expected = {**record, "title": "Fictional wording", "revision": 2}
+    if editorial:
+        definition = {key: value for key, value in record["items"][0].items() if key not in ("status", "answer")}
+        definition["body"] = "Reworded fictional choice."
+        change_input["upsert_items"] = [definition]
+        expected["items"] = [{**record["items"][0], "body": definition["body"]}]
+    changes = opened.json_input("changes-patch.json", change_input)
+    before = {str(path): path.read_bytes() for path in opened.root.rglob("*") if path.is_file()}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("pure patch must not access mission infrastructure")
+
+    monkeypatch.setattr(mission_state.slots, "locate", forbidden)
+    monkeypatch.setattr(mission_state.slots, "FileLock", forbidden)
+    monkeypatch.setattr(mission_state.mission_guard, "read_active", forbidden)
+    options = ["--editorial"] if editorial else []
+    result = json.loads(opened.ok("question", "patch", "--input", draft, "--changes", changes, *options))
+    assert result == expected
+    assert before == {str(path): path.read_bytes() for path in opened.root.rglob("*") if path.is_file()}
+
+
+def test_question_preflight_matches_publish_checks_without_lock_or_side_effects(opened, monkeypatch):
+    saved = opened.publish_question(statuses=("answered",))
+    revised = {**saved, "revision": 2, "body": "Reworded fictional contract."}
+    draft = opened.json_input("preflight.json", revised)
+    before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in opened.root.rglob("*") if path.is_file()}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("read-only preflight must not create a lock")
+
+    monkeypatch.setattr(mission_state.slots, "FileLock", forbidden)
+    assert "approval" in opened.fail("question", "preflight", "--input", draft, "--expect-revision", "1")
+    assert "검사 통과" in opened.ok("question", "preflight", "--input", draft, "--expect-revision", "1", "--editorial")
+    assert before == {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in opened.root.rglob("*") if path.is_file()}
+
+
 def test_question_cli_publish_answer_and_render_preserve_verbatim_answer_and_headers(opened, monkeypatch):
     record = opened.question_record("confirm-A.md", approval="pending")
     draft = opened.json_input("draft.json", record)

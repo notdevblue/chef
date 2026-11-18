@@ -585,7 +585,7 @@ def test_markdown_and_direct_source_edits_require_explicit_render_repair(tmp_pat
     assert not inspect_document(tmp_path, "ask-1.md", (tmp_path / "ask-1.md").read_text(encoding="utf-8"))[1]
 
 
-def test_atomic_source_survives_markdown_failure_and_retry_repairs_it(tmp_path, monkeypatch):
+def test_publication_and_answer_rollback_all_outputs_after_markdown_failure(tmp_path, monkeypatch):
     write_text = question_records.write_text
 
     def fail_markdown(path, text):
@@ -596,14 +596,14 @@ def test_atomic_source_survives_markdown_failure_and_retry_repairs_it(tmp_path, 
     monkeypatch.setattr(question_records, "write_text", fail_markdown)
     with pytest.raises(QuestionRecordError, match="Markdown"):
         publish_document(tmp_path, document())
-    assert read_document(tmp_path, "ask-1.md") == document()
+    assert not source_path(tmp_path, "ask-1.md").exists()
     monkeypatch.setattr(question_records, "write_text", write_text)
-    publish_document(tmp_path, document())
+    original = publish_document(tmp_path, document())
     payload = answer(updates=[{"id": "1", "status": "answered", "answer": "권장"}])
     monkeypatch.setattr(question_records, "write_text", fail_markdown)
     with pytest.raises(QuestionRecordError, match="Markdown"):
         answer_document(tmp_path, "ask-1.md", payload)
-    assert read_document(tmp_path, "ask-1.md")["answers"] == [payload]
+    assert read_document(tmp_path, "ask-1.md") == original
     monkeypatch.setattr(question_records, "write_text", write_text)
     saved = answer_document(tmp_path, "ask-1.md", payload)
     assert len(saved["answers"]) == 1

@@ -1,3 +1,5 @@
+"""Question records, explicit answer history, rendering and guarded publication."""
+
 import copy
 import hashlib
 import json
@@ -9,10 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from question_summary import QuestionItem, QuestionSummary
-
-
-class QuestionRecordError(ValueError):
-    pass
+from question_blocks import QuestionRecordError, validate_blocks, validate_options, render_blocks, render_options, render_selection
 
 
 DOCUMENT_ID = re.compile(r"(?:ask|confirm)-[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -128,8 +127,12 @@ def validate_answer(value):
         raise QuestionRecordError("답 기록 updates 배열이 필요함")
     identifiers = set()
     for update in updates:
-        validate_fields(update, UPDATE_FIELDS, label="답 갱신")
+        validate_fields(update, UPDATE_FIELDS, ("selected",), label="답 갱신")
         validate_item(update, "답 갱신")
+        if "selected" in update:
+            validate_identifier(update["selected"], "selected")
+            if update["status"] != "answered":
+                raise QuestionRecordError("selected requires answered status")
         if update["id"] in identifiers:
             raise QuestionRecordError(f"답 갱신 id 중복: {update['id']}")
         identifiers.add(update["id"])
@@ -139,7 +142,7 @@ def validate_answer(value):
 
 
 def validate_document(record):
-    validate_fields(record, DOCUMENT_FIELDS, ("legacy_markdown",), "질문")
+    validate_fields(record, DOCUMENT_FIELDS, ("legacy_markdown", "blocks", "detail_blocks"), "질문")
     if type(record.get("schema")) is not int or record["schema"] != 1:
         raise QuestionRecordError("질문 schema는 1이어야 함")
     validate_identifier(record.get("id"), "문서 id", DOCUMENT_ID)
@@ -147,14 +150,16 @@ def validate_document(record):
     required_text(record.get("title"), "title", True)
     required_text(record.get("intro"), "intro")
     required_text(record.get("body"), "body")
+    validate_blocks(record)
     validate_approval(record.get("approval"))
     items = record.get("items")
     if not isinstance(items, list) or not items:
         raise QuestionRecordError("items는 비어 있지 않은 배열이어야 함")
     identifiers = set()
     for item in items:
-        validate_fields(item, ITEM_FIELDS, ("heading",), "문항")
+        validate_fields(item, ITEM_FIELDS, ("heading", "options", "selected"), "문항")
         validate_item(item)
+        validate_options(item)
         required_text(item.get("title"), "문항 title", True)
         required_text(item.get("body"), "문항 body")
         if "heading" in item:
@@ -178,6 +183,10 @@ def validate_document(record):
             for update in answer["updates"]:
                 if update["id"] not in identifiers:
                     raise QuestionRecordError(f"현재 개정 답 대상 문항이 없음: {update['id']}")
+                if "selected" in update:
+                    item = next(item for item in items if item["id"] == update["id"])
+                    if update["selected"] not in {option["id"] for option in item.get("options", [])}:
+                        raise QuestionRecordError("answer selected must name an existing option id")
         operations.add(answer["id"])
     if "legacy_markdown" in record:
         required_text(record["legacy_markdown"], "legacy_markdown")
@@ -242,11 +251,21 @@ def render_document(record, *, legacy_layout=False):
         sections.append(f"### {heading}")
         if item["body"]:
             sections.append(item["body"])
+        if "options" in item:
+            sections.append(render_options(item["options"]))
         sections.append(f"- 상태: {STATUS_LABELS[item['status']]}")
         if item["answer"]:
             sections.extend(["답 내용:", item["answer"]])
-    if record["body"]:
+    selected = [item for item in record["items"] if "selected" in item]
+    if selected:
+        sections.append("## 현재 선택")
+        sections.extend(render_selection(item) for item in selected)
+    if "blocks" in record:
+        sections.append(render_blocks(record["blocks"]))
+    elif record["body"]:
         sections.append(record["body"])
+    if record.get("detail_blocks"):
+        sections.append(f"[상세](details/{record['id']}.md)")
     archive_target = f"details/history/{record['id']}.md"
     if legacy_layout or f"]({archive_target})" not in "\n\n".join(sections):
         sections.extend(["## 전체 이력", f"[질문·답 원문 전체 이력]({archive_target})"])
@@ -264,7 +283,15 @@ def render_record_history(record, include_evidence=True):
         heading = item_heading(item)
         sections.extend([f"#### {heading}", f"문항: `{item['id']}` · {item['title']}", item["body"],
                          f"- 상태: {STATUS_LABELS[item['status']]}", item["answer"]])
+        if "options" in item:
+            sections.append(render_options(item["options"]))
+        if "selected" in item:
+            sections.append(render_selection(item))
     sections.append(record["body"])
+    if "blocks" in record:
+        sections.append(render_blocks(record["blocks"]))
+    if record.get("detail_blocks"):
+        sections.extend(["### 상세", render_blocks(record["detail_blocks"])])
     if include_evidence:
         sections.append(render_history_evidence(record["answers"], [record.get("legacy_markdown", "")]))
     return "\n\n".join(sections) + "\n"
@@ -276,6 +303,8 @@ def render_history_evidence(answers, legacy_documents):
         sections.extend([f"### {answer['id']} · {answer['at']} · 대상 개정 {answer['revision']}", answer["text"]])
         for update in answer["updates"]:
             sections.extend([f"- 문항 {update['id']}: {STATUS_LABELS[update['status']]}", update["answer"]])
+            if "selected" in update:
+                sections.append(f"선택 id: `{update['selected']}`")
         if "approval" in answer:
             sections.extend([f"별도 승인 요청: {APPROVAL_LABELS[answer['approval']['status']]}", answer["approval"]["reason"]])
     for number, legacy in enumerate(legacy_documents, 1):
@@ -371,6 +400,10 @@ def inspect_document(folder, name, text_snapshot):
         ):
             raise QuestionRecordError(f"생성 Markdown과 질문 JSON 불일치: {name}")
         validate_history_archive(history_path(folder, name), record)
+        if record.get("detail_blocks"):
+            detail = contained_path(folder, "details", name)
+            if detail.read_bytes() != render_detail_document(record).encode("utf-8"):
+                raise QuestionRecordError(f"생성 상세와 질문 JSON 불일치: {name}")
         return summarize_document(record), ""
     except (QuestionRecordError, OSError) as error:
         return QuestionSummary(name, name, [], False, False, False), str(error)
@@ -394,6 +427,9 @@ def inspection_inputs(folder, name):
         os.path.join(folder, "details", "history", f"{identifier}.md"),
         *directory.glob("*.json"),
     ]
+    detail = os.path.join(folder, "details", name)
+    if os.path.exists(detail):
+        inputs.append(detail)
     for receipt in directory.glob("recovery/*/receipt.json"):
         inputs.extend([receipt, receipt.with_name("before.json"), receipt.with_name("after.json")])
     return sorted({os.fspath(path) for path in inputs})
@@ -450,7 +486,7 @@ def validate_restoration(current, record, evidence):
     items = {item["id"]: item for item in record["items"]}
     if not set(current_items).issubset(items):
         raise QuestionRecordError("복구는 기존 문항 id를 모두 보존해야 함")
-    outcomes = {identifier: {field: item[field] for field in ("status", "answer")}
+    outcomes = {identifier: {field: item.get(field) for field in ("status", "answer", "selected")}
                 for identifier, item in current_items.items()}
     approval = current["approval"]
     evidence = normalize_markdown(evidence).strip()
@@ -460,12 +496,12 @@ def validate_restoration(current, record, evidence):
         for update in answer["updates"]:
             if update["id"] not in items:
                 raise QuestionRecordError(f"복구 답 대상 문항이 없음: {update['id']}")
-            outcomes[update["id"]] = {field: update[field] for field in ("status", "answer")}
+            outcomes[update["id"]] = {field: update.get(field) for field in ("status", "answer", "selected")}
         if "approval" in answer:
             approval = answer["approval"]
     for identifier, item in items.items():
         expected = outcomes.get(identifier, {"status": "pending", "answer": ""})
-        if any(item[field] != expected[field] for field in ("status", "answer")):
+        if any(item.get(field) != expected.get(field) for field in ("status", "answer", "selected")):
             raise QuestionRecordError(f"복구 문항 상태와 답에 대응하는 추가 이력이 필요함: {identifier}")
     if record["approval"] != approval:
         raise QuestionRecordError("복구 승인 변경에 대응하는 추가 이력이 필요함")
@@ -503,16 +539,29 @@ def restore_document(folder, input_path, source, expected_revision, expected_sha
     if archive_existed:
         original_archive = archive.read_bytes()
     restored_archive = render_history_document(folder, record, (current,)).encode("utf-8")
+    detail = detail_output(folder, record, current)
+    original_detail = b""
+    detail_existed = False
+    if detail is not None:
+        detail_path = contained_path(folder, *detail[0])
+        detail_existed = detail_path.exists()
+        if detail_existed:
+            original_detail = detail_path.read_bytes()
     repaired_at = datetime.now(timezone.utc)
     history = contained_path(folder, "questions", "history", record["id"], "recovery",
                              f"{repaired_at.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid.uuid4().hex}")
     snapshots = {"before.json": original_json, "before.md": original_markdown,
                  "input.json": reviewed_bytes, "after.json": restored_json, "after.md": restored_markdown,
                  "before-history.md": original_archive, "after-history.md": restored_archive}
+    if detail is not None:
+        snapshots.update({"before-detail.md": original_detail, "after-detail.md": detail[1] or b""})
     receipt = {"schema": 1, "id": record["id"], "revision": record["revision"],
                "repaired_at": repaired_at.isoformat(), "status": "prepared",
                "before_history_existed": archive_existed,
                "sha256": {key: hashlib.sha256(value).hexdigest() for key, value in snapshots.items()}}
+    if detail is not None:
+        receipt["before_detail_existed"] = detail_existed
+        receipt["after_detail_existed"] = detail[1] is not None
     try:
         history.mkdir(parents=True, exist_ok=False)
         for filename, value in snapshots.items():
@@ -522,28 +571,38 @@ def restore_document(folder, input_path, source, expected_revision, expected_sha
             raise QuestionRecordError("복구 준비 중 현재 JSON 또는 Markdown이 바뀜")
         if archive.exists() != archive_existed or (archive_existed and archive.read_bytes() != original_archive):
             raise QuestionRecordError("복구 준비 중 현재 전체 이력이 바뀜")
+        if detail is not None:
+            detail_path = contained_path(folder, *detail[0])
+            if detail_path.exists() != detail_existed or (detail_existed and detail_path.read_bytes() != original_detail):
+                raise QuestionRecordError("복구 준비 중 현재 상세가 바뀜")
     except OSError as error:
         raise QuestionRecordError(f"복구 백업 저장 실패: {history}: {error}") from error
-    live_targets = ((("questions", f"{record['id']}.json"), original_json, restored_json, True),
-                    ((name,), original_markdown, restored_markdown, True),
-                    (("details", "history", name), original_archive, restored_archive, archive_existed))
+    live_targets = [(("questions", f"{record['id']}.json"), original_json, restored_json, True, True),
+                    ((name,), original_markdown, restored_markdown, True, True),
+                    (("details", "history", name), original_archive, restored_archive, archive_existed, True)]
+    if detail is not None:
+        live_targets.append((detail[0], original_detail, detail[1] or b"", detail_existed, detail[1] is not None))
     try:
-        for parts, original, restored, existed in live_targets:
-            replace_expected_bytes(folder, parts, original, restored, existed)
-        if any(contained_path(folder, *parts).read_bytes() != restored for parts, _, restored, _ in live_targets):
+        for parts, original, restored, existed, after_exists in live_targets:
+            if existed or after_exists:
+                replace_expected_bytes(folder, parts, original, restored, existed, after_exists)
+        if any(contained_path(folder, *parts).exists() != after_exists or
+               (after_exists and contained_path(folder, *parts).read_bytes() != restored)
+               for parts, _, restored, _, after_exists in live_targets):
             raise QuestionRecordError("복구 저장 중 현재 JSON, Markdown 또는 전체 이력이 바뀜")
         receipt["status"] = "complete"
         write_json(history / "receipt.json", receipt)
     except (OSError, QuestionRecordError) as error:
         rollback_errors = []
-        for parts, original, restored, existed in live_targets:
+        for parts, original, restored, existed, after_exists in live_targets:
             try:
                 live = contained_path(folder, *parts)
                 actual = b""
                 if live.exists():
                     actual = live.read_bytes()
-                if live.exists() and actual == restored:
-                    replace_expected_bytes(folder, parts, restored, original, True, existed)
+                if live.exists() == after_exists and actual == restored:
+                    if existed or after_exists:
+                        replace_expected_bytes(folder, parts, restored, original, after_exists, existed)
                 elif live.exists() != existed or actual != original:
                     raise QuestionRecordError(f"외부 변경을 덮어쓸 수 없음: {live}")
             except (OSError, QuestionRecordError) as rollback_error:
@@ -562,23 +621,114 @@ def restore_document(folder, input_path, source, expected_revision, expected_sha
     return record
 
 
+def render_detail_document(record):
+    return (f"<!-- chef:question-detail:{record['id']}:v1 -->\n\n# {record['title']} — 상세\n\n"
+            f"[현재 문서](../{record['id']}.md)\n\n" + render_blocks(record["detail_blocks"]) + "\n")
+
+
+def detail_output(folder, record, current):
+    parts = ("details", f"{record['id']}.md")
+    path = contained_path(folder, *parts)
+    generated = bool(record.get("detail_blocks"))
+    previously_generated = current is not None and bool(current.get("detail_blocks"))
+    if not generated and not previously_generated:
+        return None
+    if path.exists():
+        if not previously_generated or path.read_bytes() != render_detail_document(current).encode("utf-8"):
+            raise QuestionRecordError(f"수동 상세 파일 보호: {path}; 기존 생성 소유와 정확한 내용이 필요함")
+    if generated:
+        return parts, render_detail_document(record).encode("utf-8")
+    return parts, None
+
+
+def prepare_outputs(folder, record, current, snapshots=(), preserve_source=False):
+    name = f"{record['id']}.md"
+    outputs = list(snapshots)
+    outputs.extend([
+        (("questions", f"{record['id']}.json"), (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")),
+        ((name,), render_document(record).encode("utf-8")),
+        (("details", "history", name), render_history_document(
+            folder, record, (current,) if current and current["revision"] < record["revision"] else (),
+        ).encode("utf-8")),
+    ])
+    detail = detail_output(folder, record, current)
+    if detail is not None:
+        outputs.append(detail)
+    plan = []
+    resolved = set()
+    for parts, replacement in outputs:
+        path = contained_path(folder, *parts)
+        if path.resolve() in resolved:
+            raise QuestionRecordError(f"출력 경로 충돌: {path}")
+        resolved.add(path.resolve())
+        existed = path.exists()
+        original = path.read_bytes() if existed else None
+        if parts == ("details", name) and original is not None:
+            if current is None or not current.get("detail_blocks") or original != render_detail_document(current).encode("utf-8"):
+                raise QuestionRecordError(f"수동 상세 파일 보호: {path}; 준비 중 상세가 바뀜")
+        if parts == ("questions", f"{record['id']}.json"):
+            if current is None and existed:
+                raise QuestionRecordError("질문 저장 준비 중 JSON이 생성됨")
+            if current is not None:
+                try:
+                    actual = json.loads(original.decode("utf-8-sig")) if original is not None else None
+                except (UnicodeError, ValueError) as error:
+                    raise QuestionRecordError("질문 저장 준비 중 JSON이 바뀜") from error
+                if actual != current:
+                    raise QuestionRecordError("질문 저장 준비 중 JSON이 바뀜")
+            if preserve_source:
+                replacement = original
+        plan.append((parts, original, replacement))
+    return plan
+
+
+def commit_outputs(folder, plan):
+    """CAS each output and undo only this transaction's bytes on a write failure."""
+    attempted = []
+    try:
+        for parts, original, replacement in plan:
+            path = contained_path(folder, *parts)
+            actual = path.read_bytes() if path.exists() else None
+            if actual != original:
+                raise QuestionRecordError(f"질문 저장 전 파일이 바뀜: {path}")
+            if actual == replacement:
+                continue
+            attempted.append((parts, original, replacement))
+            if replacement is None:
+                path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                write_text(contained_path(folder, *parts), replacement.decode("utf-8"))
+        for parts, _, replacement in plan:
+            path = contained_path(folder, *parts)
+            if (path.read_bytes() if path.exists() else None) != replacement:
+                raise QuestionRecordError(f"질문 저장 중 파일이 바뀜: {path}")
+    except (OSError, QuestionRecordError) as error:
+        rollback_errors = []
+        for parts, original, replacement in reversed(attempted):
+            try:
+                path = contained_path(folder, *parts)
+                actual = path.read_bytes() if path.exists() else None
+                if actual == original:
+                    continue
+                if actual != replacement:
+                    raise QuestionRecordError(f"외부 변경을 덮어쓸 수 없음: {path}")
+                if original is None:
+                    path.unlink()
+                else:
+                    write_bytes(path, original)
+            except (OSError, QuestionRecordError) as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        detail = "; 원본 복원됨"
+        if rollback_errors:
+            detail = "; 롤백 확인 필요: " + "; ".join(rollback_errors)
+        raise QuestionRecordError(f"질문 JSON/Markdown 저장 실패: {error}{detail}") from error
+
+
 def render_saved_document(folder, name):
     record = read_document(folder, name)
-    path = contained_path(folder, name)
-    try:
-        archive = history_path(folder, name)
-        rendered_archive = render_history_document(folder, record)
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        write_text(archive, rendered_archive)
-        write_text(path, render_document(record))
-        snapshot = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise QuestionRecordError(f"질문 Markdown 저장 실패: {path}: {error}") from error
-    if read_document(folder, name) != record:
-        raise QuestionRecordError(f"질문 렌더 중 JSON이 바뀜: {name}")
-    _, issue = inspect_document(folder, name, snapshot)
-    if issue:
-        raise QuestionRecordError(issue)
+    plan = prepare_outputs(folder, record, record, preserve_source=True)
+    commit_outputs(folder, plan)
     return record
 
 
@@ -586,6 +736,13 @@ def validate_publication(current, record, editorial):
     current_items = {item["id"]: item for item in current["items"]}
     items = {item["id"]: item for item in record["items"]}
     if editorial:
+        for field in ("blocks", "detail_blocks"):
+            before = [{key: value for key, value in block.items() if key != "title"}
+                      for block in current.get(field, []) if block["type"] != "paragraph"]
+            after = [{key: value for key, value in block.items() if key != "title"}
+                     for block in record.get(field, []) if block["type"] != "paragraph"]
+            if before != after:
+                raise QuestionRecordError(f"editorial 발행은 {field} table/fields 계약을 변경할 수 없음")
         if record.get("legacy_markdown", "") != current.get("legacy_markdown", "") or ("legacy_markdown" in record) != ("legacy_markdown" in current):
             raise QuestionRecordError("editorial 발행은 legacy_markdown을 변경할 수 없음")
         if set(current_items) != set(items):
@@ -594,6 +751,8 @@ def validate_publication(current, record, editorial):
             previous = current_items[identifier]
             if item["status"] != previous["status"] or item["answer"] != previous["answer"]:
                 raise QuestionRecordError("editorial 발행은 문항 상태나 답 내용을 변경할 수 없음")
+            if item.get("options") != previous.get("options") or item.get("selected") != previous.get("selected"):
+                raise QuestionRecordError("editorial 발행은 options나 selected를 변경할 수 없음")
         if record["approval"]["status"] != current["approval"]["status"] or record["answers"] != current["answers"]:
             raise QuestionRecordError("editorial 발행은 승인이나 답 이력을 변경할 수 없음")
         return
@@ -605,32 +764,35 @@ def validate_publication(current, record, editorial):
                 raise QuestionRecordError(f"새 문항은 answered로 발행할 수 없음: {identifier}")
             continue
         previous = current_items[identifier]
-        definition_changed = any(item.get(field, "") != previous.get(field, "") for field in ("title", "body", "heading"))
+        definition_changed = any(item.get(field, "") != previous.get(field, "") for field in ("title", "body", "heading", "options"))
         if definition_changed:
-            if item["status"] == "answered":
-                raise QuestionRecordError(f"내용이 바뀐 문항은 answered로 발행할 수 없음: {identifier}")
+            if item["status"] != "pending" or item["answer"] != "" or "selected" in item:
+                raise QuestionRecordError(f"내용이 바뀐 문항은 pending과 빈 answer로 다시 열어야 함: {identifier}")
             continue
-        answer_changed = item["status"] != previous["status"] or item["answer"] != previous["answer"]
+        answer_changed = item["status"] != previous["status"] or item["answer"] != previous["answer"] or item.get("selected") != previous.get("selected")
         if answer_changed and (item["status"] != "pending" or item["answer"] != ""):
             raise QuestionRecordError(f"기존 문항 답 변경은 answer로 기록해야 함: {identifier}")
-    scope_changed = record["intro"] != current["intro"] or record["body"] != current["body"]
+    scope_changed = any(record.get(field) != current.get(field) for field in ("intro", "body", "blocks", "detail_blocks"))
     if scope_changed and any(item["status"] != "pending" for item in record["items"]):
         if record["approval"]["status"] != "pending":
             raise QuestionRecordError("전체 범위가 바뀌면 해결된 문항을 유지하기 전에 approval 대기가 필요함")
 
 
-def publish_document(folder, record, expected_revision="", editorial=False):
+def publication_plan(folder, record, expected_revision="", editorial=False):
+    """Prepare all publish checks and bytes without creating files or directories."""
     if type(editorial) is not bool:
         raise QuestionRecordError("editorial은 bool이어야 함")
     record = validate_document(record)
     name = f"{record['id']}.md"
     path = source_path(folder, name)
     markdown_path = contained_path(folder, name)
+    current = None
+    snapshots = []
     try:
         if path.exists():
             current = read_document(folder, name)
             if record == current:
-                return render_saved_document(folder, name)
+                return record, prepare_outputs(folder, record, current, preserve_source=True)
             if type(expected_revision) is not int or expected_revision != current["revision"]:
                 raise QuestionRecordError("질문 expected_revision이 현재 revision과 다름")
             if record["revision"] <= current["revision"]:
@@ -641,17 +803,19 @@ def publish_document(folder, record, expected_revision="", editorial=False):
                 raise QuestionRecordError("기존 legacy_markdown을 삭제하거나 변경할 수 없음")
             validate_publication(current, record, editorial)
             history = contained_path(folder, "questions", "history", record["id"], f"{current['revision']}.json")
-            history.parent.mkdir(parents=True, exist_ok=True)
             if history.exists():
                 if read_json(history) != current:
                     raise QuestionRecordError(f"질문 개정 이력 충돌: {history}")
             else:
-                write_json(history, current)
+                snapshots.append((("questions", "history", record["id"], f"{current['revision']}.json"),
+                                  (json.dumps(current, ensure_ascii=False, indent=2) + "\n").encode("utf-8")))
         else:
             if editorial:
                 raise QuestionRecordError("editorial 발행에는 기존 질문이 필요함")
             if expected_revision != "":
                 raise QuestionRecordError("새 질문에는 expected_revision을 지정할 수 없음")
+            if any("selected" in item for item in record["items"]):
+                raise QuestionRecordError("새 질문의 selected는 발행 후 answer로 기록해야 함")
             if markdown_path.exists():
                 try:
                     legacy_markdown = markdown_path.read_bytes().decode("utf-8")
@@ -659,17 +823,27 @@ def publish_document(folder, record, expected_revision="", editorial=False):
                     raise QuestionRecordError(f"기존 Markdown UTF-8 형식 오류: {name}") from error
                 if record.get("legacy_markdown") != legacy_markdown:
                     raise QuestionRecordError(f"기존 Markdown 보호: legacy_markdown이 없거나 원문이 바뀜: {name}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        source_path(folder, name)
-        write_json(path, record)
+        plan = prepare_outputs(folder, record, current, snapshots)
     except OSError as error:
         raise QuestionRecordError(f"질문 JSON 저장 실패: {path}: {error}") from error
-    return render_saved_document(folder, name)
+    return record, plan
+
+
+def preflight_document(folder, record, expected_revision="", editorial=False):
+    record, _ = publication_plan(folder, record, expected_revision, editorial)
+    return record
+
+
+def publish_document(folder, record, expected_revision="", editorial=False):
+    record, plan = publication_plan(folder, record, expected_revision, editorial)
+    commit_outputs(folder, plan)
+    return record
 
 
 def answer_document(folder, name, payload):
     payload = copy.deepcopy(validate_answer(payload))
     record = read_document(folder, name)
+    current = copy.deepcopy(record)
     for previous in record["answers"]:
         if previous["id"] == payload["id"]:
             if previous != payload:
@@ -682,12 +856,91 @@ def answer_document(folder, name, payload):
         if update["id"] not in items:
             raise QuestionRecordError(f"답 대상 문항이 없음: {update['id']}")
         items[update["id"]].update(status=update["status"], answer=update["answer"])
+        items[update["id"]].pop("selected", None)
+        if "selected" in update:
+            items[update["id"]]["selected"] = update["selected"]
     if "approval" in payload:
         record["approval"] = copy.deepcopy(payload["approval"])
     record["answers"].append(payload)
-    path = source_path(folder, name)
-    try:
-        write_json(path, record)
-    except OSError as error:
-        raise QuestionRecordError(f"답 기록 JSON 저장 실패: {path}: {error}") from error
-    return render_saved_document(folder, name)
+    record = validate_document(record)
+    commit_outputs(folder, prepare_outputs(folder, record, current))
+    return record
+
+
+def patch_document(record, changes, editorial=False):
+    """Patch a validated deep copy; input objects and publication stay untouched."""
+    if type(editorial) is not bool:
+        raise QuestionRecordError("editorial은 bool이어야 함")
+    record = validate_document(record)
+    current = copy.deepcopy(record)
+    validate_fields(changes, (), ("set", "upsert_items", "remove_items", "reopen_items", "upsert_blocks", "remove_blocks",
+                                  "upsert_detail_blocks", "remove_detail_blocks", "request_approval"), "patch")
+    if "set" in changes:
+        validate_fields(changes["set"], (), ("revision", "title", "intro", "body"), "patch set")
+        record.update(copy.deepcopy(changes["set"]))
+    reopened = changes.get("reopen_items", [])
+    if not isinstance(reopened, list):
+        raise QuestionRecordError("reopen_items must be an array")
+    for key, target in (("items", "items"), ("blocks", "blocks"), ("detail_blocks", "detail_blocks")):
+        upserts = changes.get(f"upsert_{key}", [])
+        removals = changes.get(f"remove_{key}", [])
+        if not isinstance(upserts, list) or not isinstance(removals, list):
+            raise QuestionRecordError(f"patch {key} operations must be arrays")
+        seen = set()
+        for value in upserts:
+            if key == "items":
+                validate_fields(value, ("id", "title", "body"), ("heading", "options"), "patch item definition")
+            elif not isinstance(value, dict):
+                raise QuestionRecordError("patch block must be an object")
+            identifier = validate_identifier(value.get("id"), "patch id")
+            if identifier in seen:
+                raise QuestionRecordError(f"duplicate patch upsert id: {identifier}")
+            seen.add(identifier)
+        removed = set()
+        for identifier in removals:
+            validate_identifier(identifier, "patch remove id")
+            if identifier in removed or identifier in seen:
+                raise QuestionRecordError(f"conflicting patch id: {identifier}")
+            removed.add(identifier)
+        if not upserts and not removals:
+            continue
+        values = record.setdefault(target, [])
+        indexed = {value["id"]: number for number, value in enumerate(values)}
+        if not removed.issubset(indexed):
+            raise QuestionRecordError(f"unknown patch remove id: {', '.join(sorted(removed - set(indexed)))}")
+        for value in upserts:
+            item = copy.deepcopy(value)
+            if key == "items":
+                item.update(status="pending", answer="")
+                if item["id"] in indexed:
+                    previous = values[indexed[item["id"]]]
+                    definition_changed = any(item.get(field, "") != previous.get(field, "") for field in ("title", "body", "heading", "options"))
+                    if definition_changed and item["id"] not in reopened and not editorial:
+                        raise QuestionRecordError(f"changed item definition requires explicit reopen_items: {item['id']}")
+                    item.update(status=previous["status"], answer=previous["answer"])
+                    if "selected" in previous:
+                        item["selected"] = previous["selected"]
+            if item["id"] in indexed:
+                values[indexed[item["id"]]] = item
+            else:
+                values.append(item)
+        record[target] = [value for value in values if value["id"] not in removed]
+        if target == "blocks" and not record[target]:
+            del record[target]
+    identifiers = set()
+    items = {item["id"]: item for item in record["items"]}
+    for identifier in reopened:
+        validate_identifier(identifier, "reopen item id")
+        if identifier not in items or identifier in identifiers:
+            raise QuestionRecordError(f"unknown or duplicate reopen item id: {identifier}")
+        identifiers.add(identifier)
+        items[identifier].update(status="pending", answer="")
+        items[identifier].pop("selected", None)
+    if "request_approval" in changes:
+        validate_fields(changes["request_approval"], ("reason",), label="request_approval")
+        reason = required_text(changes["request_approval"]["reason"], "request_approval.reason", True)
+        record["approval"] = {"status": "pending", "reason": reason}
+    record = validate_document(record)
+    if editorial:
+        validate_publication(current, record, True)
+    return record

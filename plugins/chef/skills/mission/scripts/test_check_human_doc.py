@@ -336,3 +336,51 @@ def test_verified_archive_does_not_allow_removing_every_current_design_table(tmp
     archive = records.history_path(tmp_path, "confirm-A.md")
     assert records.validate_history_archive(archive, original)
     assert any("설계 표" in issue for issue in check_human_doc.check(target, tmp_path / "questions/confirm-A.json", archive)["issues"])
+
+
+@pytest.mark.parametrize("field_type", ["long", "int"])
+def test_legacy_schema_migration_compares_actual_current_field_definitions(tmp_path, field_type):
+    source, target, record = migration(tmp_path)
+    record.update(body="", blocks=[{"id": "shape", "type": "fields", "fields": [{"name": "Id", "type": field_type}]}])
+    write_record(target, record)
+    result = check_human_doc.check(target, source)
+    assert result["semantic_review_required"]
+    assert bool(result["issues"]) == (field_type != "long")
+
+
+@pytest.mark.parametrize("location", ["blocks", "detail_blocks"])
+def test_verified_archive_requires_fields_in_current_body_not_only_details(tmp_path, location):
+    records = check_human_doc.question_records
+    original = document()
+    records.publish_document(tmp_path, original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, body="")
+    revised[location] = [{"id": "shape", "type": "fields", "fields": [{"name": "Color", "type": "string"}]}]
+    target = write_record(tmp_path / "draft.json", revised)
+    result = check_human_doc.check(target, tmp_path / "questions/confirm-A.json")
+    assert result["semantic_review_required"]
+    assert bool(result["issues"]) == (location == "detail_blocks")
+
+
+def test_detail_only_fields_are_not_treated_as_current_approval_contract(tmp_path):
+    original = document()
+    original.update(body="Current purpose.", detail_blocks=[{"id": "extra", "type": "fields", "fields": [{"name": "Note", "type": "string"}]}])
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, detail_blocks=[])
+    target = write_record(tmp_path / "draft.json", revised)
+    assert not check_human_doc.check(target, source)["issues"]
+
+
+def test_structured_field_loss_is_detected_without_legacy_header_heuristic(tmp_path):
+    records = check_human_doc.question_records
+    original = document()
+    original.update(body="", blocks=[{"id": "shape", "type": "fields", "fields": [{"name": "Id", "type": "long"}]}])
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    revised["blocks"][0]["fields"][0]["type"] = "int"
+    target = write_record(tmp_path / "draft.json", revised)
+    assert any("필드 정의" in issue for issue in check_human_doc.check(target, source)["issues"])
+    generated = tmp_path / "preview.md"
+    generated.write_text(records.render_document(original), encoding="utf-8")
+    assert not check_human_doc.check(generated, source)["issues"]

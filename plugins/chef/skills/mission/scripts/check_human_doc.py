@@ -1,3 +1,5 @@
+"""Check current document contracts and evidence; semantic review remains required."""
+
 import argparse
 import json
 import re
@@ -111,6 +113,39 @@ def schema_tables(text):
     return tables
 
 
+def current_field_blocks(record):
+    return [block for block in record.get("blocks", []) if block["type"] == "fields"]
+
+
+def legacy_table_preserved_by_fields(table, blocks):
+    """Prove known legacy columns from actual definitions, without guessing schema headers."""
+    names = {"필드": "name", "컬럼": "name", "이름": "name", "타입": "type", "자료형": "type",
+             "키": "key", "참조": "ref", "설명": "description"}
+    lines = table.splitlines()
+    if len(lines) < 3 or "\\" in table:
+        return False
+    rows = [[value.strip().strip("`") for value in line.strip().strip("|").split("|")] for line in lines]
+    columns = [names.get(value) for value in rows[0]]
+    if None in columns or "name" not in columns or "type" not in columns or len(columns) != len(set(columns)):
+        return False
+    if any(not re.fullmatch(r":?-+:?", value) for value in rows[1]) or len(rows[1]) != len(columns):
+        return False
+    if any(len(row) != len(columns) for row in rows[2:]):
+        return False
+    for block in blocks:
+        definitions = {definition["name"]: definition for definition in block["fields"]}
+        preserved = True
+        for row in rows[2:]:
+            expected = dict(zip(columns, row))
+            definition = definitions.get(expected["name"])
+            if definition is None or any(definition.get(name, "") != value for name, value in expected.items()):
+                preserved = False
+                break
+        if preserved:
+            return True
+    return False
+
+
 def prose_length(text):
     text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     text = re.sub(r"(?m)^\s*\|.*(?:\n|$)", "", text)
@@ -149,12 +184,22 @@ def check(path, source_path="", archive_path=""):
             elif answer(source) != answer(text):
                 issues.append("기존 답 절이 달라졌습니다: 원문의 답과 날짜를 그대로 보존하세요")
             current_tables = schema_tables(text)
+            current_record = record
+            if not current_record and source_record and question_records.normalize_markdown(text) == question_records.normalize_markdown(source):
+                current_record = source_record
+            current_fields = current_field_blocks(current_record)
+            current_contract = bool(current_tables or current_fields)
             source_tables = source
             if source_record:
-                source_tables = question_records.render_record_history(source_record)
+                source_tables = question_records.render_record_history({**source_record, "detail_blocks": []})
             for number, table in enumerate(schema_tables(source_tables), 1):
-                if table not in current_tables and (not archived or not current_tables):
+                preserved = table in current_tables or legacy_table_preserved_by_fields(table, current_fields)
+                if not preserved and (not archived or not current_contract):
                     issues.append(f"원문 설계 표 {number}의 컬럼·타입·조건이 빠지거나 달라졌습니다")
+            for block in current_field_blocks(source_record):
+                preserved = any(candidate["id"] == block["id"] and candidate["fields"] == block["fields"] for candidate in current_fields)
+                if not preserved and (not archived or not current_contract):
+                    issues.append(f"원문 필드 정의 {block['id']}의 컬럼·타입·조건이 빠지거나 달라졌습니다")
         elif archive_path:
             issues.append("전체 이력 보존 검사에는 --source가 필요합니다")
     except (question_records.QuestionRecordError, OSError, UnicodeError) as error:
