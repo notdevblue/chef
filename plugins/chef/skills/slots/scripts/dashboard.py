@@ -49,6 +49,7 @@ CODEX_TURN_EVENTS = ("task_started", "user_message", CODEX_TURN_DONE)
 STAGE_TOKEN = re.compile(r"^[A-Za-z]+")
 MARKED_URL = "https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"
 QUESTION_NAME = re.compile(r"(?:ask-\d+|confirm-[ABC]\d*)\.md")
+QUESTION_RECORD_HEADER = re.compile(r"^문서: `[^`]+` · 개정: \d+\s*$", re.M)
 MAX_TEXT_BYTES = 4 * 1024 * 1024
 BINARY_PROBE_BYTES = 8192
 INSPECTION_LIMIT = 2048
@@ -601,6 +602,7 @@ class Mission:
     title: str = ""
     questions: dict = field(default_factory=dict)
     question_issues: dict = field(default_factory=dict)
+    archived_questions: list = field(default_factory=list)
     state_updated: float = 0.0
     report_updated: float = 0.0
     stale: str = ""  # ACTIVE 끊김 의심 문구(slots.stale_note)
@@ -887,6 +889,11 @@ def load_mission(location, mission_id):
         read_session(mission, transcript_of(location, mission, sessions))
     except OSError:
         errors.append("대화 기록")
+    legacy_archive = (
+        not mission.active
+        and mission.state in ("중단", "닫힘")
+        and not os.path.lexists(os.path.join(folder, "questions"))
+    )
     for name in sorted(automatic, key=natural_key):
         if "/" in name:
             continue
@@ -894,6 +901,13 @@ def load_mission(location, mission_id):
             text = read_shared_text(folder, os.path.join(folder, name))
         except READ_ERRORS as error:
             mission.question_issues[name] = f"Markdown 읽기 실패: {error}"
+            continue
+        if (
+            legacy_archive
+            and not QUESTION_RECORD_HEADER.search(text)
+            and not os.path.lexists(os.path.join(folder, "details", "history", name))
+        ):
+            mission.archived_questions.append(name)
             continue
         summary, issue = inspect_question(folder, name, text)
         if issue:
@@ -1667,8 +1681,10 @@ def mission_page(config, slot, mission_id):
     if mission.now and "report.md" in shared:
         body += f'<details data-key="recent-report"><summary>최근 보고 · {esc(dated(mission.report_updated))}</summary><p class="counts">보고 당시 요약</p><div class="now">{esc(mission.now)}</div></details>'
     questions = sorted((name for name in mission.questions if name in names), key=natural_key)
-    docs = sorted((name for name in names if name.endswith(".md") and name not in questions and name not in mission.question_issues), key=lambda name: (name not in DOC_FIRST, name))
-    others = [name for name in names if name not in questions and name not in mission.question_issues and name not in docs and name not in captures]
+    archived = [name for name in mission.archived_questions if name in names]
+    excluded = set(questions) | set(mission.question_issues) | set(archived)
+    docs = sorted((name for name in names if name.endswith(".md") and name not in excluded), key=lambda name: (name not in DOC_FIRST, name))
+    others = [name for name in names if name not in excluded and name not in docs and name not in captures]
     body += '<details data-key="source-documents"><summary>질문·확인 원문·문서·파일</summary>'
     body += section_head(1, "질문·확인 원문")
     marked = "".join(
@@ -1687,6 +1703,8 @@ def mission_page(config, slot, mission_id):
             for name in captures
         )
         body += section_head(4, "캡처") + f'<div class="thumbs">{thumbs}</div>'
+    if archived:
+        body += '<h3>이전 형식의 질문 원문</h3>' + file_links(folder, archived, mission_title=mission.title)
     body += '</details><details data-key="source-state"><summary>미션 상태·마일스톤·검증·결정·연결 기록</summary>'
     body += mission_fields_html(location, mission)
     descriptions = {

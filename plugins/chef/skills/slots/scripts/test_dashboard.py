@@ -1346,14 +1346,32 @@ def test_question_source_directory_errors_remain_visible(world, runtime, problem
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex"])
-def test_closed_legacy_questions_remain_available_as_originals(world, runtime):
-    folder = world.mission("slot1", "closed-legacy", state="닫힘", files={"ask-1.md": "# 과거 질문\n\n- 답: 권장\n"})
+@pytest.mark.parametrize("state", ["중단", "닫힘"])
+def test_closed_legacy_questions_remain_available_as_originals(world, runtime, state):
+    folder = world.mission("slot1", "closed-legacy", state=state, files={"ask-1.md": "# 과거 질문\n\n- 답: 권장\n"})
     config = runtime_config(world, runtime)
     assert "과거 질문" not in dashboard.route(config, "/")[2].decode("utf-8").split('data-key="mission-index"')[0]
     detail = dashboard.route(config, "/mission?slot=slot1&id=closed-legacy")[2].decode("utf-8")
-    assert "기록 확인 필요" in detail and "ask-1.md" in detail
+    assert "이전 형식의 질문 원문" in detail and "ask-1.md" in detail
+    assert 'id="question-issues"' not in detail
     assert dashboard.route(config, dashboard.view_url(folder / "ask-1.md"))[0] == 200
     assert "- 답: 권장" in dashboard.route(config, dashboard.raw_url(folder / "ask-1.md"))[2].decode("utf-8")
+    assert not (folder / "questions").exists()
+
+
+@pytest.mark.parametrize("evidence", ["current-header", "history", "questions-directory"])
+def test_archived_question_with_structured_record_evidence_still_warns(world, evidence):
+    files = {"ask-1.md": "# Archived question\n\nUse the blue palette.\n"}
+    if evidence == "current-header":
+        files["ask-1.md"] += "\n문서: `ask-1` · 개정: 1\n"
+    if evidence == "history":
+        files["details/history/ask-1.md"] = "# Recorded revisions\n"
+    folder = world.mission("slot1", "closed-missing-source", state="닫힘", files=files)
+    if evidence == "questions-directory":
+        (folder / "questions").mkdir()
+    detail = world.get("/mission?slot=slot1&id=closed-missing-source")[1]
+    assert 'id="question-issues"' in detail and "정형 전환 필요" in detail
+    assert "이전 형식의 질문 원문" not in detail
 
 
 def test_reports_remain_dated_history_and_do_not_change_work_or_session_freshness(world):
