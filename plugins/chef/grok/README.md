@@ -21,7 +21,7 @@ Main 또는 slotN의 Grok CLI는 오케스트레이터다. 조사·구현·검�
 슬롯 봇은 미션이 붙기 전까지 대기한다. 새 미션은 비어 있는 ready 슬롯에만 붙인다.
 메인과 슬롯이 아닌 작업은 메인 작업 폴더의 실행 봇에게 보낸다.
 
-native 역할은 아래 여섯 개다. 모두 부모의 Grok 4.7 모델을 상속하며, effort는 역할 정의에 고정한다. 리뷰와 기록 감사는 같은 `chef:code-reviewer`를 각각 새 작업으로 파견하고, 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경(새 규칙·규칙 관계 변경과 질문·보고 문서는 제외)의 첫 리뷰는 `chef:reviewer-small`이 맡는다.
+native 역할은 아래 여섯 개다. 모두 부모의 Grok 4.7 모델을 상속하며, effort는 역할 정의에 고정한다. 리뷰와 기록 감사는 같은 `chef:code-reviewer`를 각각 새 작업으로 파견하고, 좁은 재리뷰와 [사용량 정책](../skills/mission/references/usage-policy.md)의 기준에 맞는 작은 문서 첫 리뷰는 `chef:reviewer-small`이 맡는다.
 
 | 역할 | native 이름 | effort |
 | --- | --- | --- |

@@ -35,4 +35,4 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 - 검증 명령은 변경 경로·계약을 실제로 덮어야 한다. 프로젝트 전역 실패를 별도 게이트로 유지하고 약한 타깃 검사로 대체하거나 범위를 우회하지 않는다.
   요청한 각 선택자가 실제 카탈로그나 결과에서 해석·선택되고 요청 범위가 실행됐다는 증거를 확인한다. 직접 실행 목록 또는 프로젝트 실행 계약이 선택자와 결과를 연결하는 근거를 쓴다. 근거가 부족하면 미확인으로 반환한다.
   카탈로그에서 선택된 사실이나 양수 전체 실행 수만으로 실제 실행을 입증하지 못한다. 클래스·매개변수화 사례는 요청된 의미 범위의 실행 근거가 필요하며 필터 선택 수와 실행 수는 일반적으로 다르다. 프로젝트가 범위를 기록하면 `results[].equals`·`results[].positive`로 검사한다.
-- 첫 심층 리뷰와 확대는 fresh `roles.review`(없으면 `chef:code-reviewer`)다. 좁은 수정 확인과 공통 절차의 작은 문서 첫 리뷰는 `roles.reviewSmall`(없으면 `chef:reviewer-small`)이며 변경 전 본 대비 diff를 넘긴다. 자세한 라우팅·모델·기본 역할은 [Codex 역할](references/codex-roles.md)을 따른다.
+- 첫 심층 리뷰와 확대는 fresh `roles.review`(없으면 `chef:code-reviewer`)다. 좁은 수정 확인과 공통 절차의 작은 문서 첫 리뷰는 `roles.reviewSmall`(없으면 `chef:reviewer-small`)이며 변경 전 본 대비 diff 또는 사용량 정책에서 정한 비교 근거를 넘긴다. 자세한 라우팅·모델·기본 역할은 [Codex 역할](references/codex-roles.md)을 따른다.
