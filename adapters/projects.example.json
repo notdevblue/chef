@@ -1,3 +1,9 @@
 [
-  { "adapter": "example", "roots": ["D:/Work/Game_Main", "D:/Work/slots/*"] }
+  {
+    "adapter": "example",
+    "roots": [
+      "<absolute-project-path>",
+      "<absolute-slot-parent>/*"
+    ]
+  }
 ]

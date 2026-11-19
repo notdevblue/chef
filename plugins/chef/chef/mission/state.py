@@ -502,6 +502,13 @@ def verification_guard(ctx):
         if verdict.kind != "allow" or problems:
             raise StateError(f"검증 명령 거부: {verdict.reason or problems}")
 
+    def argv_guard(argv, cwd):
+        problems = []
+        verdict = mission_guard.judge_argv(ctx.adapter, argv, problems, ctx.project, cwd=cwd)
+        if verdict.kind != "allow" or problems:
+            raise StateError(f"검증 명령 거부: {verdict.reason or problems}")
+
+    guard.argv = argv_guard
     return guard
 
 

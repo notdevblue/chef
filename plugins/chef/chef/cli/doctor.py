@@ -59,7 +59,12 @@ def check_python(report):
     with contextlib.redirect_stdout(buffer):
         code = check_guard.doctor()
     detail = " ".join(line.strip() for line in buffer.getvalue().splitlines() if line.strip())
-    report.add("OK" if code == 0 else "FAIL", "python", detail)
+    if code == 0:
+        report.add("OK", "python", detail)
+    elif sys.version_info >= (3, 11):
+        report.add("WARN", "python", detail + " — 직접 실행하는 CLI는 현재 Python으로 runtime.py를 통해 시작한다. Hermes 역할 워커·슬롯 실행기는 자식 훅의 Python 경로를 자동 연결한다")
+    else:
+        report.add("FAIL", "python", detail)
 
 
 def expand_roots(roots):
@@ -99,7 +104,7 @@ def check_active(report, adapter, root, runtime):
 
 ROLE_POLICY_MODELS = ("definition", "inherit")
 ROLE_POLICY_KEYS = ("model", "subagents")
-ROLE_POLICY_OVERLAYS = ("codex", "grok", "hermes")
+ROLE_POLICY_OVERLAYS = ("claude", "codex", "grok", "hermes")
 
 
 def role_policy_sources(adapter_path):
@@ -116,23 +121,7 @@ def check_role_policy(report, name, adapter_path):
     for label, source in role_policy_sources(adapter_path):
         if not isinstance(source, dict):
             continue
-        entries = [("rolePolicy", source.get("rolePolicy"), "rolePolicy" in source)]
-        runtimes = source.get("runtimes")
-        if not isinstance(runtimes, dict):
-            runtimes = {}
-        claude_overlay = runtimes.get("claude")
-        if isinstance(claude_overlay, dict) and "rolePolicy" in claude_overlay:
-            report.add(
-                "WARN",
-                "role-policy",
-                f"{name}: {label} runtimes.claude.rolePolicy 는 병합되지 않아 무시됨. Claude 정책은 최상위 rolePolicy 에 둔다",
-            )
-        for runtime in ROLE_POLICY_OVERLAYS:
-            overlay = runtimes.get(runtime)
-            if isinstance(overlay, dict):
-                entries.append(
-                    (f"runtimes.{runtime}.rolePolicy", overlay.get("rolePolicy"), "rolePolicy" in overlay)
-                )
+        entries = role_policy_entries(source)
         for key, policy, present in entries:
             if not present:
                 continue
@@ -162,6 +151,19 @@ def check_role_policy(report, name, adapter_path):
                 report.add(
                     "OK", "role-policy", f"{where}: {json.dumps(policy, ensure_ascii=False, sort_keys=True)}"
                 )
+
+
+def role_policy_entries(source, prefix=""):
+    entries = [(prefix + "rolePolicy", source.get("rolePolicy"), "rolePolicy" in source)]
+    for key, names in (("runtimes", ROLE_POLICY_OVERLAYS), ("platforms", ("windows", "macos", "linux"))):
+        overlays = source.get(key)
+        if not isinstance(overlays, dict):
+            continue
+        for name in names:
+            overlay = overlays.get(name)
+            if isinstance(overlay, dict):
+                entries.extend(role_policy_entries(overlay, prefix + key + "." + name + "."))
+    return entries
 
 
 def check_agent_allow(report, name, adapter, runtime):

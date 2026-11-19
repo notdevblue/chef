@@ -42,7 +42,7 @@ name	path	client	created	synced	state
 출력 로그는 `<stateDir>/slots/beforeRun/<이름>-beforeRun.<id>.out.log`다.
 
 `slots.runtimeArguments`는 새 시작·재개 시 선택한 런타임 CLI에 추가할 argv 문자열 배열이다.
-Claude는 최상위 `slots`에, Codex·Grok의 런타임별 옵션은 `runtimes.<런타임>.slots.runtimeArguments`에 두며,
+공통값은 최상위 `slots`에 두고, 각 런타임은 `runtimes.<런타임>.slots.runtimeArguments`와 OS overlay에서 덮어쓸 수 있으며,
 슬롯 `run`이 템플릿 확장과 인자 전달을 맡는다.
 셸 명령으로 합치거나 별도 CLI 실행으로 우회하지 않는다. 형식·템플릿·Codex 세션 설정 예시는 어댑터 계약의 "슬롯"을 따른다.
 
@@ -87,11 +87,11 @@ Claude는 최상위 `slots`에, Codex·Grok의 런타임별 옵션은 `runtimes.
   `create`는 메인을 받지 않고 메인의 현재 have를 기준으로 한다.
   `--discard-local`은 진짜 작업물을 버려도 될 때만 쓴다. 권한 검사가 이 옵션을 막으면 런타임 진입점에 따라 사용자가 직접 실행하도록 안내한다.
 - `run <이름> <작업...> [--refresh] [--editor] [--keep-local | --discard-local] [--main-keep-local] [--dry-run]` — 슬롯 폴더에서
-  Windows Terminal 새 탭을 띄워 선택한 런타임의 mission 스킬로 시작한다. 슬롯이 `ready`이고 `ACTIVE`가 없어야
+  설정된 터미널에서 선택한 런타임의 mission 스킬로 시작한다. 기본은 Windows Terminal, POSIX 대화형 foreground다. 슬롯이 `ready`이고 `ACTIVE`가 없어야
   한다(`--resume`은 반대). `--refresh`는 먼저 `refresh`를 하고(메인 선행 sync와 `--keep-local`·`--discard-local`·`--main-keep-local`이 그쪽에 적용된다; `--main-keep-local`은 `--refresh` 없이 못 쓴다), `--editor`는
   `slots.editor` 명령으로 그 슬롯의 엔진 에디터를 함께 연다. 작업 문자열에는 큰따옴표와 개행을 쓸 수 없다.
-- `run <이름> --resume [--editor] [--dry-run]` — 진행 중 미션을 새 탭에서 이어서 연다. 슬롯 폴더에서 Windows Terminal
-  새 탭으로 해당 런타임의 mission 스킬을 이어서 연다. 슬롯이 `ready`이고 `ACTIVE`가 **있어야** 한다(일반 `run`과 반대).
+- `run <이름> --resume [--editor] [--dry-run]` — 진행 중 미션을 설정된 터미널에서 이어서 연다. 슬롯 폴더에서
+  해당 런타임의 mission 스킬을 이어서 연다. 슬롯이 `ready`이고 `ACTIVE`가 **있어야** 한다(일반 `run`과 반대).
   작업 문자열을 받지 않고, `--refresh`·`--keep-local`·`--discard-local`·`--main-keep-local`과 같이 쓰지 못한다(진행 중 미션의 열린 파일을
   동기화로 건드리면 안 되기 때문). `--editor`는 일반 `run`과 같다.
   기존 세션의 런타임·기록과 새 세션 인계 옵션은 현재 런타임 진입점의 계약을 따른다.
@@ -111,7 +111,7 @@ Claude는 최상위 `slots`에, Codex·Grok의 런타임별 옵션은 `runtimes.
 여러 슬롯의 미션이 같은 파일을 건드리지 않게, 각 미션의 계획 단계는 다른 작업 공간에서 열린 파일
 (`adapter.md`의 확인 명령)을 피해 배분한다. 확인 A·B·C는 슬롯 세션마다 받고, submit은 그 슬롯 세션에서 슬롯 작업 공간의
 작업 단위로 한다. 다른 슬롯과 같은 파일을 바꿨으면 먼저 submit된 쪽이 이기고, 뒤 슬롯은 동기화·병합이 필요하다(사용자 확인 대상).
-진행 중 미션을 새 탭에서 다시 열 때는 `run <이름> --resume`(wt.exe 를 손으로 부르지 않는다 — 부모 세션
+진행 중 미션을 다시 열 때는 `run <이름> --resume`(터미널 실행 명령을 손으로 조립하지 않는다 — 부모 세션
 환경변수가 넘어가 대화 기록이 안 남음).
 
 지우기: 사용자 확인 → `remove <이름> --yes`. 폴더를 에디터·터미널이 잡고 있으면 삭제가 실패하고 `state`가
@@ -165,4 +165,6 @@ python "<dashboard-script>" <dashboard-runtime> [--project <메인 프로젝트 
 - 기록 안 된 로컬 변경 확인(`reconcile -n`)은 슬롯 전체를 훑어 1분 넘게 걸릴 수 있다(`refresh`는 편집 확인만이라 더 짧다).
 # Hermes 실행 경로
 
-Hermes는 [전용 진입점](../../hermes/skills/slots/SKILL.md)의 `chef_slot`으로 현재 작업을 연결한다. 아래 `run`의 새 터미널 동작은 Claude·Codex·Grok에 적용된다. Hermes의 슬롯 준비·갱신·제거 보호 조건은 동일하다.
+Hermes는 [전용 진입점](../../hermes/skills/slots/SKILL.md)의 `chef_slot`으로 현재 작업을 연결한다. 위 `run`의 CLI·터미널 동작은 Claude·Codex·Grok에 적용된다. Hermes의 슬롯 준비·갱신·제거 보호 조건은 동일하다.
+
+`slots.terminal`은 `auto`·`foreground`·`wt`·`macos-terminal`·`gnome-terminal`·`konsole`·`tmux` 중 하나다. GUI 없는 작업에는 tmux를 명시한다. 기본 foreground는 TTY가 필요하고 대기열 자동 실행에는 사용하지 않는다. 실제 미션 진입은 세션·ACTIVE 기록으로 확인하며, 터미널 프로세스 실행 성공만으로 미션 시작·완료를 보고하지 않는다.

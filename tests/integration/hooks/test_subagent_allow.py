@@ -127,10 +127,10 @@ def test_runtime_overlay_replaces_top_level_allow(tmp_path, runtime):
     assert decision(tmp_path, runtime, "other-x") == {}
 
 
-def test_claude_ignores_runtime_overlay_and_uses_top_level(tmp_path):
+def test_claude_runtime_overlay_overrides_top_level(tmp_path):
     write_adapter(tmp_path, "claude", {"agents": {"allow": ["team-*"]}, "runtimes": {"claude": {"agents": {"allow": ["other-*"]}}}})
-    assert decision(tmp_path, "claude", "team-dev") == {}
-    assert denial(decision(tmp_path, "claude", "other-x"))
+    assert denial(decision(tmp_path, "claude", "team-dev"))
+    assert decision(tmp_path, "claude", "other-x") == {}
 
 
 def test_local_json_overrides_adapter(tmp_path):

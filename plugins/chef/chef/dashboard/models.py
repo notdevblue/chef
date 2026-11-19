@@ -102,7 +102,7 @@ def view_url(path, anchor=""):
 
 
 def raw_url(path):
-    return RAW_PREFIX + quote(infrastructure_paths.normalize(path).replace("\\", "/"), safe="/:")
+    return RAW_PREFIX + quote(infrastructure_paths.normalize(path).replace(os.sep, "/"), safe="/:")
 
 
 def natural_key(name):

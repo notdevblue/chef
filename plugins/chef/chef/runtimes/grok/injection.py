@@ -11,6 +11,8 @@
 import argparse
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -19,6 +21,8 @@ import time
 from datetime import datetime
 
 from chef.locations import PLUGIN_ROOT
+from chef.infrastructure.paths import same_path
+from chef.infrastructure.python import python_environment
 from chef.runtimes.grok import transcript as grok_transcript
 
 OK = 0
@@ -60,11 +64,42 @@ def grok_exe():
 
 
 def clean_env():
-    return {key: value for key, value in os.environ.items() if key.upper() not in DROPPED_ENV}
+    dropped = DROPPED_ENV if os.name == "nt" else tuple(name for name in DROPPED_ENV if name not in ("TERM", "SHELL"))
+    return {key: value for key, value in os.environ.items() if key.upper() not in dropped}
 
 
 def same_dir(first, second):
-    return os.path.normcase(os.path.normpath(str(first))) == os.path.normcase(os.path.normpath(str(second)))
+    return same_path(first, second)
+
+
+def node_grok_command(command):
+    """Recognize an actual Node entry script, not 'grok' in a later argument."""
+    match = re.search(r"(?:^|[/\\])node(?:js)?(?=\s)", command)
+    if not match:
+        return False
+    try:
+        words = shlex.split(command[match.end():].strip())
+    except ValueError as exc:
+        raise InjectError("Node 프로세스 명령줄을 해석할 수 없음") from exc
+    while words and words[0].startswith("-"):
+        option = words.pop(0)
+        if option in ("-e", "--eval", "-p", "--print"):
+            return False
+        if option in ("-r", "--require", "--import", "--loader", "--experimental-loader") and words:
+            words.pop(0)
+    if not words:
+        return False
+    configured = os.path.realpath(grok_exe())
+    for count in range(1, len(words) + 1):
+        script = " ".join(words[:count])
+        if count > 1 and not os.path.isfile(script):
+            continue  # ps does not quote executable/script paths containing spaces.
+        name = os.path.basename(script)
+        if name in ("grok", "grok.js", "grok.mjs", "grok.cjs") or os.path.realpath(script) == configured:
+            return True
+        if name.endswith((".js", ".mjs", ".cjs")):
+            return False
+    return False
 
 
 # --- 프로세스 -----------------------------------------------------------------
@@ -78,14 +113,17 @@ def grok_processes():
             "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
         )
         try:
-            out = subprocess.run(
+            done = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 timeout=60,
-            ).stdout.strip()
+            )
+            if done.returncode:
+                raise InjectError("grok 프로세스 목록 조회 명령 실패")
+            out = done.stdout.strip()
         except (OSError, subprocess.SubprocessError) as exc:
             raise InjectError(f"grok 프로세스 목록 조회 실패: {exc}") from exc
         if not out:
@@ -98,12 +136,23 @@ def grok_processes():
         return {int(row["ProcessId"]): row.get("CommandLine") or "" for row in rows if isinstance(row, dict)}
     result = {}
     try:
-        out = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, timeout=30).stdout
+        names = subprocess.run(["ps", "-ww", "-eo", "pid=,comm="], capture_output=True, text=True, timeout=30)
+        processes = subprocess.run(["ps", "-ww", "-eo", "pid=,args="], capture_output=True, text=True, timeout=30)
+        if names.returncode or processes.returncode:
+            raise InjectError("프로세스 목록 조회 명령 실패")
     except (OSError, subprocess.SubprocessError) as exc:
         raise InjectError(f"프로세스 목록 조회 실패: {exc}") from exc
-    for line in out.splitlines():
+    commands = {}
+    for line in names.stdout.splitlines():
+        pid, _, name = line.strip().partition(" ")
+        if pid.isdigit():
+            commands[int(pid)] = os.path.basename(name.strip())
+    for line in processes.stdout.splitlines():
         pid, _, args = line.strip().partition(" ")
-        if pid.isdigit() and os.path.basename(args.split(" ", 1)[0]) in ("grok", "grok.exe"):
+        if not pid.isdigit():
+            continue
+        executable = commands.get(int(pid), "")
+        if executable in ("grok", "grok.exe") or executable in ("node", "nodejs") and node_grok_command(args):
             result[int(pid)] = args
     return result
 
@@ -263,7 +312,7 @@ def inject(
     base = os.path.join(log_dir, f"inject-{session[:8]}-{stamp}")
     with open(base + ".txt", "w", encoding="utf-8") as handle:
         handle.write(text)
-    env = dict(env or clean_env())
+    env = python_environment(dict(env or clean_env()))
     # 띄우기 직전 다시 확인 — 그 사이 사용자가 TUI 에 입력했을 수 있음
     reasons = grok_transcript.busy_reasons(path, home)
     if reasons:

@@ -257,6 +257,7 @@ def delegate_script(project):
 
 def test_delegate_runs_canonical_before_run_under_lock_without_parent_active(project, tmp_path, monkeypatch):
     slots, config, slot = slot_setup(project, tmp_path)
+    monkeypatch.setattr(slots, "ensure_launcher", lambda config: None)
     helper = tmp_path / "prepare.py"
     proof = tmp_path / "proof.json"
     helper.write_text("import json,pathlib,sys\nlock=pathlib.Path(sys.argv[2])\n"
@@ -278,6 +279,7 @@ def test_delegate_runs_canonical_before_run_under_lock_without_parent_active(pro
 
 def test_delegate_failure_never_launches_cli(project, tmp_path, monkeypatch):
     slots, config, slot = slot_setup(project, tmp_path)
+    monkeypatch.setattr(slots, "ensure_launcher", lambda config: None)
     data = json.loads(project["adapter"].read_text())
     data["slots"]["beforeRun"] = [{"id": "prepare", "run": f'"{sys.executable}" -c "raise SystemExit(7)"'}]
     project["adapter"].write_text(json.dumps(data))
@@ -334,6 +336,7 @@ def test_mixed_marker_cannot_bypass_missing_adapter_receipt(project):
 @pytest.mark.parametrize("saved_runtime", ["codex", "claude"])
 def test_delegate_resume_preserves_recorded_session_and_runtime(project, tmp_path, monkeypatch, saved_runtime):
     slots, config, slot = slot_setup(project, tmp_path)
+    monkeypatch.setattr(slots, "ensure_launcher", lambda config: None)
     session = "51c1973e-0a29-47b2-9733-660cf63fb9bc"
     mission_guard.write_active(config.slot_state_dir("a"), mission_guard.Active("sample-mission", session, mission_guard.now_iso()))
     original = Path(config.slot_state_dir("a"), "ACTIVE").read_bytes()

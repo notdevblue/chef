@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from chef.infrastructure.storage import atomic_write_json
+from chef.infrastructure.paths import inside_real_root, same_path
 
 #!/usr/bin/env python3
 from chef.locations import PLUGIN_ROOT
@@ -212,10 +213,20 @@ def enqueue(state, config, task_id, project, goal, runtime=None, priority=0, aft
     return task
 
 
-def runtime_ready(runtime):
+def runtime_ready(runtime, project=None):
     if runtime == "hermes":
         return False  # Native current-session entry is not an unattended launcher.
-    return bool(shutil.which(runtime) and shutil.which("wt.exe"))
+    from chef.runtimes.launch import launcher_problem
+    from types import SimpleNamespace
+    try:
+        if project:
+            located = slots.locate(project["path"], runtime)
+            config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+        else:
+            config = SimpleNamespace(runtime=runtime, terminal="auto")
+        return not launcher_problem(config, unattended=True)
+    except Exception:
+        return False
 
 
 def observe(project, slot, runtime, mission=""):
@@ -265,8 +276,7 @@ def observe(project, slot, runtime, mission=""):
 
 
 def overlaps(first, second):
-    a, b = Path(first).resolve(), Path(second).resolve()
-    return a == b or a in b.parents or b in a.parents
+    return same_path(first, second) or inside_real_root(first, second) or inside_real_root(second, first)
 
 
 def conflicts(assignment, occupied):
@@ -277,7 +287,7 @@ def conflicts(assignment, occupied):
     )
 
 
-def plan(state, config, observer=observe, readiness=runtime_ready, now=None):
+def plan(state, config, observer=observe, readiness=None, now=None):
     now = time.time() if now is None else now
     budgets = config["budgets"]
     holding = [task for task in state["tasks"] if task["status"] in HOLDING]
@@ -293,7 +303,7 @@ def plan(state, config, observer=observe, readiness=runtime_ready, now=None):
         if any(dependency not in done for dependency in task["after"]):
             blocked[task["id"]] = "dependencies incomplete"
             continue
-        if not readiness(task["runtime"]):
+        if not (readiness(task["runtime"]) if readiness else runtime_ready(task["runtime"], config["projects"][task["project"]])):
             blocked[task["id"]] = "runtime or terminal executable unavailable"
             continue
         if remaining > 0:
@@ -356,7 +366,7 @@ def launch(task, project):
 
 
 def dispatch(
-    state, config, save, execute=False, observer=observe, readiness=runtime_ready, launcher=launch, now=None
+    state, config, save, execute=False, observer=observe, readiness=None, launcher=launch, now=None
 ):
     clock = time.time if now is None else lambda: now
     decision = plan(state, config, observer, readiness, clock())

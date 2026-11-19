@@ -124,7 +124,7 @@ def test_doctor_role_policy_runtime_overlay_values_are_checked(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("source", ["adapter", "local"])
-def test_doctor_role_policy_claude_overlay_warns_ignored(tmp_path, monkeypatch, source):
+def test_doctor_role_policy_claude_overlay_is_supported(tmp_path, monkeypatch, source):
     adapters, _ = make_registry(tmp_path)
     overlay = {"runtimes": {"claude": {"rolePolicy": {"model": "inherit"}}}}
     if source == "adapter":
@@ -134,8 +134,7 @@ def test_doctor_role_policy_claude_overlay_warns_ignored(tmp_path, monkeypatch, 
     monkeypatch.setenv("HAN_ADAPTERS_DIR", str(adapters))
     report = doctor.run("claude")
     rows = role_policy_rows(report)
-    assert [level for level, _ in rows] == ["WARN"]
-    assert "runtimes.claude.rolePolicy" in rows[0][1] and f"{source}.json" in rows[0][1]
+    assert [level for level, _ in rows] == ["OK"]
     assert not report.failed
 
 

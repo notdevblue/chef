@@ -73,6 +73,12 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
             raise
         from tools.file_tools import _resolve_path_for_task
     from tools.registry import registry
+    foreign = root / "foreign\\garden"
+    foreign_registration = foreign / ".hermes/orchestrator"
+    foreign_registration.mkdir(parents=True)
+    (foreign_registration / "adapter.json").write_text(json.dumps({"schema": 1, "paths": {"stateDir": "state"}}))
+    (foreign / "state").mkdir()
+    (foreign / "state/ACTIVE").write_text(json.dumps({"id": "foreign-mission", "session": "foreign-owner", "runtime": "hermes"}))
     for surface in ("cli", "gateway"):
         task, session = surface + "-task", surface + "-session"
         slot = root / "slots" / surface
@@ -94,6 +100,11 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
         assert plugins.resolve_pre_tool_block("terminal", {"command": "echo safe"}, task_id=task, session_id=session) is None
         foreign = plugins.resolve_pre_tool_block("terminal", {"command": "echo safe"}, task_id=task, session_id="unrelated")
         assert foreign and "another active" in foreign, foreign
+        foreign_path = root / "foreign\\garden/probe.txt"
+        assert str(_resolve_path_for_task(str(foreign_path), task)) == str(foreign_path)
+        foreign_write = plugins.resolve_pre_tool_block("write_file", {"path": str(foreign_path), "content": "fixture"}, task_id=task, session_id=session)
+        assert foreign_write and "another active" in foreign_write, foreign_write
+        assert not foreign_path.exists()
         write = plugins.resolve_pre_tool_block("write_file", {"path": "source.py", "content": "fictional"}, task_id=task, session_id=session)
         assert write and "roles.implement" in write, write
         assert any(item.get("context") for item in manager.invoke_hook("pre_llm_call", task_id=task, session_id=session))

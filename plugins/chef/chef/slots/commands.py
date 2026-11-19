@@ -76,6 +76,11 @@ from chef.runtimes.launch import (
     grok_leader_socket,
     launch_editor,
     launch_mission,
+    ensure_editor,
+    ensure_launcher,
+    mission_command,
+    terminal_backend,
+    wait_foreground,
     read_grok_leader_socket,
     write_grok_leader_record,
     wt_argument,
@@ -347,7 +352,7 @@ def create_one(runner, name, steps, resume):
                 )
         begin = time.monotonic()
         today = date.today().isoformat()
-        marked = {"path": slot.replace("\\", "/"), "client": client, "state": STATE_CREATING}
+        marked = {"path": slot.replace(os.sep, "/"), "client": client, "state": STATE_CREATING}
         if not row:
             marked.update(created=today, synced="-")
         runner.rows.upsert(name, **marked)
@@ -426,6 +431,8 @@ def cmd_create(config, args):
     if not names:
         print("만들 슬롯 없음 (slots.names 가 모두 있음)")
         return OK
+    for name in names:
+        config.check_requirements(name)
     plans = {name: config.build_steps(name) for name in names}
     before_run_plans = {name: config.before_run_steps(name, LAUNCH_PREPARE, "") for name in names}
     print_baseline(config)
@@ -606,6 +613,8 @@ def cmd_refresh(config, args):
     names = require_names(config, args.names)
     reject_conflicting_local_flags(args)
     config.check_refresh(names, args.keep_local)
+    for name in names:
+        config.check_requirements(name)
     code = sync_main_workspace(config, names, args.main_keep_local, args.dry_run)
     if code is not None:
         return code
@@ -728,7 +737,17 @@ def resume_session_id(config, name, mission_id, new_session=False):
 
 def resume_command(config, name, mission_id, new_session=False):
     resume_session = resume_session_id(config, name, mission_id, new_session)
-    return wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", resume_session)
+    return run_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", resume_session)
+
+
+def run_command(config, *args):
+    # Preserve the public WT builder/patch seam while selecting native backends.
+    return wt_command(config, *args) if terminal_backend(config) == "wt" else mission_command(config, *args)
+
+
+def describe_launch(config, command):
+    text = subprocess.list2cmdline(command) if terminal_backend(config) == "wt" else shlex.join(command)
+    return ("wt: " if terminal_backend(config) == "wt" else f"{terminal_backend(config)}: ") + text
 
 
 def before_run_failure(config, name, launch_mode, session_id):
@@ -756,25 +775,27 @@ def cmd_run_resume(config, args, name):
         raise UsageError(
             "--resume 은 --refresh·--keep-local·--discard-local·--main-keep-local 과 같이 못 씀 — 진행 중 미션의 열린 파일을 건드리면 안 됨"
         )
-    if args.editor and not config.editor:
-        raise UsageError("slots.editor 가 없음")
+    config.check_requirements(name)
+    if args.editor and not (config.editor or getattr(config, "editor_argv", [])):
+        raise UsageError("slots.editor 또는 editorArgv 가 없음")
     if args.editor:
-        expand(config.editor, config.values(name))
+        ensure_editor(config, name)
     refusal, mission_id = resume_refusal(config, name)
     if refusal:
         print(f"거부: {refusal}")
         return FAILED
     session_id = resume_session_id(config, name, mission_id, args.new_session)
-    command = wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
+    command = run_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
     if args.dry_run:
         print_baseline(config)
         before_run = config.before_run_steps(name, "resume", session_id)
         if before_run:
             print("\n".join(describe_steps(before_run)))
         if args.editor:
-            print(f"editor: {expand(config.editor, config.values(name))}")
-        print("wt: " + subprocess.list2cmdline(command))
+            print(f"editor: {ensure_editor(config, name)}")
+        print(describe_launch(config, command))
         return OK
+    ensure_launcher(config)
     print_baseline(config)
     with FileLock(config.slot_lock_path(name), f"슬롯 {name}"):
         refusal, mission_id = resume_refusal(config, name)
@@ -782,17 +803,19 @@ def cmd_run_resume(config, args, name):
             print(f"거부: {refusal}")
             return FAILED
         session_id = resume_session_id(config, name, mission_id, args.new_session)
-        command = wt_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
+        command = run_command(config, name, RESUME_PROMPT, f"{mission_id} 이어서", session_id)
         if not run_before_run(config, name, "resume", session_id):
             return FAILED
         config.check_codex_agent_files(name)
         if args.editor:
             launch_editor(config, name)
         try:
-            launch_mission(config, name, command)
+            process = launch_mission(config, name, command)
         except OSError as e:
-            print(f"wt.exe 실행 실패: {e}")
+            print(f"터미널 실행 실패: {e}")
             return FAILED
+    if wait_foreground(config, process):
+        return FAILED
     print(f"요약: {name} 에서 미션 {mission_id} 이어서 열기 요청 — {subprocess.list2cmdline(command)}")
     return OK
 
@@ -805,21 +828,22 @@ def cmd_run(config, args):
         return cmd_run_resume(config, args, name)
     if args.new_session:
         raise UsageError("--new-session 은 --resume 과 같이 써야 함")
+    config.check_requirements(name)
     task = " ".join(args.task).strip()
     if not task:
         raise UsageError("run <name> <작업...> 에 작업이 필요함")
     if '"' in task or "\n" in task or "\r" in task:
         raise UsageError('작업 문자열에 큰따옴표(")·개행을 쓸 수 없음 — 바꿔 쓰기')
-    if args.editor and not config.editor:
-        raise UsageError("slots.editor 가 없음")
+    if args.editor and not (config.editor or getattr(config, "editor_argv", [])):
+        raise UsageError("slots.editor 또는 editorArgv 가 없음")
     reject_conflicting_local_flags(args)
     if args.main_keep_local and not args.refresh:
         raise UsageError("--main-keep-local 은 --refresh 와 같이 써야 함")
     if args.refresh:
         config.check_refresh([name], args.keep_local)
     if args.editor:
-        expand(config.editor, config.values(name))
-    command = wt_command(config, name, task)
+        ensure_editor(config, name)
+    command = run_command(config, name, task)
     if args.dry_run:
         refusal = idle_refusal(config, name, allow_refresh_failed=args.refresh)
         if refusal:
@@ -840,9 +864,10 @@ def cmd_run(config, args):
         if before_run:
             print("\n".join(describe_steps(before_run)))
         if args.editor:
-            print(f"editor: {expand(config.editor, config.values(name))}")
-        print("wt: " + subprocess.list2cmdline(command))
+            print(f"editor: {ensure_editor(config, name)}")
+        print(describe_launch(config, command))
         return OK
+    ensure_launcher(config)
     if args.refresh:
         code = sync_main_workspace(config, [name], args.main_keep_local, dry_run=False)
         if code is not None:
@@ -870,10 +895,12 @@ def cmd_run(config, args):
         if args.editor:
             launch_editor(config, name)
         try:
-            launch_mission(config, name, command)
+            process = launch_mission(config, name, command)
         except OSError as e:
-            print(f"wt.exe 실행 실패: {e}")
+            print(f"터미널 실행 실패: {e}")
             return FAILED
+    if wait_foreground(config, process):
+        return FAILED
     print(f"요약: {name} 에서 미션 시작 요청 — {subprocess.list2cmdline(command)}")
     return OK
 
@@ -891,6 +918,7 @@ def current_session_context(project, name, session_id, resume=False, dry_run=Fal
     located = locate(project, "hermes")
     config = Config(located, read_adapter(located.adapter_path, "hermes"), "hermes")
     config.check_name(name)
+    config.check_requirements(name)
     with (contextlib.nullcontext() if dry_run else FileLock(config.slot_lock_path(name), f"슬롯 {name}")):
         mission_id = ""
         if resume:
@@ -987,7 +1015,7 @@ def remove_one(runner, name, discard_local):
                 remove_tree(slot)
             except OSError as e:
                 runner.rows.upsert(
-                    name, path=slot.replace("\\", "/"), client=client, state=STATE_FAILED + "remove"
+                    name, path=slot.replace(os.sep, "/"), client=client, state=STATE_FAILED + "remove"
                 )
                 return Outcome(
                     name,

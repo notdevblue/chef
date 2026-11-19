@@ -238,7 +238,7 @@ def read_allowed(config, raw):
         with open(real, "rb") as f:
             data = f.read()
         if any(
-            os.path.relpath(real, infrastructure_paths.request_realpath(folder)).replace("\\", "/")
+            os.path.relpath(real, infrastructure_paths.request_realpath(folder)).replace(os.sep, "/")
             not in SYSTEM_DOCUMENTS
             and not mission_state.auto_question_document(
                 folder, os.path.relpath(real, infrastructure_paths.request_realpath(folder))

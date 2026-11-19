@@ -161,6 +161,9 @@ class Project:
         monkeypatch.setenv("FAKE_P4_STATE", str(self.p4_state))
         monkeypatch.setenv("HAN_ADAPTERS_DIR", str(tmp_path / "adapters"))
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        # Legacy terminal contracts intentionally exercise the WT backend;
+        # portable backend capability checks have independent real tests.
+        monkeypatch.setattr(slots, "ensure_launcher", lambda config: None)
         self.write_adapter([])
 
     @property
@@ -187,6 +190,7 @@ class Project:
             "paths": {"vcsRoot": ".", "stateDir": "_My/missions"},
             "slots": {
                 "enabled": True,
+                "terminal": "wt",
                 "names": ["a", "b", "x", "y", "bad", "good"],
                 "client": "fake_{name}",
                 "prepare": prepare,
@@ -722,6 +726,29 @@ def test_run_dry_run_prints_wt_command_with_escaped_semicolon(project):
     assert "/chef:mission fix x\\; y" in out
     assert '-n "a: fix x\\; y"' in out
     assert "editor:" in out and "a-one" in out
+
+
+def test_missing_terminal_preflight_prevents_refresh_mutation(project, monkeypatch):
+    from chef.runtimes import launch
+    project.write_adapter([project.tick_step("one", 1)], terminal="foreground")
+    seed_slot(project, "a")
+    monkeypatch.setattr(slots, "ensure_launcher", launch.ensure_launcher)
+    monkeypatch.setattr(launch.shutil, "which", lambda _: "/fictional/cli")
+    monkeypatch.setattr(slots, "sync_main_workspace", lambda *args, **kwargs: pytest.fail("preflight must precede sync"))
+    code, _, err = project.run("run", "a", "task", "--refresh")
+    assert code == slots.USAGE and "대화형" in err
+    assert not project.ticks_text()
+
+
+def test_foreground_wait_releases_slot_lock_before_child_mission_entry(project, monkeypatch):
+    project.write_adapter([], terminal="foreground")
+    seed_slot(project, "a")
+    class Child:
+        def wait(self):
+            assert not project.lock_path("a").exists()
+            return 0
+    monkeypatch.setattr(slots, "launch_mission", lambda *args: Child())
+    assert project.run("run", "a", "task")[0] == slots.OK
 
 
 def windows_terminal_child_arguments(command):
@@ -1409,7 +1436,7 @@ def test_runtime_arguments_use_existing_runtime_and_local_overlay_precedence(pro
     local_path.write_text(json.dumps(local), encoding="utf-8")
     located = slots.locate(str(project.dir), runtime)
     config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
-    expected = "local-base" if runtime == "claude" else "local-runtime"
+    expected = "local-runtime"
     assert config.runtime_arguments_for("a") == [expected]
     local["slots"]["runtimeArguments"] = []
     local["runtimes"][runtime]["slots"]["runtimeArguments"] = []

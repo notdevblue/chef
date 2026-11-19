@@ -252,7 +252,7 @@ def validate_plan(project, plan, grades, require_matches=False):
 def parse_input_entry(project, value):
     if not isinstance(value, str) or not value:
         raise VerificationError("command.inputs 는 비어 있지 않은 경로·글롭 문자열 배열이어야 함")
-    text = value.replace("\\", "/")
+    text = value.replace(os.sep, "/")
     while text.startswith("./"):
         text = text[2:]
     if (
@@ -480,8 +480,17 @@ def policy_runtime(project, plan, settings=None):
 def guarded_runtime(project, command, guard):
     identity = command_runtime(project, command)
     try:
-        guard(subprocess.list2cmdline(command["argv"]))
-        guard(subprocess.list2cmdline([identity["executable"], *command["argv"][1:]]))
+        argv_guard = getattr(guard, "argv", None)
+        variants = [command["argv"], [identity["executable"], *command["argv"][1:]]]
+        for argv in variants:
+            if callable(argv_guard):
+                argv_guard(argv, str(project_path(project, command.get("cwd", "."))))
+            else:
+                # Preserve external text callback compatibility without using
+                # Windows quoting to represent a POSIX process invocation.
+                from chef.guards.argv import render
+
+                guard(render(argv))
     except Exception as error:
         raise VerificationError(str(error), "guard_rejected") from error
     return identity

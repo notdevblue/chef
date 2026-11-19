@@ -1,4 +1,5 @@
 import json
+import ntpath
 import os
 import sys
 
@@ -24,7 +25,10 @@ def read_payload():
 
 
 def export_line(name, value):
-    escaped = value.replace("\\", "/")
+    # Windows paths are exported to Bash with portable separators. A literal
+    # backslash in an absolute POSIX filename must survive shell sourcing.
+    windows_path = os.name == "nt" or bool(ntpath.splitdrive(value)[0])
+    escaped = value.replace("\\", "/") if windows_path else value.replace("\\", "\\\\")
     for char in SHELL_ESCAPED:
         escaped = escaped.replace(char, "\\" + char)
     return f'export {name}="{escaped}"'

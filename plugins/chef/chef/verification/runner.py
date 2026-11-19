@@ -133,23 +133,26 @@ def resource_locks(settings):
         yield
 
 
-def child_environment():
-    environment = dict(os.environ)
+def child_environment(cwd=None):
+    from chef.infrastructure.process import child_env
+
+    environment = child_env(cwd)
     environment.setdefault("PYTHONUTF8", "1")
     environment.setdefault("PYTHONIOENCODING", "utf-8")
     return environment
 
 
 def execute_command(project, command, identity, log):
+    cwd = project_path(project, command.get("cwd", "."))
     return subprocess.run(
         [identity["executable"], *command["argv"][1:]],
-        cwd=project_path(project, command.get("cwd", ".")),
+        cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=log,
         stderr=subprocess.STDOUT,
         timeout=command.get("timeoutSeconds", 600),
         shell=False,
-        env=child_environment(),
+        env=child_environment(str(cwd)),
     )
 
 

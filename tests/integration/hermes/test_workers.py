@@ -1,6 +1,7 @@
 """Hermes role worker authority and hook acknowledgements with fictional homes."""
 
 import io
+import contextlib
 import json
 import os
 import subprocess
@@ -318,6 +319,32 @@ def test_worker_cannot_escape_assigned_workspace_through_cwd(project, monkeypatc
     with pytest.raises(ValueError, match="escaped"):
         hooks.normalize_payload({"han_runtime": "codex", "hook_event_name": "PreToolUse",
                                  "cwd": str(project.root.parent)})
+
+
+def test_worker_filesystem_case_alias_keeps_ownership_and_state_protection(project, monkeypatch):
+    alias = project.root.with_name(project.root.name.upper())
+    if not alias.exists() or not os.path.samefile(alias, project.root):
+        pytest.skip("requires a case-insensitive filesystem")
+    context(project, monkeypatch)
+    normalized = hooks.normalize_payload({"han_runtime": "codex", "hook_event_name": "PreToolUse",
+        "cwd": str(alias), "tool_name": "Write", "tool_input": {"file_path": "STATE/ACTIVE"}})
+    assert workers.worker_denial(normalized)
+    assert normalized["session_id"] == "garden-owner"
+
+
+def test_worker_lock_identity_is_shared_by_filesystem_aliases(project, codex, monkeypatch):
+    alias = project.root.with_name(project.root.name.upper())
+    if not alias.exists() or not os.path.samefile(alias, project.root):
+        pytest.skip("requires a case-insensitive filesystem")
+    locks = []
+    def lock(path, name):
+        locks.append(path)
+        return contextlib.nullcontext()
+    monkeypatch.setattr(workers, "FileLock", lock)
+    delegate(project)
+    workers.delegate({"role": "chef:dev-small", "prompt": "Inspect the fictional garden."},
+                     session_id="garden-owner", cwd=str(alias))
+    assert len(locks) == 2 and locks[0] == locks[1]
 
 
 def test_each_worker_hook_revalidates_active_ownership(project, monkeypatch):

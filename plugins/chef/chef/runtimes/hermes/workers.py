@@ -13,8 +13,9 @@ from chef.guards import mission as guard
 from chef.infrastructure.configuration import locate, read_adapter
 from chef.infrastructure.fingerprints import implementation_digest
 from chef.infrastructure.locking import FileLock, process_alive
-from chef.infrastructure.paths import inside_root
+from chef.infrastructure.paths import inside_real_root, same_path
 from chef.infrastructure.process import child_env
+from chef.infrastructure.python import python_environment
 from chef.locations import PLUGIN_ROOT
 
 WORKER_ENV = "CHEF_HERMES_WORKER"
@@ -62,14 +63,14 @@ def normalize_worker_payload(payload):
     if payload.get("hook_event_name") == "SessionStart":
         Path(data["ready"]).write_text(data["digest"], encoding="utf-8")
     cwd = os.path.realpath(payload.get("cwd") or data["cwd"])
-    if cwd != data["cwd"] and not inside_root(data["cwd"], cwd):
+    if not same_path(cwd, data["cwd"]) and not inside_real_root(data["cwd"], cwd):
         raise ValueError("Codex worker working directory escaped its assigned workspace")
     inputs = payload.get("tool_input")
     if isinstance(inputs, dict):
         for key in ("cwd", "workdir"):
             if inputs.get(key):
                 actual = os.path.realpath(os.path.join(cwd, inputs[key]))
-                if actual != data["cwd"] and not inside_root(data["cwd"], actual):
+                if not same_path(actual, data["cwd"]) and not inside_real_root(data["cwd"], actual):
                     raise ValueError("Codex worker tool working directory escaped its assigned workspace")
     return {
         **payload, "session_id": data["session"], "agent_id": "chef-codex-worker",
@@ -103,7 +104,7 @@ def worker_denial(payload):
     for target in targets:
         path = os.path.realpath(os.path.join(payload.get("cwd") or data["cwd"], target))
         root = data["state"]
-        if path == root or inside_root(root, path) or inside_root(path, root):
+        if same_path(path, root) or inside_real_root(root, path) or inside_real_root(path, root):
             return "미션 상태 파일은 Hermes 코디네이터가 관리함"
     return ""
 
@@ -208,7 +209,9 @@ def delegate(args, *, session_id, task_id="", cwd):
         raise ValueError("Codex ChatGPT subscription login is required; API-key fallback is disabled")
     home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "chef/workers"
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with FileLock(str(home / ("worker-" + hashlib.sha256(os.path.realpath(cwd).encode()).hexdigest() + ".lock")), "Codex role worker"):
+    identity = os.stat(cwd)
+    workspace_key = hashlib.sha256(f"{identity.st_dev}:{identity.st_ino}".encode()).hexdigest()
+    with FileLock(str(home / ("worker-" + workspace_key + ".lock")), "Codex role worker"):
         with tempfile.TemporaryDirectory(prefix="call-", dir=home) as directory:
             context, ready = Path(directory) / "context.json", Path(directory) / "ready"
             guard_ready = Path(directory) / "guard-ready"
@@ -218,7 +221,7 @@ def delegate(args, *, session_id, task_id="", cwd):
                     "digest": implementation_digest()}
             context.write_text(json.dumps(data), encoding="utf-8")
             context.chmod(0o600)
-            env = {**child_env(cwd), WORKER_ENV: str(context)}
+            env = python_environment({**child_env(cwd), WORKER_ENV: str(context)}, cache_root=home / "interpreters")
             for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
                 env.pop(name, None)
             protected = protected_state(state, active.id)

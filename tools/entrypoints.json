@@ -87,6 +87,9 @@
   "hooks/subagent_allow.py": {
     "module": "chef.guards.subagents"
   },
+  "runtime.py": {
+    "module": "chef.cli.runtime"
+  },
   "skills/adapter-init/scripts/check_guard.py": {
     "module": "chef.cli.check_guard"
   },
@@ -153,6 +156,9 @@
   },
   "skills/slots/scripts/dashboard_discovery.py": {
     "module": "chef.dashboard.discovery"
+  },
+  "skills/slots/scripts/prepare.py": {
+    "module": "chef.slots.preparation"
   },
   "skills/slots/scripts/slots.py": {
     "module": "chef.slots.commands"

@@ -14,8 +14,9 @@ description: 미션을 동시에 여러 개 돌리기 위한 슬롯 워크스페
 - `<slots-script>`: `<plugin-root>/codex/skills/chef-slots/scripts/slots.py`, `<slots-runtime>`: 빈 값.
 - `<dashboard-script>`: `<plugin-root>/codex/skills/chef-slots/scripts/dashboard.py`, `<dashboard-runtime>`: 빈 값.
 - 어댑터 검색·병합은 [공통 어댑터 계약](../chef-mission/references/adapter-schema.md)의 Codex 절을 따른다. Claude와 같은 슬롯 목록·잠금·ACTIVE를 공유한다.
-- 새 탭은 `codex '$chef:chef-mission <작업>'`, 재개는 `codex '$chef:chef-mission 미션 이어서'`다. `run <이름> --resume --new-session`은 기존 대화 대신 새 Codex 세션에서 이어받는다. 기존 세션 기록이 없거나 다른 런타임이면 해당 런타임으로 재개하거나, 사용자가 Codex 인계를 요청한 뒤 이 옵션을 쓴다. 새 세션의 미션 절차가 다른 창의 실행·소유권을 확인한다.
+- 실행 CLI는 `codex '$chef:chef-mission <작업>'`, 재개는 `codex '$chef:chef-mission 미션 이어서'`다. `slots.terminal`이 실행할 터미널을 선택한다. `run <이름> --resume --new-session`은 기존 대화 대신 새 Codex 세션에서 이어받는다. 기존 세션 기록이 없거나 다른 런타임이면 해당 런타임으로 재개하거나, 사용자가 Codex 인계를 요청한 뒤 이 옵션을 쓴다. 새 세션의 미션 절차가 다른 창의 실행·소유권을 확인한다.
 - Windows 백그라운드 서버는 `Start-Process -WindowStyle Hidden`을 사용한다. 권한 검사가 파괴 옵션을 막으면 사용자가 터미널에서 직접 실행하도록 안내한다.
+- POSIX에서 대시보드는 명시적으로 시작한 `nohup <실제 Python> <dashboard-script> ... > <개인 로그> 2>&1 &` 또는 사용자가 설정한 서비스로 실행한다. 반환된 PID·명령을 기록하고 HTTP 응답을 확인한다. 백그라운드 시작만으로 정상 동작을 보고하지 않는다.
 
 런타임별 지침 준비 명령은 `runtimes.codex.slots.beforeRun`에 둔다.
 이 단계의 `{launchMode}`(`new`·`resume`·`prepare`)·`{sessionId}`는 부른 때와 검증된 기존 세션 UUID를 전달한다. `prepare`는 슬롯 `create`·`refresh` 직후이며 세션 UUID는 비어 있다.

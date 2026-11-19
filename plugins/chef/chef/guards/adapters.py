@@ -5,6 +5,7 @@ import glob
 import json
 import ntpath
 import os
+import sys
 from typing import NamedTuple
 
 from chef.guards.contracts import (
@@ -286,6 +287,30 @@ def runtime_overlay(adapter, runtime, source):
     return overlay
 
 
+def platform_name():
+    return "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux"
+
+
+def platform_overlay(adapter, source):
+    platforms = adapter.get("platforms", {})
+    if not isinstance(platforms, dict):
+        raise GuardOff(f"{source} 의 platforms 는 객체여야 함")
+    unknown = set(platforms) - {"windows", "macos", "linux"}
+    if unknown:
+        raise GuardOff(f"{source} 의 platforms 에 지원하지 않는 OS 이름이 있음")
+    for name, value in platforms.items():
+        if not isinstance(value, dict):
+            raise GuardOff(f"{source} 의 platforms.{name} 는 객체여야 함")
+    return platforms.get(platform_name(), {})
+
+
+def file_overlay(adapter, runtime, source):
+    """Apply one file's platform and runtime specificity before local overrides."""
+    base = merge_local(adapter, platform_overlay(adapter, source))
+    selected = runtime_overlay(base, runtime, source)
+    return merge_local(merge_local(base, selected), platform_overlay(selected, source + ".runtimes." + runtime))
+
+
 def load_adapter(adapter_path, problems=None, runtime="claude"):
     if problems is None:
         problems = []
@@ -296,11 +321,7 @@ def load_adapter(adapter_path, problems=None, runtime="claude"):
     if not isinstance(adapter, dict):
         raise GuardOff(f"adapter.json schema 가 1이 아님 ({adapter_path})")
     local = read_local(adapter_path, problems)
-    if runtime in ("codex", "grok", "hermes"):
-        adapter = merge_local(adapter, runtime_overlay(adapter, runtime, "adapter.json"))
-    adapter = merge_local(adapter, local)
-    if runtime in ("codex", "grok", "hermes"):
-        adapter = merge_local(adapter, runtime_overlay(local, runtime, "local.json"))
+    adapter = merge_local(file_overlay(adapter, runtime, "adapter.json"), file_overlay(local, runtime, "local.json"))
     if adapter.get("schema") != SUPPORTED_SCHEMA:
         raise GuardOff(f"adapter.json schema 가 1이 아님 ({adapter_path})")
     return adapter

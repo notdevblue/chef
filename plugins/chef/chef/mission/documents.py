@@ -105,7 +105,7 @@ def auto_question_document(folder, name):
     try:
         canonical, target = canonical_document_path(folder, name)
         root = infrastructure_paths.request_realpath(folder)
-        resolved = os.path.relpath(target, root).replace("\\", "/")
+        resolved = os.path.relpath(target, root).replace(os.sep, "/")
         if os.path.normcase(canonical) != os.path.normcase(resolved) or not os.path.isfile(target):
             return False
         parts = canonical.split("/")

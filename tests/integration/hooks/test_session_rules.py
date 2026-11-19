@@ -103,6 +103,16 @@ def test_export_escapes_quote_dollar_and_backtick(tmp_path):
     assert env_lines(tmp_path) == [r'export HAN_ADAPTERS_DIR="C:/a \"b\"/\$x/\`y"']
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX literal backslash filename")
+def test_posix_export_preserves_literal_backslash_and_shell_metacharacters(tmp_path):
+    value = str(tmp_path / 'folder\\name "quoted" $literal `literal`')
+    line = session_rules.export_line("HAN_TRANSCRIPT", value)
+    result = subprocess.run(["/bin/sh", "-c", line + '; printf %s "$HAN_TRANSCRIPT"'],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == value
+
+
 @pytest.mark.parametrize(
     "case",
     ["no_env_file", "empty_option", "han_env_already_set", "no_option"],

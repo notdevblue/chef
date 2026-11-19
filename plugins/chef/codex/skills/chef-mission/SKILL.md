@@ -19,7 +19,7 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
   `model: "inherit"`여도 등록된 역할은 정의의 모델이 적용되므로 그 사실을 보고한다. `definition`이면 위 고정을 따른다.
   `subagents: false`면 `chef:dev-medium`(과 `roles`가 가리키는 같은 계열 역할)의 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다.
   도구로 막는 강제 차단이 아니라 역할 정의가 브리프를 따르게 하는 것이며, 코디네이터가 반환된 분할안으로 새 단위를 파견한다.
-- 어댑터의 `runtimes.codex` 덮어쓰기를 적용한다. 병합 순서는 adapter → adapter.runtimes.codex → local → local.runtimes.codex다.
+- 어댑터의 OS·`runtimes.codex` 덮어쓰기를 적용한다. 병합 순서는 [공통 어댑터 계약](references/adapter-schema.md#os와-런타임-병합)을 따른다.
 - CLI에서 hooks 기능이 켜져 있고 `/hooks`에서 현재 플러그인 훅을 신뢰한 상태여야 한다.
   단독 마커 뒤 ACTIVE와 훅 안내가 모두 확인되기 전에는 미션 파일·프로젝트 파일을 쓰지 않는다.
 - 프로젝트의 AGENTS.md와 실제 설치된 Codex 스킬을 우선 확인한다. Claude용 도구 이름·스킬이

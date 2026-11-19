@@ -1,0 +1,12 @@
+{
+  "id": "cache",
+  "group": 1,
+  "argv": [
+    "{python}", "{plugin}/skills/slots/scripts/prepare.py", "copy",
+    "--source", "{main}/Cache/Library",
+    "--destination", "{slot}/Cache/Library",
+    "--source-fingerprint", "{main}/Cache/fingerprint.json",
+    "--expected-fingerprint", "{slot}/cache-fingerprint.json"
+  ],
+  "note": "Optional cache stage. Always run the project's import step afterward, including when this copy is skipped."
+}

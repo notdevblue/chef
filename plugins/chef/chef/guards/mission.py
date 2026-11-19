@@ -106,6 +106,7 @@ from chef.guards.p4 import (
     p4_invocation,
     p4_policy,
     p4c_as_p4,
+    p4c_project_reason,
 )
 from chef.guards.shell import (
     Variables,
@@ -119,6 +120,7 @@ from chef.guards.shell import (
     literal_data_command,
     peel_assignment,
     peel_wrapper,
+    pattern_flags,
     rule_exceptions,
     split_fragments,
     strip_chain_prefix,
@@ -270,7 +272,7 @@ def heartbeat(state_dir, payload, now=None):
         pass
 
 
-def find_denied_reason(adapter, fragments, problems=None, command=""):
+def find_denied_reason(adapter, fragments, problems=None, command="", check_p4=True):
     problems = [] if problems is None else problems
     fragments = allowed_fragments(adapter, fragments, problems)
     if not fragments:
@@ -279,8 +281,11 @@ def find_denied_reason(adapter, fragments, problems=None, command=""):
         pattern = rule.get("pattern") if isinstance(rule, dict) else None
         if not isinstance(pattern, str):
             continue
+        flags = pattern_flags(rule, problems, "guard.deny")
+        if flags is None:
+            continue
         try:
-            compiled = re.compile(pattern, re.IGNORECASE)
+            compiled = re.compile(pattern, flags)
         except re.error as e:
             problems.append(f"잘못된 정규식 건너뜀: {pattern} ({e})")
             continue
@@ -294,26 +299,72 @@ def find_denied_reason(adapter, fragments, problems=None, command=""):
             for fragment in fragments
         ):
             return str(rule.get("reason") or "차단된 명령")
-    return p4_deny_reason(adapter, fragments, problems)
+    return p4_deny_reason(adapter, fragments, problems) if check_p4 else ""
 
 
 def contains_marker(command, tool_name="Bash"):
     return any(MARKER.match(fragment) for fragment in command_fragments(command, tool_name))
 
 
-def judge_command(adapter, command, tool_name="Bash", problems=None, project=""):
+def judge_command(adapter, command, tool_name="Bash", problems=None, project="", cwd=None):
+    from chef.guards.argv import wrapper_child
+
     fragments = command_fragments(command, tool_name)
     markers = [match for match in map(MARKER.match, fragments) if match]
     if markers:
         if len(fragments) == 1:
             return Verdict("marker", marker=markers[0])
         return Verdict("mixed", MARKER_ALONE_REASON)
+    for fragment in fragments:
+        tokens = [unquote(token) for token in P4_TOKEN.findall(fragment)]
+        if tokens:
+            try:
+                wrapper_child(os.path.basename(tokens[0]).lower().removesuffix(".exe"), tokens[1:])
+            except ValueError as error:
+                return Verdict("rule", str(error))
+        scope_reason = p4c_project_reason(fragment, project, adapter, cwd)
+        if scope_reason:
+            return Verdict("rule", scope_reason)
     wrapped = [p4 for p4 in (p4c_as_p4(fragment, project, adapter) for fragment in fragments) if p4]
     fragments = list(dict.fromkeys(fragments + wrapped))
     reason = find_denied_reason(adapter, fragments, problems, command) or p4_client_reason(
         adapter, fragments, project
     )
     return Verdict("rule", reason) if reason else Verdict("allow")
+
+
+def judge_argv(adapter, argv, problems=None, project="", depth=0, cwd=None):
+    """Judge direct argv as data; recurse only into an explicit shell command."""
+    from chef.guards.argv import describe, render
+
+    problems = [] if problems is None else problems
+    if depth > MAX_DEPTH:
+        return Verdict("rule", "명령 wrapper 중첩이 너무 깊어 가드를 확인할 수 없음")
+    try:
+        invocation = describe(argv)
+    except ValueError as error:
+        return Verdict("rule", str(error))
+    command = render(invocation.argv)
+    marker = MARKER.fullmatch(command)
+    if marker:
+        return Verdict("marker", marker=marker)
+    scope_reason = p4c_project_reason(invocation.argv, project, adapter, cwd)
+    if scope_reason:
+        return Verdict("rule", scope_reason)
+    wrapped = p4c_as_p4(invocation.argv, project, adapter)
+    vectors = [invocation.argv] + ([wrapped] if wrapped else [])
+    fragments = [command] + ([render(wrapped)] if wrapped else [])
+    reason = find_denied_reason(adapter, fragments, problems, command, check_p4=False)
+    if not reason:
+        retained = [vector for vector, text in zip(vectors, fragments) if allowed_fragments(adapter, [text], problems)]
+        reason = p4_deny_reason(adapter, retained, problems) or p4_client_reason(adapter, vectors, project)
+    if reason:
+        return Verdict("rule", reason)
+    if invocation.shell:
+        return judge_command(adapter, invocation.script, invocation.shell, problems, project, cwd)
+    if invocation.child:
+        return judge_argv(adapter, invocation.child, problems, project, depth + 1, cwd)
+    return Verdict("allow")
 
 
 def corrupt_active_notice(state_dir):
@@ -686,7 +737,7 @@ def decide(payload):
         if marker_command or participates_in_mission(active, payload):
             outcome.deny = "Grok 명령 입력이 잘려 미션 가드를 확인할 수 없음; 짧은 명령으로 나눌 것"
             return outcome
-    verdict = judge_command(adapter, command, tool_name, problems, located.project)
+    verdict = judge_command(adapter, command, tool_name, problems, located.project, payload.get("cwd") or located.project)
     if verdict.kind != "marker":
         try:
             heartbeat(state_dir, payload)

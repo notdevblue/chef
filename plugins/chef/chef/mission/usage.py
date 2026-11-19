@@ -11,6 +11,7 @@ from pathlib import Path
 from chef.guards import mission as mission_guard
 from chef.infrastructure import configuration as infrastructure_configuration
 from chef.infrastructure import errors as infrastructure_errors
+from chef.infrastructure.paths import same_path
 from chef.locations import PLUGIN_ROOT
 from chef.mission.state import LEDGER_HEADER, StateError, read_table
 from chef.runtimes.claude import session as runtimes_claude_session
@@ -535,8 +536,10 @@ def main(argv=None):
     if args.start >= args.end:
         parser.error("start는 end보다 앞서야 함")
     labels = [label for label, _ in args.project]
-    paths = [str(path.resolve()).casefold() for _, path in args.project]
-    if len(set(labels)) != len(labels) or len(set(paths)) != len(paths):
+    paths = [path for _, path in args.project]
+    if len(set(labels)) != len(labels) or any(
+        same_path(path, previous) for index, path in enumerate(paths) for previous in paths[:index]
+    ):
         parser.error("프로젝트 이름·경로 중복")
     if any(label not in labels for label, _ in args.mission_root):
         parser.error("mission-root 이름에 해당하는 project가 없음")

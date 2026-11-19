@@ -9,7 +9,7 @@ Claude Code · Codex CLI · Grok CLI · Hermes Agent에서 개발 작업을 계�
 
 ## 설치
 
-Python 3.11 이상과 사용할 런타임의 CLI가 필요합니다.
+Python 3.11 이상과 사용할 런타임의 CLI가 필요합니다. `python3`만 제공되는 환경도 지원하며 [설치 안내](docs/install.md)의 실행 진입점을 사용합니다.
 
 ```bash
 git clone https://github.com/notdevblue/chef.git
@@ -62,7 +62,8 @@ API 키로 자동 전환하지 않습니다. native 훅·설치·제한 사항�
 
 개인 어댑터 폴더는 `HAN_ADAPTERS_DIR`로 지정합니다. Codex의 역할 등록과 훅 신뢰를 포함한
 프로젝트 연결 절차는 [설치 안내](docs/install.md#프로젝트-연결)에 있습니다.
-Claude·Codex·Grok 슬롯에서 새 CLI 세션을 여는 기능은 Windows Terminal이 필요합니다.
+Claude·Codex·Grok 슬롯은 Windows에서 Windows Terminal, POSIX에서 현재 대화형 터미널을 기본 사용합니다.
+별도 창은 `slots.terminal`로 macOS Terminal·GNOME Terminal·Konsole을, GUI 없는 실행은 tmux를 명시합니다.
 Hermes는 macOS·Linux의 로컬 terminal backend에서 `chef_slot`으로 현재 작업 세션을 슬롯에 연결합니다.
 
 ## 문서

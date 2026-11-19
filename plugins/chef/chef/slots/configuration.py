@@ -3,12 +3,14 @@
 import json
 import os
 import re
+import sys
 
 from chef.guards import mission as mission_guard
 from chef.infrastructure.errors import UsageError
 from chef.infrastructure.paths import inside_real_root, is_link, normalize, same_path
 from chef.infrastructure.vcs import build_vcs
 from chef.runtimes.claude.session import claude_memory_dir
+from chef.locations import PLUGIN_ROOT
 from chef.slots.contracts import NAME_PATTERN, SYNC_STEP
 from chef.slots.models import Step
 
@@ -82,6 +84,26 @@ class Config:
             raise UsageError("slots.beforeRun 은 단계 배열이어야 함")
         self.refresh_ids = list(slots.get("refresh") or [])
         self.editor = slots.get("editor") or ""
+        if not isinstance(self.editor, str) or "\x00" in self.editor:
+            raise UsageError("slots.editor 는 NUL 없는 문자열이어야 함")
+        self.editor_argv = slots.get("editorArgv", [])
+        if "editorArgv" in slots and (
+            not isinstance(self.editor_argv, list) or not self.editor_argv
+            or any(not isinstance(value, str) or "\x00" in value for value in self.editor_argv)
+            or not self.editor_argv[0]
+        ):
+            raise UsageError("slots.editorArgv 는 비어 있지 않은 NUL 없는 문자열 배열이어야 함")
+        if self.editor and self.editor_argv:
+            raise UsageError("slots.editor 와 slots.editorArgv 는 함께 지정할 수 없음")
+        self.requirements = slots.get("requirements", {})
+        if not isinstance(self.requirements, dict) or set(self.requirements) - {"executables", "files"}:
+            raise UsageError("slots.requirements 에 executables·files 배열만 지정할 수 있음")
+        for key, values in self.requirements.items():
+            if not isinstance(values, list) or any(not isinstance(value, str) or not value or "\x00" in value for value in values):
+                raise UsageError("slots.requirements." + key + " 는 비어 있지 않은 경로 문자열 배열이어야 함")
+        self.terminal = slots.get("terminal", "auto")
+        if self.terminal not in ("auto", "foreground", "wt", "macos-terminal", "gnome-terminal", "konsole", "tmux"):
+            raise UsageError("slots.terminal 의 실행 방식이 지원되지 않음")
         self.runtime_arguments = slots.get("runtimeArguments", [])
         if not isinstance(self.runtime_arguments, list):
             raise UsageError("slots.runtimeArguments 는 문자열 배열이어야 함")
@@ -207,6 +229,8 @@ class Config:
             slot=self.slot_path(name),
             client=self.client_of(name),
             main=self.main,
+            python=sys.executable,
+            plugin=str(PLUGIN_ROOT),
         )
         if self.runtime == "claude":
             values.update(
@@ -218,6 +242,19 @@ class Config:
 
     def prepare_entries(self):
         return self.step_entries(self.prepare, "prepare")
+
+    def check_requirements(self, name):
+        from chef.slots.preparation import PreparationError, preflight
+
+        values = self.values(name)
+        try:
+            preflight(
+                [expand(value, values) for value in self.requirements.get("executables", [])],
+                [expand(value, values) for value in self.requirements.get("files", [])],
+                cwd=self.main,
+            )
+        except (PreparationError, OSError) as exc:
+            raise UsageError(str(exc)) from exc
 
     def step_entries(self, raw_steps, source):
         entries = []

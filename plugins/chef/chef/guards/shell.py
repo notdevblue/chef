@@ -210,13 +210,24 @@ def rule_exceptions(rule, problems, key="except"):
         problems.append(f"guard.deny.{key} 형식 오류: 문자열 배열이어야 함. 이 규칙의 예외를 적용하지 않음")
         return []
     compiled = []
+    flags = pattern_flags(rule, problems, "guard.deny")
+    if flags is None:
+        return []
     for pattern in patterns:
         try:
-            compiled.append(re.compile(pattern, re.IGNORECASE))
+            compiled.append(re.compile(pattern, flags))
         except re.error as e:
             problems.append(f"guard.deny.{key} 정규식 오류: {pattern} ({e}). 이 규칙의 예외를 적용하지 않음")
             return []
     return compiled
+
+
+def pattern_flags(rule, problems, label):
+    sensitive = rule.get("caseSensitive", False) if isinstance(rule, dict) else False
+    if type(sensitive) is not bool:
+        problems.append(f"{label}.caseSensitive 는 bool 이어야 함. 이 항목 건너뜀")
+        return None
+    return 0 if sensitive else re.IGNORECASE
 
 
 def compile_patterns(values, label, problems):
@@ -231,8 +242,11 @@ def compile_patterns(values, label, problems):
         if not isinstance(pattern, str):
             problems.append(f"{label} 형식 오류: 문자열 또는 {{pattern}} 이어야 함. 이 항목 건너뜀")
             continue
+        flags = pattern_flags(value, problems, label)
+        if flags is None:
+            continue
         try:
-            compiled.append(re.compile(pattern, re.IGNORECASE))
+            compiled.append(re.compile(pattern, flags))
         except re.error as e:
             problems.append(f"{label} 정규식 오류: {pattern} ({e}). 이 항목 건너뜀")
     return compiled

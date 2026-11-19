@@ -1,32 +1,25 @@
 {
   "schema": 1,
-  "project": "Game",
+  "project": "Comet",
   "paths": {
     "vcsRoot": ".",
-    "stateDir": "_My/missions"
+    "stateDir": "state/missions"
   },
   "stages": [
     {
-      "id": "content",
+      "id": "investigate",
       "kind": "research",
-      "label": "컨텐츠 확인"
+      "label": "조사"
     },
     {
-      "id": "poc",
-      "kind": "design",
-      "label": "PoC",
-      "skill": "game-poc",
-      "optional": true
-    },
-    {
-      "id": "impl",
+      "id": "implement",
       "kind": "implement",
-      "label": "구현 진행"
+      "label": "구현"
     },
     {
       "id": "review",
       "kind": "review",
-      "label": "검토 & 리뷰"
+      "label": "리뷰"
     }
   ],
   "guard": {
@@ -120,142 +113,135 @@
   "roles": {
     "research": "chef:researcher",
     "implement": "chef:dev-medium",
+    "implementSmall": "chef:dev-small",
     "verify": "chef:verifier",
-    "review": "code-reviewer",
-    "reviewLoopSkill": "review-loop",
-    "implementSmall": "chef:dev-small"
+    "review": "chef:code-reviewer",
+    "reviewSmall": "chef:reviewer-small"
   },
-  "rolePolicy": { "model": "definition", "subagents": true },
+  "rolePolicy": {
+    "model": "definition",
+    "subagents": true
+  },
   "verify": {
-    "backend": "mcp",
+    "backend": "cli",
     "grades": [
-      "live-verified",
-      "editmode-pass",
-      "pytest-pass",
-      "dbc-pass",
-      "compile-only",
-      "lint-pass",
+      "python-pass",
       "doc-only"
     ]
   },
   "report": {
-    "push": true
+    "push": false
   },
   "slots": {
     "enabled": true,
     "names": [
       "slot1",
-      "slot2",
-      "slot3"
+      "slot2"
     ],
-    "vcs": "perforce",
-    "stream": "//Depot/Main",
-    "churn": [
-      "Unity/Game/Assets/Resources/Fonts/dynamic_font_sdf.asset"
-    ],
+    "vcs": "none",
+    "terminal": "auto",
     "prepare": [
       {
-        "id": "sync",
-        "group": 1,
-        "run": "p4 -c {client} sync -q --parallel=threads=8 //Depot/Main/...@{baseline}"
-      },
-      {
-        "id": "library",
-        "group": 1,
-        "run": "robocopy \"{main}\\Unity\\Game\\Library\" \"{slot}\\Unity\\Game\\Library\" /E /COPY:DAT /DCOPY:DAT /MT:32 /R:1 /W:1 /NFL /NDL /NP /XD \"{main}\\Unity\\Game\\Library\\UnityMcp\"",
-        "okExit": [
-          0,
-          1,
-          2,
-          3
+        "id": "preflight",
+        "group": 0,
+        "argv": [
+          "{python}",
+          "{plugin}/skills/slots/scripts/prepare.py",
+          "check",
+          "--executable",
+          "{python}",
+          "--file",
+          "{main}/tools/project.py",
+          "--file",
+          "{main}/src/arithmetic.py"
         ]
       },
       {
-        "id": "junction",
-        "group": 2,
-        "run": "cmd /c \"{slot}\\Code\\setup.bat\""
-      },
-      {
-        "id": "claudeLocal",
-        "group": 2,
-        "run": "robocopy \"{main}\\.claude\" \"{slot}\\.claude\" settings.local.json /COPY:DAT /R:1 /W:1 /NFL /NDL /NP",
-        "okExit": [
-          0,
-          1
+        "id": "sources",
+        "group": 1,
+        "argv": [
+          "{python}",
+          "{plugin}/skills/slots/scripts/prepare.py",
+          "copy",
+          "--source",
+          "{main}/src",
+          "--destination",
+          "{slot}/src"
         ]
       },
       {
-        "id": "memory",
-        "group": 2,
-        "run": "powershell -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $l='{memoryDir}'; $t='{mainMemoryDir}'; $i=Get-Item -LiteralPath $l -Force -ErrorAction SilentlyContinue; if($i){ if($i.LinkType -eq 'Junction' -and @($i.Target | Where-Object { $_.TrimEnd('\\') -ieq $t.TrimEnd('\\') })){ exit 0 }; Write-Output ('exists-not-junction: '+$l); exit 1 }; New-Item -ItemType Directory -Force -Path $t | Out-Null; New-Item -ItemType Directory -Force -Path (Split-Path -Parent $l) | Out-Null; New-Item -ItemType Junction -Path $l -Target $t | Out-Null\""
+        "id": "tools",
+        "group": 1,
+        "argv": [
+          "{python}",
+          "{plugin}/skills/slots/scripts/prepare.py",
+          "copy",
+          "--source",
+          "{main}/tools",
+          "--destination",
+          "{slot}/tools"
+        ]
       },
       {
-        "id": "import",
-        "group": 3,
-        "exclusive": true,
-        "run": "\"{unityExe}\" -batchmode -nographics -projectPath \"{slot}\\Unity\\Game\" -executeMethod Packages.Rider.Editor.RiderScriptEditor.SyncSolution -quit -logFile \"{log}\""
+        "id": "setup",
+        "group": 2,
+        "argv": [
+          "{python}",
+          "{slot}/tools/project.py",
+          "setup",
+          "--root",
+          "{slot}"
+        ],
+        "cwd": "{slot}"
       },
       {
         "id": "verify",
-        "group": 4,
-        "cwd": "{slot}",
-        "run": "cmd /c \"Build\\project-build.bat code build GameServer\""
+        "group": 3,
+        "argv": [
+          "{python}",
+          "{slot}/tools/project.py",
+          "verify",
+          "--root",
+          "{slot}"
+        ],
+        "cwd": "{slot}"
       }
     ],
     "refresh": [
-      "sync",
-      "import"
+      "preflight",
+      "sources",
+      "tools",
+      "setup",
+      "verify"
     ],
-    "editor": "\"{unityExe}\" -projectPath \"{slot}\\Unity\\Game\"",
-    "autocompact": 500000
+    "requirements": {
+      "executables": [
+        "{python}"
+      ],
+      "files": [
+        "{main}/tools/project.py",
+        "{main}/src/arithmetic.py"
+      ]
+    }
   },
   "runtimes": {
-    "codex": {
-      "roles": {
-        "research": "chef:researcher",
-        "implement": "chef:dev-medium",
-        "verify": "chef:verifier",
-        "review": "code-reviewer",
-        "reviewLoopSkill": "review-loop",
-        "implementSmall": "chef:dev-small"
-      },
+    "claude": {
       "slots": {
-        "prepare": [
+        "beforeRun": [
           {
-            "id": "sync",
-            "group": 1,
-            "run": "p4 -c {client} sync -q --parallel=threads=8 //Depot/Main/...@{baseline}"
-          },
-          {
-            "id": "library",
-            "group": 1,
-            "run": "robocopy \"{main}\\Unity\\Game\\Library\" \"{slot}\\Unity\\Game\\Library\" /E /COPY:DAT /DCOPY:DAT /MT:32 /R:1 /W:1 /NFL /NDL /NP /XD \"{main}\\Unity\\Game\\Library\\UnityMcp\"",
-            "okExit": [
-              0,
-              1,
-              2,
-              3
+            "id": "memory",
+            "argv": [
+              "{python}",
+              "{plugin}/skills/slots/scripts/prepare.py",
+              "link",
+              "--source",
+              "{mainMemoryDir}",
+              "--destination",
+              "{memoryDir}",
+              "--create-source"
             ]
-          },
-          {
-            "id": "junction",
-            "group": 2,
-            "run": "cmd /c \"{slot}\\Code\\setup.bat\""
-          },
-          {
-            "id": "import",
-            "group": 3,
-            "exclusive": true,
-            "run": "\"{unityExe}\" -batchmode -nographics -projectPath \"{slot}\\Unity\\Game\" -executeMethod Packages.Rider.Editor.RiderScriptEditor.SyncSolution -quit -logFile \"{log}\""
-          },
-          {
-            "id": "verify",
-            "group": 4,
-            "cwd": "{slot}",
-            "run": "cmd /c \"Build\\project-build.bat code build GameServer\""
           }
-        ],
-        "autocompact": 200000
+        ]
       }
     }
   }

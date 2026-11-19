@@ -6,7 +6,7 @@
 ## 필요 조건
 
 - Python 3.11 이상, 사용할 Claude Code·Codex CLI·Grok CLI 또는 Hermes Agent.
-- Claude·Codex·Grok 슬롯에서 새 CLI 세션을 열 때는 Windows와 Windows Terminal(`wt.exe`).
+- Claude·Codex·Grok 슬롯 실행은 Windows에서 Windows Terminal(`wt.exe`), macOS·Linux에서 대화형 터미널 또는 설정한 터미널 백엔드.
 - Hermes는 macOS·Linux의 native plugin API와 로컬 terminal backend. 역할 파견에는 Codex CLI의 ChatGPT 구독 로그인과 신뢰한 Chef 훅이 필요합니다.
 - 프로젝트 어댑터가 사용하는 도구. Perforce·Unity는 해당 프로젝트에서 사용하는 경우에만 필요합니다.
 
@@ -47,6 +47,22 @@ codex
 개인 어댑터와 `projects.json`·`local.json`은 공개 Git에 추가하지 않습니다.
 예제의 프로젝트 준비·빌드 명령은 대상 OS에서 실행 가능한 명령으로 설정합니다.
 Windows의 `.bat`, `cmd`, `robocopy` 명령을 macOS·Linux에서 자동 변환하지 않습니다.
+
+### Python 3 진입점
+
+`python` 명령 없이 `python3`만 있다면 `python3 <repo>/plugins/chef/runtime.py codex`로 시작합니다.
+마지막 인자는 `claude`, `grok`, `hermes`도 가능합니다. 현재 Python을 가리키는 개인 캐시 별칭을 자식 PATH에만 추가하므로 시스템 별칭은 바꾸지 않습니다.
+슬롯 런처와 Hermes 역할 워커는 같은 처리를 자동 적용합니다. 별도 터미널에서 CLI를 직접 시작할 때도 이 진입점을 사용하거나 유효한 `python`이 있는 환경을 사용합니다.
+
+### 슬롯 터미널과 에디터
+
+`slots.terminal`의 기본 `auto`는 Windows에서 `wt`, macOS·Linux에서 `foreground`입니다.
+`foreground`는 현재 대화형 TTY를 사용하고 종료까지 기다립니다. 새 창이 필요하면 `macos-terminal`, `gnome-terminal`, `konsole`을 명시합니다.
+GUI 없는 실행은 설치된 `tmux`를 선택하면 독립된 detached 세션을 만듭니다. 자동 대기열은 foreground와 Hermes 새 세션을 실행하지 않습니다.
+필요한 CLI·터미널·GUI 세션을 작업 공간 갱신 전에 확인하며, macOS Terminal 제어는 OS의 Automation 권한이 필요할 수 있습니다.
+
+에디터는 기존 `slots.editor` 또는 `slots.editorArgv` 배열 중 하나를 사용합니다. macOS `.app` 경로는 번들의 실제 실행 파일을 확인해 직접 실행하므로 `open`의 PID를 에디터 PID로 오인하지 않습니다.
+개인 실행 경로는 `local.json`에 설정합니다. 새 POSIX 터미널은 자체 TERM·SHELL을 사용하고, 런처는 Python PATH·어댑터 레지스트리·런타임 홈과 P4 설정을 명시적으로 전달합니다. 인증정보는 각 CLI의 정상 인증 설정에서 관리하며 쉘 명령에 API 키를 복사하지 않습니다.
 
 준비 단계와 `beforeRun`에는 기존 `run` 문자열 대신 `argv` 문자열 배열을 사용할 수 있습니다.
 각 인자를 따로 확장하고 셸 없이 실행하므로 공백·한글 경로를 별도로 따옴표로 감쌀 필요가 없습니다.
@@ -113,7 +129,8 @@ Hermes의 레지스트리는 `HAN_ADAPTERS_DIR`이 우선이며, 없으면 `$HER
 `HERMES_HOME`이 없으면 `~/.hermes`입니다. 이후 체크아웃의 `adapters/`를 확인합니다.
 프로젝트 폴더를 위로 탐색할 때 각 폴더에서 `.hermes` → `.claude` → `.codex` → `.grok`의
 `orchestrator/adapter.json`을 확인합니다. 가까운 폴더가 우선입니다.
-병합 순서는 `adapter.json` → `runtimes.hermes` → `local.json` → 그 파일의 `runtimes.hermes`입니다.
+각 파일은 공통 → 해당 OS → Hermes → Hermes 안의 해당 OS 순서로 병합합니다.
+`adapter.json`을 처리한 뒤 `local.json`에도 같은 순서를 적용합니다. 자세한 키는 [어댑터 계약](../plugins/chef/skills/mission/references/adapter-schema.md)을 따릅니다.
 
 현재 Hermes 작업의 `chef_slot`으로 ready 슬롯을 선택하고, 해당 세션에서 미션을 시작합니다.
 같은 Hermes 소유 세션의 진행 중 미션은 `resume`으로 연결하며 다른 세션의 ACTIVE는 인계하지 않습니다.

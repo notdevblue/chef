@@ -175,9 +175,11 @@ python task_queue.py --config <config.json> --state <home>/queue.json reconcile
 
 Without `--execute`, dispatch is a proposal. Execution invokes only existing
 `slots.py run --runtime …`, which retains preparation, guards and the mission
-workflow. A runtime is ready only when its CLI and existing Windows Terminal
-launcher are available. Linux can observe/plan; this release does not introduce
-a replacement Linux terminal launcher. Successful launch is not success of work.
+workflow. Readiness uses the same configured launcher preflight as slots: the CLI,
+terminal executable and required GUI session must be available. Windows defaults
+to Windows Terminal; POSIX defaults to interactive foreground. Unattended dispatch
+requires an explicit GUI terminal or tmux backend on POSIX; it cannot use foreground
+or create Hermes tasks. Successful launcher invocation is not mission entry or success of work.
 Reconcile must observe the new ACTIVE ownership and then validated closed/C-approved
 mission completion, done units, receipts and independent reviews before freeing
 reservations or satisfying dependencies. A fast mission not observed as ACTIVE,

@@ -5,6 +5,23 @@
 - `adapter.json` — 훅과 스킬이 기계적으로 읽는 값
 - `adapter.md` — 사람과 모델이 읽는 절차(작업 단위 만들기, 검증 순서, 함정)
 
+## OS와 런타임 병합
+
+`platforms.windows`·`platforms.macos`·`platforms.linux`는 해당 OS의 덮어쓰기다. `runtimes.claude`·`runtimes.codex`·`runtimes.grok`·`runtimes.hermes`를 모두 지원한다.
+각 파일의 병합 순서는 공통 → 해당 OS → 해당 런타임 → 해당 런타임 안의 해당 OS다. `adapter.json`의 이 순서를 마친 뒤 `local.json`에도 같은 순서를 적용해 마지막에 병합한다. 객체는 깊게 병합하고 배열·스칼라는 교체한다. 따라서 공통 파일의 런타임·OS 값이 개인 `local.json`을 이기지 않는다. 가드·미션·doctor·슬롯은 같은 로더를 사용한다. OS 이름·선택된 overlay 형식이 잘못되면 오류로 처리한다.
+
+```json
+{
+  "platforms": {"linux": {"slots": {"terminal": "tmux"}}},
+  "runtimes": {
+    "claude": {"slots": {"beforeRun": []}},
+    "codex": {"platforms": {"macos": {"slots": {"terminal": "macos-terminal"}}}}
+  }
+}
+```
+
+Claude 설정·메모리 준비 단계는 `runtimes.claude.slots.beforeRun`에만 둔다. 공통 단계에 두면 다른 런타임에도 상속되므로 주의한다. 배열을 합쳐 붙이지 않으며 필요한 전체 단계 배열을 지정한다.
+
 ## 어댑터 찾기
 
 미션 시작·재개는 [공통 진입 CLI](mission-entry.md)를 먼저 실행한다. 선택적으로 등록한 외부 이벤트는 어댑터가 없어도 준비를 실행할 수 있다.
@@ -27,11 +44,11 @@
 
 ```json
 [
-  { "adapter": "example", "roots": ["D:/Work/Game_Main", "D:/Work/slots/*"] }
+  { "adapter": "example", "roots": ["<absolute-project-path>", "<absolute-slot-parent>/*"] }
 ]
 ```
 
-`roots`는 경로나 glob이고, 대소문자와 `\`·`/`를 가리지 않는다. 둘 다 없으면 어댑터 없음이다.
+`roots`는 경로나 glob이다. Windows 형식 경로는 구분자·대소문자를 정규화하며, POSIX 경로는 파일시스템의 경로 식별을 보존한다. 둘 다 없으면 어댑터 없음이다.
 그때 스킬은 멈춘다. 훅은 미션 마커 명령(`echo han-mission open|resume|close <id>`)일 때만
 `미션 가드 꺼짐: 어댑터 못 찾음 — <이유>`로 알리고(차단은 안 함), 다른 명령에는 아무것도 하지 않는다.
 이유는 레지스트리 경로 미설정, 레지스트리 폴더 없음, `projects.json` 없음, 맞는 `roots` 없음 중 하나다.
@@ -54,9 +71,7 @@ Codex는 훅 payload의 cwd를 시작점으로 삼는다. 명령에 cwd가 있�
    TOML 폴백은 표준 라이브러리 `tomllib`을 쓰므로 Python 3.11 이상이 필요하다.
 
 Claude와 Codex는 같은 레지스트리·stateDir·슬롯 잠금 파일을 공유한다.
-Codex 덮어쓰기는 `runtimes.codex` 객체에 둔다. 병합 순서는
-`adapter.json` → 그 파일의 `runtimes.codex` → `local.json` → 그 파일의 `runtimes.codex`다.
-객체는 깊게 병합하고 배열·스칼라는 교체한다. 공통 PC별 경로는 local.json에서 계속 관리한다.
+Codex 덮어쓰기는 `runtimes.codex` 객체에 둔다. 위 OS·런타임 병합 순서를 적용하며 공통 PC별 경로는 `local.json`에서 관리한다.
 스킬과 가드, check_guard, slots가 이 병합 규칙을 같이 쓴다.
 
 `AdapterNotFound`는 미션 마커 명령(`echo han-mission open|resume|close <id>`)에서만
@@ -85,7 +100,7 @@ Grok의 검색은 아래 순서를 쓴다. Claude·Codex의 검색 순서는 그
 4. 그것도 없으면 이 저장소에서 스크립트를 직접 실행할 때 `<저장소>/adapters`.
 
 Claude 플러그인 설정과 Codex `config.toml`은 읽지 않는다. Grok은 `~/.grok/plugins/chef`에 native 등록하고, 선택 경로와 manifest는 `grok inspect`로 확인한다.
-Grok 전용 값은 `runtimes.grok` 객체에 둔다. 병합 순서는 `adapter.json` → 그 파일의 `runtimes.grok` → `local.json` → 그 파일의 `runtimes.grok`다. 객체는 깊게 병합하고 배열·스칼라는 교체한다. 조회·미션·가드·doctor·슬롯이 같은 병합을 쓴다. `brief --runtime claude|codex`는 같은 발견 순서를 유지하되 인계할 런타임의 병합으로 상태를 읽는다.
+Grok 전용 값은 `runtimes.grok` 객체에 두며 위 OS·런타임 병합을 쓴다. 조회·미션·가드·doctor·슬롯이 같은 병합을 사용한다.
 
 역할을 명시할 때는 아래처럼 native 이름을 쓴다. 기본 역할의 호환 이름과 파견 규칙은 [Grok 역할 계약](../../../grok/skills/chef-mission/references/grok-roles.md)에 있다.
 
@@ -152,11 +167,11 @@ Grok 전용 값은 `runtimes.grok` 객체에 둔다. 병합 순서는 `adapter.j
     "mainClient": "ws-yourname_Main",
     "prepare": [
       { "id": "sync", "group": 1, "run": "p4 -c {client} sync -q --parallel=threads=8 //Depot/Main/...@{baseline}" },
-      { "id": "import", "group": 2, "exclusive": true, "run": "\"{unityExe}\" -batchmode -projectPath \"{slot}\\Unity\\Game\" -quit -logFile \"{log}\"" },
-      { "id": "verify", "group": 3, "cwd": "{slot}", "run": "cmd /c \"Build\\project-build.bat code build GameServer\"", "okExit": [0] }
+      { "id": "setup", "group": 2, "argv": ["{python}", "{slot}/tools/project.py", "setup", "--root", "{slot}"] },
+      { "id": "verify", "group": 3, "cwd": "{slot}", "argv": ["{python}", "{slot}/tools/project.py", "verify", "--root", "{slot}"], "okExit": [0] }
     ],
-    "refresh": ["sync", "import"],
-    "editor": "\"{unityExe}\" -projectPath \"{slot}\\Unity\\Game\""
+    "refresh": ["sync", "setup", "verify"],
+    "editorArgv": ["{editorExe}", "--project", "{slot}"]
   }
 }
 ```
@@ -169,13 +184,13 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 ```json
 {
   "slots": {
-    "root": "D:/Work/slots",
+    "root": "<absolute-slot-parent>",
     "client": "ws-yourname_{name}",
     "mainClient": "ws-yourname_Main"
   },
   "vars": {
-    "unityExe": "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe",
-    "main": "D:/Work/Game_Main"
+    "editorExe": "<absolute-editor-executable>",
+    "main": "<absolute-project-path>"
   }
 }
 ```
@@ -202,10 +217,10 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `roles.reviewSmall` | 직전 리뷰 이후의 좁은 재리뷰와 뜻·승인 범위가 그대로인 작은 문서 변경의 첫 리뷰를 맡을 읽기 전용 역할. 없으면 `chef:reviewer-small`. 프로젝트 리뷰 규약이 `roles.review`만 읽게 정하면 그 규약이 우선 |
 | `roles.audit` | 미션 끝 기록 감사(SKILL §6의 4)를 맡을 읽기 전용 에이전트. 없으면 `roles.review`. 구현 역할과 다른 모델이면 더 좋다 |
 | `roles.reviewLoopSkill` | 선택. 미션 전체 리뷰에 사용할 프로젝트 스킬 이름. 에이전트 역할이 아니므로 `agents.allow`의 파견 이름에 포함하지 않는다. 해당 스킬을 읽고 현재 런타임의 역할·리뷰 종료 계약을 적용한다. 없으면 공통 mission 절차의 전체 리뷰를 따른다 |
-| `rolePolicy` | 선택. 이 플러그인 스킬이 역할을 파견할 때의 정책 `{"model": "definition" 또는 "inherit", "subagents": true 또는 false}`. 없거나 키가 없으면 `model: "definition"`, `subagents: true`(기존 동작). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.rolePolicy`·`runtimes.grok.rolePolicy`가 기존 깊은 병합으로 최상위 값을 덮는다. `roles`의 이름 매핑은 바꾸지 않는다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다 |
+| `rolePolicy` | 역할 파견 정책 `{"model":"definition" 또는 "inherit","subagents":true 또는 false}`. 기본은 `definition`·`true`. 모든 런타임과 OS overlay에서 같은 병합을 사용한다. 역할 이름·정의 파일의 모델과 스킬 밖 직접 호출은 바꾸지 않는다 |
 | `rolePolicy.model` | `definition`은 스킬 문서의 모델 배정을 따른다. `inherit`는 Claude에서 Agent 호출 `model` 인자에 코디네이터 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘기고(인자는 별칭만 받으며, 대응하는 별칭이 없으면 정의 모델로 두고 보고), Codex는 등록된 역할의 TOML 모델이 적용되어 부모 상속을 지킬 수 없으므로 그 사실을 보고하며, Grok은 역할이 이미 `model: inherit`라 추가 동작이 없다. effort 지시는 바꾸지 않는다 |
 | `rolePolicy.subagents` | `false`면 하위 파견을 허용하던 역할(Claude `chef:dev-medium`, Codex `chef:dev-medium`)의 파견 브리프에 "하위 에이전트를 띄우지 않는다. 나눠야 하면 단위·파일 경계·계약을 담은 분할안을 부모에게 반환한다"를 넣는다. 해당 역할 정의가 브리프의 금지 지시를 따르게 하는 것이며 도구로 막는 강제 차단은 아니다. Grok 역할은 어차피 자식을 띄우지 않는다 |
-| `agents.allow` | 선택. 파견을 허용할 서브에이전트 이름의 glob 패턴 문자열 배열(예: `["team-*", "chef:*"]`). 키가 없으면 제한 없음. 있으면 훅이 이름이 맞지 않는 서브에이전트 파견을 거부한다(아래 "서브에이전트 허용 목록"). Claude는 어댑터 최상위에 둔다(`runtimes.claude` 병합은 없음). Codex·Grok은 `runtimes.codex.agents`·`runtimes.grok.agents`가 기존 깊은 병합으로 최상위 값을 덮는다(`allow` 배열은 통째로 교체) |
+| `agents.allow` | 파견할 역할 이름의 glob 배열. 없으면 제한 없음. `runtimes.<runtime>.agents` 및 OS overlay로 덮어쓸 수 있으며 배열은 통째로 교체한다 |
 | `verify.backend` | `mcp` / `cli` / `dotnet` — 엔진 검증 수단. 명령 자체는 `adapter.md` |
 | `verify.grades` | 이 프로젝트에서 낼 수 있는 검증 등급. 실제 허용 값은 상태 CLI `schema`로 조회 |
 | `verify.resourceDir` | 공유 검증 잠금 폴더. 절대 경로 또는 프로젝트 기준 상대 경로. `resources`에 자원을 선언하면 필수이며 같은 자원을 쓰는 프로젝트·슬롯은 같은 폴더 사용 |
@@ -229,7 +244,8 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
   나눈다. `cmd /c`·`xargs`·`env` 같은 래퍼를 벗기고, `$(...)`·백틱 안쪽도 조각으로 본다. 같은 명령 안의
   단순 변수 대입(`NAME=값`, `$NAME = 값`)은 뒤 조각에서 치환한다. 규칙은 `^`로 조각 첫머리에 고정해
   "실행 파일 바로 뒤 동사"를 보게 쓴다. 파일 경로 속 단어(`Foo.Sync.cs`)를 동사로 오인하지 않게 한다.
-- **규칙 안 예외**: `except`는 문자열 정규식 배열이며 대소문자를 무시한 `fullmatch`로 같은 조각 전체를 검사한다.
+- **대소문자**: deny 규칙 객체의 `caseSensitive`는 boolean이며 기본 `false`다. `true`이면 경로·리터럴을 대소문자 그대로 검사한다. `except`·`exceptCommand`도 부모 규칙의 flag를 상속한다. 잘못된 타입은 진단·오류 처리한다.
+- **규칙 안 예외**: `except`는 문자열 정규식 배열이며 부모 규칙의 대소문자 설정을 따르는 `fullmatch`로 같은 조각 전체를 검사한다.
   전역 허용이 아니므로 조회 뒤의 `; p4 submit`과 하위 실행 조각, 다른 deny 규칙은 계속 검사한다.
   배열 타입·항목 타입·정규식 중 하나라도 잘못되면 진단을 내고 그 규칙의 예외 전체를 적용하지 않는다.
   예: `{"pattern": "submit", "except": ["rg -n submit Tool"], "reason": "submit 실행 금지"}`는 그 조회 조각만 면제한다.
@@ -291,13 +307,16 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `slots.mainClient` | 메인 워크스페이스 이름. 새 슬롯의 옵션을 따라 만들 원본이자 `{baseline}`을 조회하는 대상. `refresh`는 슬롯을 갱신하기 전에 이 워크스페이스를 먼저 head로 sync한다(`create`는 하지 않음). 사람마다 달라 `local.json`에 둔다 |
 | `slots.prepare[]` | 슬롯 준비·갱신 단계 목록(아래) |
 | `slots.beforeRun[]` | 슬롯 `create`·`create --resume`·`refresh`가 성공해 `ready`가 된 직후(`launchMode=prepare`)와, 새 미션 시작(`new`)·재개(`resume`) 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |
-| `slots.runtimeArguments` | 선택한 런타임 CLI에 전달할 추가 인자 문자열 배열. 기본 `[]`. 새 시작·재개 모두 런타임의 기본 옵션·재개 하위 명령·프롬프트 앞에 전달하며, 각 항목은 하나의 argv로 유지함. Claude는 최상위 `slots`에, Codex·Grok의 런타임별 값은 `runtimes.<런타임>.slots.runtimeArguments`에 둠 |
+| `slots.runtimeArguments` | CLI에 전달할 인자 배열(기본 `[]`). 개별 인자의 경계를 유지하고 모든 런타임의 `runtimes.<runtime>.slots.runtimeArguments`와 OS overlay를 지원한다. Hermes 현재 세션에는 새 CLI 인자를 전달하지 않는다 |
 | `slots.codexProjectDocMaxBytes` | Codex 프로젝트 지침 읽기 한도(바이트). 양의 정수만 허용하며 bool·실수·문자열은 거부. 새 세션과 재개 모두 `-c project_doc_max_bytes=N` 적용. 생략하면 CLI 기본 동작 유지 |
 | `slots.sandboxMode` | Codex 슬롯의 선택적 sandbox 설정. `read-only`·`workspace-write`·`danger-full-access`만 허용하며, 새 시작·재개에 `--sandbox <값>`을 전달함. 런타임별 값은 `runtimes.codex.slots.sandboxMode`에 둠. 생략하면 기존 CLI·프로젝트 설정을 상속하고 Claude·Grok에는 적용하지 않음 |
 | `slots.codexAgentConfigs` | Codex native 역할 별칭별 `{configFile, description}` 객체. 선택 설정이며 기본은 빈 객체. 새 시작·재개에 역할 설정 파일과 설명을 명시적으로 등록함(아래) |
 | `slots.refresh` | `refresh`가 다시 돌릴 `prepare[].id` 목록. `refresh --keep-local`을 쓰려면 `sync` 단계가 있어야 한다(그 단계 직후 `resolve`) |
 | `slots.churn` | 엔진·에디터가 스스로 다시 쓰는 추적 파일의 목록(문자열 배열). 스트림 루트(`slots.stream`) 기준 상대 경로이고 p4 와일드카드 `*`(한 단계)·`...`(여러 단계) 허용, 배열이 아니거나 빈 문자열·절대 경로·`..` 구간이 있으면 오류. 로컬 변경 검사에서 빠지고 `refresh` 때 `#have` 내용으로 되돌린다. `slots.vcs`가 `perforce`일 때만 쓴다 |
-| `slots.editor` | 슬롯 에디터를 여는 명령 템플릿. `run --editor`는 사용자가 동시 실행을 명시했을 때만 쓰고, 기본 흐름은 필요 시 실행함. 준비 확인·직접 연 프로세스 식별·정상 종료 절차는 `adapter.md`에 적음 |
+| `slots.editor` | 기존 에디터 명령 문자열. `editorArgv`와 동시에 지정할 수 없다. 셸 실행 문법을 자동 변환하지 않는다 |
+| `slots.editorArgv` | 에디터 실행 파일·인자 배열. 첫 인자는 비어 있지 않아야 하며 각 인자에 변수를 확장한다. 공백·빈 후속 인자 경계를 보존한다. OS별 실제 실행 파일은 개인 설정에 둔다 |
+| `slots.terminal` | `auto`(기본)·`foreground`·`wt`·`macos-terminal`·`gnome-terminal`·`konsole`·`tmux`. auto는 Windows에서 WT, POSIX에서 현재 TTY를 사용한다. GUI 없는 별도 세션에는 명시적으로 tmux를 선택한다. Hermes는 현재 native 세션 경로를 사용한다 |
+| `slots.requirements` | 선택 객체 `{"executables":["{python}"],"files":["{main}/tools/project.py"]}`. 상대 경로는 메인 프로젝트 기준이다. 실행 파일·정규 스크립트 존재를 create·refresh·run의 변경 작업과 Hermes 진입 전에 검사한다. 파일·도구가 없으면 시작하지 않는다 |
 
 `slots.prepare[]`·`slots.beforeRun[]` 항목은 다음 키를 가진다. `group` 번호 순서로 돌고, 같은 번호의 단계끼리는 병렬이다.
 한 그룹이 실패하면 뒤 그룹은 돌지 않는다.
@@ -306,7 +325,8 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | --- | --- |
 | `id` | 단계 이름. `slots.refresh`와 로그·시간 기록이 이 이름을 쓴다 |
 | `group` | 실행 순서 번호(기본 0) |
-| `run` | 실행할 명령 템플릿 |
+| `run` | 기존 명령 문자열. `argv`와 하나만 지정한다 |
+| `argv` | 실행 파일로 시작하는 문자열 배열. 각 항목을 개별 확장하고 셸 없이 실행한다. 셸이 필요하면 실행 파일로 명시한다 |
 | `cwd` | 작업 폴더 템플릿. 없으면 현재 폴더 |
 | `exclusive` | `true`면 같은 그룹이어도 다른 `exclusive` 단계와 동시에 돌지 않는다(에디터 같은 공유 자원) |
 | `okExit` | 성공으로 칠 종료 코드 목록(기본 `[0]`, robocopy는 `[0, 1, 2, 3]`) |
@@ -327,7 +347,9 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `{baseline}` | 메인 워크스페이스가 받은 CL 번호(Perforce: `slots.mainClient`의 `changes -m1 //<mainClient>/...#have`). `create`는 메인이 지금 받은 CL이고, `refresh`·`run --refresh`는 메인을 먼저 head로 sync한 뒤 조회하므로 head다. 템플릿에 있을 때만 한 번 조회하고, `slots.vcs`가 없으면 쓸 수 없다 |
 | `{memoryDir}` | 슬롯 세션의 Claude 자동 메모리 폴더 |
 | `{mainMemoryDir}` | 메인 세션 쪽 Claude 자동 메모리 폴더 |
-| `{<키>}` | `vars`의 키(예: `{unityExe}`). 정의 안 된 변수를 쓰면 실행 전에 오류 |
+| `{python}` | Chef를 실행한 Python의 `sys.executable`. 개인 vars로 덮어쓰지 않는다 |
+| `{plugin}` | 현재 설치본 플러그인의 절대 경로 |
+| `{<키>}` | `vars`의 키(예: `{editorExe}`). 정의 안 된 변수를 쓰면 실행 전에 오류 |
 
 `beforeRun`은 슬롯 상태·ACTIVE·재개할 세션 검사를 통과한 뒤, 슬롯 잠금 안에서 에디터·CLI를 열기 전에 한 번 실행한다.
 외부 준비 도구는 `--lock-path "{slotLockPath}" --lock-owner-pid "{slotLockOwnerPid}"`로 기존 잠금 문맥을 받을 수 있다.
@@ -415,13 +437,24 @@ Claude·Grok도 각 런타임 슬롯 설정에서 같은 배열 계약을 사용
 ## Codex 슬롯 준비
 
 Codex에 필요한 준비 단계는 `runtimes.codex.slots.prepare`에 둔다. Claude의 설정 복사·메모리 junction을
-Codex에 그대로 쓰지 않는다. 예시 어댑터(`adapters/example/`)는 공통 sync·library·junction·import·verify 단계를 사용한다.
+Codex에 그대로 쓰지 않는다. 예시 어댑터(`adapters/example/`)는 외부 도구 검사·소스/도구 복사·setup·verify의 공통 단계를 사용한다. Claude 메모리 연결은 Claude 전용 beforeRun에만 둔다.
 `{memoryDir}`·`{mainMemoryDir}`는 Claude 전용 변수다. Codex 준비 단계에서는 쓰지 않는다.
 Codex 전용 MCP 설정과 AGENTS.md가 로컬 파일이면 준비 단계에 실제 복사 절차를 명시한다.
 Codex의 기본 셸은 Windows에서 PowerShell로 해석하고, 명시된 shell이 있으면 그 값을 따른다.
 가드는 도구 차단 보조 수단이며 write_stdin의 후속 입력이나 의도적 우회를 통제하지 않는다.
 # Hermes와 이식 가능한 준비 명령
 
-Hermes는 `runtimes.hermes`에 런타임 덮어쓰기를 둔다. 병합은 기본 adapter → 런타임 덮어쓰기 → local → local 런타임 덮어쓰기 순서이며 배열은 교체한다. 프로젝트별 경로·도구·스크립트는 개인 어댑터에 유지한다. [Hermes 안내](../../../hermes/README.md)를 따른다.
+Hermes는 `runtimes.hermes`에 런타임 덮어쓰기를 두고 위 OS·런타임 병합을 사용한다. 프로젝트별 경로·도구·스크립트는 개인 어댑터에 유지한다. [Hermes 안내](../../../hermes/README.md)를 따른다.
 
 `slots.prepare`와 `slots.beforeRun` 단계는 기존 `run` 문자열 또는 새 `argv` 문자열 배열 중 하나만 지정한다. `argv`는 각 인자에 변수를 개별 확장하고 셸을 거치지 않는다. 셸 문법이 필요하면 해당 셸을 명시적으로 호출한다. 예: `{"id":"setup","argv":["{python}","{main}/tools/setup.py","--slot","{slot}"]}`. `run`의 기존 실행 의미는 유지한다. `cwd`, `group`, `exclusive`, `okExit`는 두 형식 모두 동일하다.
+
+## 이식 가능한 준비 도구
+
+`{python} {plugin}/skills/slots/scripts/prepare.py`는 다음 동작을 제공한다.
+
+- `check --executable <실행파일> --file <스크립트>`: 반복 옵션으로 필요한 도구·정규 입력을 먼저 검사한다. 필수값은 `slots.requirements`에도 선언해 main sync·슬롯 생성보다 먼저 확인한다.
+- `copy --source <폴더> --destination <폴더>`: 링크·특수 노드는 복사하지 않는다. 기존 파일이 다르면 복사 시작 전에 실패하고, 같은 파일·기존 추가 파일은 유지한다. 삭제·덮어쓰기·자동 갱신은 하지 않는다. 부모 디렉터리의 정상 경로 별칭은 해석하되 복사 트리 안의 링크는 거부한다.
+- `link --source <폴더> --destination <링크>`: Windows native junction / POSIX directory symlink. 올바른 링크는 재사용하고 다른 링크·파일·폴더는 교체하지 않는다. 없는 원본 폴더 생성은 명시적인 `--create-source`일 때만 한다.
+- copy와 link의 `--dry-run`은 파일·링크·폴더를 만들지 않는다.
+
+캐시 copy에 `--source-fingerprint <json>`과 `--expected-fingerprint <json>`를 함께 지정하면 metadata를 먼저 비교한다. `os`(`platform.system().lower()`), `architecture`(`platform.machine().lower()`), `toolVersion`, `backend`, `inputs`의 비어 있지 않은 문자열과 전체 JSON 내용이 같아야 한다. `inputs`에는 프로젝트가 계산한 입력 digest를 기록한다. 누락·파손·불일치는 복사를 생략하고 exit 0을 반환하므로, 다음 import 단계는 항상 실행하도록 구성한다. 일반 소스 복사에는 fingerprint 옵션을 붙이지 않는다. 예시 `adapters/example/cache-copy.example.json`은 선택적인 Library 캐시 단계이며 실제 빌드 도구와 fingerprint 생성은 개인 어댑터에 둔다.

@@ -21,9 +21,9 @@ description: "Grok CLI에서 슬롯 워크스페이스를 조회·생성·갱신
 
 
 새 미션은 비어 있는 ready 슬롯에만 붙인다. ACTIVE가 있는 슬롯에 다른 미션을 겹치지 않는다.
-Grok CLI가 이미 등록된 슬롯 경로에서 실행 중이면 `chef-run`으로 구현한다. 새 Windows Terminal 세션이 필요할 때 사용자가 요청하면 아래 `run --runtime grok`을 쓴다.
+Grok CLI가 이미 등록된 슬롯 경로에서 실행 중이면 `chef-run`으로 구현한다. 별도 CLI 세션이 필요할 때 사용자가 요청하면 아래 `run --runtime grok`을 쓴다.
 
-`slots.py run`은 선택한 런타임 세션을 Windows Terminal에 띄운다. Claude는 `--runtime` 없이, Grok은 `--runtime grok`으로 호출한다. 두 경우 모두 슬롯이 `ready`이고 ACTIVE가 없어야 한다. 스크립트가 확인하는 소유권·상태 조건을 우회하지 않는다.
+`slots.py run`은 선택한 런타임 세션을 설정된 터미널에서 실행한다. 기본은 Windows Terminal·POSIX foreground이며 GUI 창·tmux는 `slots.terminal`로 명시한다. Claude는 `--runtime` 없이, Grok은 `--runtime grok`으로 호출한다. 두 경우 모두 슬롯이 `ready`이고 ACTIVE가 없어야 한다. 스크립트가 확인하는 소유권·상태 조건을 우회하지 않는다.
 Codex 세션은 사용자가 그 런타임을 지정할 때만 `<repo>/plugins/chef/codex/skills/chef-slots/scripts/slots.py`의 `run`이다.
 
 대시보드가 필요하면 `<repo>/plugins/chef/skills/slots/scripts/dashboard.py`를 읽기 전용으로 띄운다. 답과 승인은 대시보드에 쓰지 않는다.

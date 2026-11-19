@@ -2,6 +2,7 @@
 
 import os
 import re
+import ntpath
 
 from chef.guards.adapters import normalize_path
 from chef.guards.contracts import (
@@ -15,6 +16,7 @@ from chef.guards.contracts import (
     P4C_SCRIPT,
 )
 from chef.guards.shell import unquote
+from chef.infrastructure.paths import same_path
 
 
 def p4_deny_reason(adapter, fragments, problems):
@@ -91,7 +93,7 @@ def expected_p4_client(project, adapter):
 
 def p4_invocation(fragment):
     """p4 호출이면 (전역 -c 값 또는 None, 하위 명령, 나머지 인자), 아니면 None."""
-    tokens = [unquote(token) for token in P4_TOKEN.findall(fragment)]
+    tokens = list(fragment) if isinstance(fragment, (list, tuple)) else [unquote(token) for token in P4_TOKEN.findall(fragment)]
     if tokens and tokens[0] == "&":  # PowerShell 호출 연산자
         tokens = tokens[1:]
     if not tokens or re.split(r"[\\/]", tokens[0])[-1].lower() not in P4_EXECUTABLES:
@@ -113,21 +115,39 @@ def p4_invocation(fragment):
 
 def p4c_as_p4(fragment, project="", adapter=None):
     """p4c.py 래퍼 호출을 같은 효과의 `p4 -c <작업 공간> ...` 조각으로 바꿈(deny 규칙이 래퍼로 우회되지 않게)."""
-    match = P4C_CALL.match(fragment)
-    if not match:
-        return ""
-    tokens = P4_TOKEN.findall(match.group(1))
+    structured = isinstance(fragment, (list, tuple))
+    if structured:
+        tokens = list(fragment)
+        executable = os.path.basename(tokens.pop(0)) if tokens else ""
+        if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|py)(?:\.exe)?", executable, re.IGNORECASE):
+            while tokens and tokens[0].startswith("-"):
+                flag = tokens.pop(0)
+                if flag in ("-c", "-m"):
+                    return ""
+                if flag in ("-X", "-W", "--check-hash-based-pycs") and tokens:
+                    tokens.pop(0)
+            executable = os.path.basename(tokens.pop(0)) if tokens else ""
+        if executable.lower() != "p4c.py":
+            return ""
+    else:
+        match = P4C_CALL.match(fragment)
+        if not match:
+            return ""
+        tokens = P4_TOKEN.findall(match.group(1))
     client = ""
     while tokens and tokens[0].startswith("--"):
         flag = tokens.pop(0)
         if flag == "--":
             break
         if flag in P4C_OWN_VALUE_OPTIONS and tokens:
-            value = unquote(tokens.pop(0))
+            value = tokens.pop(0)
+            if not structured:
+                value = unquote(value)
             if flag == "--client":
                 client = value
     client = client or expected_p4_client(project, adapter) or "p4c-client"
-    return " ".join(["p4", "-c", client, *tokens])
+    result = ["p4", "-c", client, *tokens]
+    return result if structured else " ".join(result)
 
 
 def p4_policy(adapter):
@@ -138,6 +158,46 @@ def p4_policy(adapter):
     if isinstance(commands, list) and all(isinstance(item, str) for item in commands):
         return frozenset(item.lower() for item in commands)
     return P4_WRITE_COMMANDS
+
+
+def p4c_project_reason(fragment, project="", adapter=None, cwd=None):
+    """The wrapper's explicit project must not redirect protected operations."""
+    commands = p4_policy(adapter)
+    wrapped = p4c_as_p4(fragment, project, adapter)
+    parsed = p4_invocation(wrapped) if wrapped else None
+    if commands is None or not parsed:
+        return ""
+    _, command, rest = parsed
+    if command not in commands or (command in P4_READ_FLAG_COMMANDS and "-o" in rest):
+        return ""
+    structured = isinstance(fragment, (list, tuple))
+    if structured:
+        tokens = list(fragment)
+        script = next((index for index, value in enumerate(tokens) if os.path.basename(value).lower() == "p4c.py"), -1)
+        tokens = tokens[script + 1:]
+    else:
+        match = P4C_CALL.match(fragment)
+        tokens = P4_TOKEN.findall(match.group(1))
+    explicit = ""
+    while tokens and tokens[0].startswith("--"):
+        flag = tokens.pop(0)
+        if flag == "--":
+            break
+        if flag in P4C_OWN_VALUE_OPTIONS and tokens:
+            value = tokens.pop(0)
+            if flag == "--project":
+                explicit = value if structured else unquote(value)
+    if explicit:
+        if ntpath.splitdrive(project)[0]:
+            target = ntpath.join(project, explicit)
+            equivalent = same_path(project, target) if os.name == "nt" else ntpath.normcase(ntpath.normpath(project)) == ntpath.normcase(ntpath.normpath(target))
+        else:
+            equivalent = bool(project) and same_path(project, os.path.join(project, explicit))
+        if not equivalent:
+            return "p4c --project 가 허용된 작업 공간과 다름. 현재 프로젝트의 절대 경로를 사용할 것"
+    elif cwd and not same_path(project, cwd):
+        return "p4c 실행 cwd가 프로젝트 루트와 다름. --project 에 허용된 프로젝트의 절대 경로를 지정할 것"
+    return ""
 
 
 def p4_client_reason(adapter, fragments, project=""):
@@ -157,7 +217,7 @@ def p4_client_reason(adapter, fragments, project=""):
                 f"p4 {command} 는 전역 -c <작업 공간> 필수(P4CLIENT·PWD 함정). "
                 f'래퍼로: python "{P4C_SCRIPT}" {command} ... (작업 공간 {expected or "자동"} 고정)'
             )
-        unresolved = "$" in client or "{" in client
+        unresolved = not isinstance(fragment, (list, tuple)) and ("$" in client or "{" in client)
         if expected and not unresolved and client.casefold() != expected.casefold():
             return f"p4 -c {client} 가 이 폴더의 작업 공간({expected})과 다름 — 다른 슬롯·메인 작업 공간에 쓰지 않음"
     return ""

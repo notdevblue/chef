@@ -26,7 +26,7 @@ QUESTION_ACTIONS = frozenset(("publish", "answer", "restore", "render"))
 
 
 def absolute_path(path, cwd):
-    return os.path.abspath(os.path.join(cwd, path.replace("\\", os.sep)))
+    return os.path.abspath(os.path.join(cwd, path))
 
 
 def canonical_path(path):
@@ -162,13 +162,13 @@ def mission_contexts(payload, targets, guard):
 
 def protected_path(target, cwd, contexts, guard):
     path = absolute_path(target, cwd)
-    actual = os.path.normpath(os.path.realpath(path)).replace("\\", "/").rstrip("/")
-    lexical = os.path.normpath(path).replace("\\", "/").rstrip("/")
+    actual = os.path.normpath(os.path.realpath(path)).replace(os.sep, "/").rstrip("/")
+    lexical = os.path.normpath(path).replace(os.sep, "/").rstrip("/")
     candidates = {(actual.casefold(), actual), (lexical.casefold(), lexical)}
     for located, adapter in contexts:
         state = guard.state_dir_of(located.project, adapter)
-        actual_root = os.path.normpath(os.path.realpath(state)).replace("\\", "/").rstrip("/")
-        lexical_root = os.path.normpath(os.path.abspath(state)).replace("\\", "/").rstrip("/")
+        actual_root = os.path.normpath(os.path.realpath(state)).replace(os.sep, "/").rstrip("/")
+        lexical_root = os.path.normpath(os.path.abspath(state)).replace(os.sep, "/").rstrip("/")
         roots = {(actual_root.casefold(), actual_root), (lexical_root.casefold(), lexical_root)}
         for candidate, filesystem_path in candidates:
             for root, filesystem_root in roots:
@@ -192,7 +192,7 @@ def protected_path(target, cwd, contexts, guard):
 
 def protected_tree(target, cwd, contexts, guard):
     filesystem_path = (
-        os.path.normpath(os.path.realpath(absolute_path(target, cwd))).replace("\\", "/").rstrip("/")
+        os.path.normpath(os.path.realpath(absolute_path(target, cwd))).replace(os.sep, "/").rstrip("/")
     )
     path = filesystem_path.casefold()
     for located, adapter in contexts:
@@ -201,7 +201,7 @@ def protected_tree(target, cwd, contexts, guard):
         if path.startswith(state + "/"):
             parts = path[len(state) + 1 :].split("/")
             if parts[1:] in (["details"], ["details", "history"]):
-                filesystem_root = os.path.normpath(os.path.realpath(state_dir)).replace("\\", "/").rstrip("/")
+                filesystem_root = os.path.normpath(os.path.realpath(state_dir)).replace(os.sep, "/").rstrip("/")
                 filesystem_parts = filesystem_path.split("/")[len(filesystem_root.split("/")) :]
                 mission = os.path.join(filesystem_root, filesystem_parts[0])
                 directory = filesystem_path
@@ -546,7 +546,7 @@ def shell_targets(command, tool_name, cwd, guard):
             for destination in destinations:
                 if os.path.isdir(absolute_path(destination, cwd)):
                     targets.extend(
-                        os.path.join(destination, os.path.basename(source.replace("\\", os.sep)))
+                        os.path.join(destination, os.path.basename(source))
                         for source in sources
                     )
                 else:
