@@ -80,7 +80,9 @@ matching installed Chef SessionStart hook and an actual denied PreToolUse call.
 Missing/untrusted/outdated hooks fail the delegation. Model work is billed under
 the user's existing subscription limits; the probe also consumes a small turn.
 Workers run synchronously with a timeout and inherit the parent mission's guard
-policy. Supported mission-ownership and state-write operations are blocked.
+policy. Codex runs with `--no-daemon` so per-worker hook context and process
+cleanup do not depend on a pre-existing shared server. Supported
+mission-ownership and state-write operations are blocked.
 Opaque build/helper programs remain a trust boundary: protected mission files
 are compared before and after the worker, and unexpected changes fail the result
 without restoring files automatically. This is detection, not an OS filesystem

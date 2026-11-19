@@ -114,7 +114,9 @@ def command_for(executable, role, cwd):
         "\nHermes 코디네이터의 역할 워커다. 미션 open/resume/close, 상태·승인 변경, "
         "하위 에이전트 생성은 하지 않는다. 요청 범위의 결과와 미확인을 반환한다."
     )
-    command = [executable, "exec", "--json", "--color", "never", "--enable", "hooks", "--disable", "multi_agent",
+    # The shared daemon has its own environment and lifecycle. A standalone
+    # process must inherit this worker's hook context and process group.
+    command = [executable, "--no-daemon", "exec", "--json", "--color", "never", "--enable", "hooks", "--disable", "multi_agent",
                "--sandbox", "read-only" if role in READ_ONLY else "workspace-write",
                "--skip-git-repo-check", "-C", cwd,
                "-c", 'model_provider="openai"', "-c", 'forced_login_method="chatgpt"',

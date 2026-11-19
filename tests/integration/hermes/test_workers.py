@@ -137,6 +137,7 @@ def test_opaque_helper_state_mutation_invalidates_worker_result_without_rollback
 @pytest.mark.parametrize("role", workers.ROLES)
 def test_role_command_preserves_model_instructions_and_native_argument_boundaries(project, role):
     command = workers.command_for("/fictional/codex", role, str(project.root))
+    assert command[:3] == ["/fictional/codex", "--no-daemon", "exec"]
     source = tomllib.loads((workers.PLUGIN_ROOT / "codex/agents" / f"chef-{role}.toml").read_text(encoding="utf-8"))
     assert command[command.index("-C") + 1] == str(project.root)
     if source.get("model"):
