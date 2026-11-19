@@ -32,7 +32,13 @@ def identity(session_id, task_id):
 
 
 def native_cwd(task_id):
-    from tools.file_tools import _resolve_path_for_task, _terminal_env_type_for_task
+    try:
+        from tools.file_tools_paths import _resolve_path_for_task, _terminal_env_type_for_task
+    except ModuleNotFoundError as exc:
+        if exc.name != "tools.file_tools_paths":
+            raise
+        # Older Hermes releases defined these helpers in the file tool itself.
+        from tools.file_tools import _resolve_path_for_task, _terminal_env_type_for_task
 
     if _terminal_env_type_for_task(task_id) != "local":
         raise ValueError("Chef Hermes requires a local terminal backend")

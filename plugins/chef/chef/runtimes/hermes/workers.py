@@ -191,8 +191,11 @@ def delegate(args, *, session_id, task_id="", cwd):
     adapter = read_adapter(located.adapter_path, "hermes")
     state = os.path.realpath(guard.state_dir_of(located.project, adapter))
     active = guard.read_active(state)
-    if active.corrupt or not active.id or active.runtime != "hermes" or active.session != session_id:
+    if active.corrupt or not guard.valid_mission_id(active.id) or active.runtime != "hermes" or active.session != session_id:
         raise ValueError("chef_delegate requires an ACTIVE mission owned by this Hermes session")
+    folder = Path(state) / active.id
+    if folder.is_symlink() or not (folder / "mission.md").is_file():
+        raise ValueError("initialize the owned mission with mission_state.py init before delegating")
     from chef.guards import subagents
     patterns, problem = subagents.allow_patterns(adapter)
     if problem or patterns is not None and not subagents.allows(patterns, "chef:" + role):

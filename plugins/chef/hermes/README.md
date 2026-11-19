@@ -79,6 +79,8 @@ Before a write-capable worker starts, a read-only probe must observe both a
 matching installed Chef SessionStart hook and an actual denied PreToolUse call.
 Missing/untrusted/outdated hooks fail the delegation. Model work is billed under
 the user's existing subscription limits; the probe also consumes a small turn.
+The owned mission must already be initialized (`mission_state.py init`); a bare
+ACTIVE marker is rejected before any model turn is requested.
 Workers run synchronously with a timeout and inherit the parent mission's guard
 policy. Codex runs with `--no-daemon` so per-worker hook context and process
 cleanup do not depend on a pre-existing shared server. Supported

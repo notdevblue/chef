@@ -48,7 +48,13 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     from hermes_cli import plugins
     manager = plugins.PluginManager()
     plugins._plugin_manager = manager
-    manifest = manager._parse_manifest(copied / "hermes/plugin.yaml", copied / "hermes", "user", "")
+    try:
+        from hermes_cli.plugins_manifest import parse_manifest_file
+    except ModuleNotFoundError as exc:
+        if exc.name != "hermes_cli.plugins_manifest":
+            raise
+        parse_manifest_file = manager._parse_manifest
+    manifest = parse_manifest_file(copied / "hermes/plugin.yaml", copied / "hermes", "user", "")
     manager._load_plugin(manifest)
     loaded = manager._plugins["chef"]
     assert loaded.enabled and not loaded.error, loaded.error
@@ -60,7 +66,12 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     assert commands.main(["--project", str(project), "--runtime", "hermes", "create", "cli", "gateway"]) == 0
     from chef.guards import mission
     from hermes_cli.middleware import apply_tool_request_middleware
-    from tools.file_tools import _resolve_path_for_task
+    try:
+        from tools.file_tools_paths import _resolve_path_for_task
+    except ModuleNotFoundError as exc:
+        if exc.name != "tools.file_tools_paths":
+            raise
+        from tools.file_tools import _resolve_path_for_task
     from tools.registry import registry
     for surface in ("cli", "gateway"):
         task, session = surface + "-task", surface + "-session"

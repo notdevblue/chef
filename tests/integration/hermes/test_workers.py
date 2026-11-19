@@ -37,6 +37,8 @@ def project(tmp_path, monkeypatch):
         "id": "garden-mission", "session": "garden-owner", "runtime": "hermes",
         "openedAt": "2026-01-01",
     })
+    (root / "state/garden-mission").mkdir()
+    (root / "state/garden-mission/mission.md").write_text("# Fictional mission\n")
     for name in ("HAN_ADAPTERS_DIR", "HAN_REPO", "CLAUDE_PROJECT_DIR", "GROK_SESSION_ID",
                  "GROK_HOOK_EVENT", "CHEF_HERMES_WORKER"):
         monkeypatch.delenv(name, raising=False)
@@ -115,9 +117,16 @@ def test_worker_requires_subscription_and_matching_hook_probe(project, codex, mo
     assert mission.read_active(str(project.root / "state")).session == "garden-owner"
 
 
+def test_uninitialized_mission_is_rejected_before_any_model_or_auth_call(project, codex):
+    (project.root / "state/garden-mission/mission.md").unlink()
+    with pytest.raises(ValueError, match="initialize"):
+        delegate(project)
+    assert not codex.calls and not codex.auth_calls
+
+
 def test_opaque_helper_state_mutation_invalidates_worker_result_without_rollback(project, codex, monkeypatch):
     control = project.root / "state/garden-mission/units.tsv"
-    control.parent.mkdir()
+    control.parent.mkdir(exist_ok=True)
     control.write_text("original")
     calls = []
 
