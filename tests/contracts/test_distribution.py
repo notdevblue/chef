@@ -68,6 +68,26 @@ def test_installed_session_hooks_keep_transcript_contract(installed, relative, r
         assert "fictional-session.jsonl" in result.stdout.decode("utf-8")
 
 
+@pytest.mark.parametrize("relative", [
+    "skills/mission/scripts/check_human_doc.py",
+    "skills/mission/scripts/run_metrics.py",
+    "skills/mission/scripts/task_queue.py",
+    "skills/mission/scripts/model_recommendations.py",
+])
+def test_helpers_emit_utf8_under_a_western_windows_code_page(installed, relative):
+    target, cwd = installed
+    code = (
+        "import runpy,sys;"
+        "sys.stdout.reconfigure(encoding='cp1252');sys.stderr.reconfigure(encoding='cp1252');"
+        "sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')"
+    )
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(target / relative), "--help"],
+                            cwd=cwd, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    text = result.stdout.decode("utf-8")
+    assert "usage:" in text and any(ord(character) > 127 for character in text)
+
+
 def test_distribution_excludes_tests_and_enforces_dependencies():
     assert inspect() == []
 
