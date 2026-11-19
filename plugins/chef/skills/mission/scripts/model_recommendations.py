@@ -1,6 +1,8 @@
-"""Model Recommendations (모델 선택 추천): public CLI for measured recommendations."""
-from routing import main
+"""Compatibility entry point; implementation: chef.mission.routing."""
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from chef.cli.entrypoints import expose
 
-if __name__ == '__main__':
-    raise SystemExit(main())
+expose(globals(), 'chef.mission.routing', runtime=None)

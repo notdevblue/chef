@@ -1,0 +1,618 @@
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from chef.guards import adapters as guard_adapters
+
+from tests.paths import PLUGIN_ROOT
+
+PLUGIN = PLUGIN_ROOT
+
+from chef.guards import mission as mission_guard
+from chef.runtimes import session as session_rules
+from chef.slots import commands as slots
+
+
+@pytest.fixture(autouse=True)
+def isolated_codex_environment(monkeypatch, tmp_path):
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_ADAPTERS_DIR", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    folder = tmp_path / "project"
+    adapter_dir = folder / ".codex/orchestrator"
+    adapter_dir.mkdir(parents=True)
+    adapter = {
+        "schema": 1,
+        "project": "test",
+        "paths": {"stateDir": "state"},
+        "guard": {"deny": [{"pattern": r"^p4\s+(submit|sync)\b", "reason": "blocked"}]},
+        "slots": {
+            "enabled": True,
+            "root": str(tmp_path / "slots"),
+            "client": "test_{name}",
+            "names": ["slot1"],
+            "prepare": [{"id": "claude", "run": "echo claude"}],
+        },
+        "runtimes": {"codex": {"slots": {"prepare": [{"id": "codex", "run": "echo codex"}]}}},
+    }
+    (adapter_dir / "adapter.json").write_text(json.dumps(adapter), encoding="utf-8")
+    return folder
+
+
+def hook(project, command, session="parent", **fields):
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "cwd": str(project),
+        "session_id": session,
+        "tool_input": {"command": command},
+        **fields,
+    }
+    done = subprocess.run(
+        [sys.executable, "-B", str(PLUGIN / "codex/mission_guard.py")],
+        input=json.dumps(payload).encode(),
+        capture_output=True,
+        check=True,
+        timeout=15,
+    )
+    return json.loads(done.stdout or b"{}")
+
+
+def denied(output):
+    return output.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+def test_codex_mission_lifecycle_and_session_scope(project, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project.parent / "other"))
+    opened = hook(project, "echo han-mission open test")
+    assert "켜짐" in opened["systemMessage"]
+    active = project / "state/ACTIVE"
+    assert json.loads(active.read_text())["session"] == "parent"
+    assert denied(hook(project, "p4 submit -c 123", agent_id="child", agent_type="default"))
+    assert not denied(hook(project, "p4 opened -c 123"))
+    assert not denied(hook(project, "p4 submit -c 123", session="other"))
+    allowance = project / "state/test/allow-once"
+    allowance.parent.mkdir(exist_ok=True)
+    allowance.write_text("p4 sync\n", encoding="utf-8")
+    assert not denied(hook(project, "p4 sync"))
+    assert denied(hook(project, "p4 sync"))
+    assert not denied(hook(project, "echo han-mission close test"))
+    assert not active.exists()
+    assert not allowance.exists()
+
+
+def test_codex_shell_normalization_and_command_cwd(project):
+    hook(project, "echo han-mission open test")
+    payload = {"command": "$tool = 'p4'\n& $tool `\n sync", "shell": "pwsh"}
+    assert denied(hook(project, "", tool_input=payload))
+    assert denied(hook(project.parent, "", tool_input={"command": "p4 sync", "cwd": str(project)}))
+    assert denied(hook(project, "echo han-mission close test; p4 sync"))
+    assert (project / "state/ACTIVE").exists()
+
+
+def test_codex_adapter_precedence_and_shared_fallback(project, monkeypatch):
+    claude = project / ".claude/orchestrator"
+    claude.mkdir(parents=True)
+    adapter = claude / "adapter.json"
+    adapter.write_text('{"schema":1}', encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project.parent))
+    payload = {"cwd": str(project), "han_runtime": "codex"}
+    assert Path(mission_guard.find_adapter(payload).adapter_path).parent.name == "orchestrator"
+    assert ".codex" in mission_guard.find_adapter(payload).adapter_path
+    (project / ".codex/orchestrator/adapter.json").unlink()
+    assert Path(mission_guard.find_adapter(payload).adapter_path) == adapter
+
+
+def test_runtime_overlay_and_local_precedence(project, monkeypatch):
+    path = project / ".codex/orchestrator/adapter.json"
+    local = {"project": "local", "runtimes": {"codex": {"project": "codex-local"}}}
+    (path.parent / "local.json").write_text(json.dumps(local), encoding="utf-8")
+    claude = mission_guard.load_adapter(str(path))
+    codex = mission_guard.load_adapter(str(path), runtime="codex")
+    assert claude["project"] == "local"
+    assert claude["slots"]["prepare"][0]["id"] == "claude"
+    assert codex["project"] == "codex-local"
+    assert codex["slots"]["prepare"][0]["id"] == "codex"
+    config = slots.Config(mission_guard.Located(str(project), str(path)), codex, "codex")
+    monkeypatch.setattr(slots.shutil, "which", lambda name: name)
+    assert "memoryDir" not in config.values("slot1")
+    command = slots.wt_command(config, "slot1", "task; more")
+    assert command[-4:] == ["codex", "-c", "model_auto_compact_token_limit=200000", "$chef:chef-mission task\\; more"]
+    config = slots.Config(mission_guard.Located(str(project), str(path)), claude, "claude")
+    command = slots.wt_command(config, "slot1", "task")
+    assert command[command.index("claude"):][:5] == ["claude", "--autocompact", "500000", "-n", "slot1: task"]
+    assert command[-2:] == ["--", "/chef:mission task"]
+    assert "--mcp-config" not in command and "--dangerously-load-development-channels" not in command
+
+
+def test_codex_registry_ignores_claude_configuration(tmp_path, monkeypatch):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(registry))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ADAPTERS_DIR", "wrong")
+    assert mission_guard.resolve_registry("codex").path == str(registry)
+    monkeypatch.delenv("HAN_ADAPTERS_DIR")
+    assert mission_guard.resolve_registry("codex").source != "userConfig"
+
+
+def test_codex_registry_uses_config_after_environment(tmp_path, monkeypatch):
+    env_registry = tmp_path / "env-registry"
+    config_registry = tmp_path / "config-registry"
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text(
+        f'[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = "{config_registry.as_posix()}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("CODEX_HOME", str(config_home))
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(env_registry))
+    choice = mission_guard.resolve_registry("codex")
+    assert choice == mission_guard.Registry(str(env_registry), "env")
+    monkeypatch.delenv("HAN_ADAPTERS_DIR")
+    choice = mission_guard.resolve_registry("codex")
+    assert choice == mission_guard.Registry(str(config_registry), "codexConfig")
+
+
+def test_codex_registry_reads_default_home_config(tmp_path, monkeypatch):
+    config_home = tmp_path / "home"
+    codex_home = config_home / ".codex"
+    codex_home.mkdir(parents=True)
+    registry = tmp_path / "registry"
+    (codex_home / "config.toml").write_text(
+        f'[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = "{registry.as_posix()}"\n', encoding="utf-8"
+    )
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+
+    def expand_home(path):
+        if path == "~":
+            return str(config_home)
+        return path
+
+    monkeypatch.setattr(os.path, "expanduser", expand_home)
+    choice = mission_guard.resolve_registry("codex")
+    assert choice == mission_guard.Registry(str(registry), "codexConfig")
+
+
+def test_codex_registry_empty_or_missing_config_falls_back(tmp_path, monkeypatch):
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(config_home))
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+    monkeypatch.setattr(guard_adapters, "in_place_adapters_dir", lambda: str(tmp_path / "missing"))
+    assert mission_guard.resolve_registry("codex") == mission_guard.Registry("", "none")
+    config_path = config_home / "config.toml"
+    for content in ("", "[shell_environment_policy.set]\n", '[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = ""\n'):
+        config_path.write_text(content, encoding="utf-8")
+        assert mission_guard.resolve_registry("codex") == mission_guard.Registry("", "none")
+
+
+def test_codex_environment_registry_bypasses_invalid_config(tmp_path, monkeypatch):
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text("invalid = [", encoding="utf-8")
+    registry = tmp_path / "registry"
+    monkeypatch.setenv("CODEX_HOME", str(config_home))
+    monkeypatch.setenv("HAN_ADAPTERS_DIR", str(registry))
+    assert mission_guard.resolve_registry("codex") == mission_guard.Registry(str(registry), "env")
+
+
+@pytest.mark.parametrize(
+    "config, message",
+    [
+        ("[shell_environment_policy.set\nHAN_ADAPTERS_DIR = \"x\"", "읽기 실패"),
+        ('[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = 7\n', "문자열이어야"),
+        ('shell_environment_policy = "invalid"\n', "shell_environment_policy 는 객체"),
+        ('[shell_environment_policy]\nset = "invalid"\n', "shell_environment_policy.set 는 객체"),
+    ],
+)
+def test_codex_registry_invalid_config_raises_guard_off(tmp_path, monkeypatch, config, message):
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text(config, encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(config_home))
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+    with pytest.raises(mission_guard.GuardOff, match=message):
+        mission_guard.resolve_registry("codex")
+
+
+def test_codex_registry_unreadable_config_raises_guard_off(tmp_path, monkeypatch):
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    config_path = config_home / "config.toml"
+    config_path.touch()
+    original_open = open
+
+    def unreadable(path, *args, **kwargs):
+        if os.fspath(path) == str(config_path):
+            raise PermissionError("denied")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setenv("CODEX_HOME", str(config_home))
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+    monkeypatch.setattr("builtins.open", unreadable)
+    with pytest.raises(mission_guard.GuardOff, match="읽기 실패"):
+        mission_guard.resolve_registry("codex")
+
+
+def test_claude_registry_ignores_codex_config(tmp_path, monkeypatch):
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    registry = tmp_path / "registry"
+    (config_home / "config.toml").write_text(
+        f'[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = "{registry.as_posix()}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("CODEX_HOME", str(config_home))
+    monkeypatch.delenv("HAN_ADAPTERS_DIR", raising=False)
+    monkeypatch.setattr(guard_adapters, "in_place_adapters_dir", lambda: str(tmp_path / "missing"))
+    assert mission_guard.resolve_registry("claude") == mission_guard.Registry("", "none")
+
+
+def test_installed_codex_hook_uses_config_registry_without_environment(project, tmp_path):
+    (project / ".codex/orchestrator/adapter.json").unlink()
+    installed = tmp_path / "installed" / "plugins" / "chef"
+    (installed / "codex").mkdir(parents=True)
+    (installed / "hooks").mkdir()
+    shutil.copytree(PLUGIN / "chef", installed / "chef", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(PLUGIN / "codex/mission_guard.py", installed / "codex/mission_guard.py")
+    shutil.copy2(PLUGIN / "hooks/mission_guard.py", installed / "hooks/mission_guard.py")
+    shutil.copy2(PLUGIN / "hooks/mission_entry.py", installed / "hooks/mission_entry.py")
+    shutil.copy2(PLUGIN / "hooks/question_write_guard.py", installed / "hooks/question_write_guard.py")
+    shutil.copy2(PLUGIN / "hooks/hook_runtime.py", installed / "hooks/hook_runtime.py")
+    registry = tmp_path / "registry"
+    adapter_dir = registry / "test"
+    adapter_dir.mkdir(parents=True)
+    (registry / "projects.json").write_text(
+        json.dumps([{"adapter": "test", "roots": [str(project)]}]), encoding="utf-8"
+    )
+    (adapter_dir / "adapter.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "paths": {"stateDir": str(tmp_path / "state")},
+                "guard": {"deny": [{"pattern": r"^p4\s+submit\b", "reason": "blocked"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_home = tmp_path / "codex-home"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text(
+        f'[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = "{registry.as_posix()}"\n', encoding="utf-8"
+    )
+    env = {key: value for key, value in os.environ.items() if key != "HAN_ADAPTERS_DIR"}
+    env["CODEX_HOME"] = str(config_home)
+    hook_path = installed / "codex/mission_guard.py"
+    payload = {"tool_name": "Bash", "cwd": str(project), "session_id": "installed-session"}
+    opened = subprocess.run(
+        [sys.executable, "-B", str(hook_path)],
+        input=json.dumps({**payload, "tool_input": {"command": "echo han-mission open test"}}).encode(),
+        capture_output=True,
+        env=env,
+        check=True,
+        timeout=15,
+    )
+    assert "켜짐" in json.loads(opened.stdout)["systemMessage"]
+    denied_submit = subprocess.run(
+        [sys.executable, "-B", str(hook_path)],
+        input=json.dumps({**payload, "tool_input": {"command": "p4 submit -c 1"}}).encode(),
+        capture_output=True,
+        env=env,
+        check=True,
+        timeout=15,
+    )
+    assert denied(json.loads(denied_submit.stdout))
+    active = json.loads((tmp_path / "state/ACTIVE").read_text(encoding="utf-8"))
+    assert active["id"] == "test" and active["session"] == "installed-session"
+
+
+def test_codex_session_context_does_not_export_claude_env(tmp_path, monkeypatch):
+    env_file = tmp_path / "env"
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_ADAPTERS_DIR", "wrong")
+    assert session_rules.decide({"hook_event_name": "SessionStart"}, "codex") == {}
+    assert not env_file.exists()
+
+
+@pytest.mark.parametrize("disable", ["0", "1"])
+def test_codex_transcript_context_ignores_legacy_rules_settings(tmp_path, monkeypatch, disable):
+    env_file = tmp_path / "claude-env"
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+    monkeypatch.setenv("HAN_CODEX_INJECT_RULES", "shared")
+    monkeypatch.setenv("HAN_RULES_DISABLE", disable)
+    transcript = 'C:/대화 기록/quoted "session".jsonl'
+    payload = {"hook_event_name": "SessionStart", "transcript_path": transcript}
+    output = session_rules.decide(payload, "codex")
+    assert output["hookSpecificOutput"] == {
+        "hookEventName": "SessionStart",
+        "additionalContext": f"chef-distill 대화 기록 경로 (--transcript): {json.dumps(transcript, ensure_ascii=False)}",
+    }
+    assert session_rules.decide({**payload, "hook_event_name": "SubagentStart"}, "codex") == {}
+    assert not env_file.exists()
+
+
+def test_codex_entrypoints_resolve_shared_code_from_another_cwd(project):
+    for relative, arguments in [
+        ("chef-slots/scripts/slots.py", ["--project", str(project), "create", "slot1", "--dry-run"]),
+        ("chef-adapter-init/scripts/check_guard.py", ["--doctor"]),
+        ("chef-slots/scripts/dashboard.py", ["--help"]),
+    ]:
+        result = subprocess.run(
+            [sys.executable, str(PLUGIN / "codex/skills" / relative), *arguments],
+            cwd=project,
+            capture_output=True,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        if relative == "chef-slots/scripts/slots.py":
+            assert "echo codex" in result.stdout.decode("utf-8")
+            assert not (project.parent / "slots").exists()
+
+
+def test_codex_mission_state_entrypoint_resolves_shared_code_from_another_cwd(project):
+    hook(project, "echo han-mission open test", transcript_path="C:/t/parent.jsonl")
+    script = PLUGIN / "codex/skills/chef-mission/scripts/mission_state.py"
+    outputs = []
+    for arguments in (["init", "--goal", "목표"], ["mission", "set", "--stage", "impl"], ["status"]):
+        result = subprocess.run(
+            [sys.executable, "-B", str(script), "--project", str(project), *arguments],
+            cwd=project.parent,
+            capture_output=True,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        outputs.append(result.stdout.decode("utf-8"))
+    folder = project / "state/test"
+    assert "상태: 진행" in (folder / "mission.md").read_text(encoding="utf-8")
+    assert "현재 단계 impl" in outputs[2]
+    assert "C:/t/parent.jsonl" in (folder / "sessions.tsv").read_text(encoding="utf-8")
+
+
+def test_codex_status_reads_unshared_questions_without_a_valid_manifest(project):
+    hook(project, "echo han-mission open test")
+    script = PLUGIN / "codex/skills/chef-mission/scripts/mission_state.py"
+    command = [sys.executable, "-B", str(script), "--project", str(project)]
+    initialized = subprocess.run([*command, "init"], cwd=project.parent, capture_output=True, timeout=20)
+    assert initialized.returncode == 0, initialized.stderr.decode("utf-8", errors="replace")
+    folder = project / "state/test"
+    record = {
+        "schema": 1, "id": "ask-7", "revision": 1, "title": "질문", "intro": "", "body": "",
+        "items": [{"id": "1", "title": "진행할까요?", "body": "", "status": "pending", "answer": ""}],
+        "approval": {"status": "none", "reason": ""}, "answers": [],
+    }
+    draft = project / "question.json"
+    draft.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    published = subprocess.run([*command, "question", "publish", "--input", str(draft)],
+                               cwd=project.parent, capture_output=True, timeout=20)
+    assert published.returncode == 0, published.stderr.decode("utf-8", errors="replace")
+    (folder / "shared-documents.tsv").write_text("잘못된 헤더\n", encoding="utf-8")
+    pending = subprocess.run([*command, "status"], cwd=project.parent, capture_output=True, timeout=20)
+    assert pending.returncode == 0, pending.stderr.decode("utf-8", errors="replace")
+    assert "ask-7.md 답 없음" in pending.stdout.decode("utf-8")
+    reply = project / "reply.json"
+    reply.write_text(json.dumps({
+        "schema": 1, "id": "reply-1", "revision": 1, "at": "2026-10-26", "text": "권장안 승인",
+        "updates": [{"id": "1", "status": "answered", "answer": "권장안 승인"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    saved = subprocess.run([*command, "question", "answer", "ask-7.md", "--input", str(reply)],
+                           cwd=project.parent, capture_output=True, timeout=20)
+    assert saved.returncode == 0, saved.stderr.decode("utf-8", errors="replace")
+    answered = subprocess.run([*command, "status"], cwd=project.parent, capture_output=True, timeout=20)
+    assert answered.returncode == 0, answered.stderr.decode("utf-8", errors="replace")
+    assert "걸린 것: 없음" in answered.stdout.decode("utf-8")
+    (folder / "ask-legacy.md").write_text("# 질문\n\n## 답\n\n2026-10-26 권장\n", encoding="utf-8")
+    legacy = subprocess.run([*command, "status"], cwd=project.parent, capture_output=True, timeout=20)
+    assert legacy.returncode == 0, legacy.stderr.decode("utf-8", errors="replace")
+    assert "ask-legacy.md 기록 확인 필요" in legacy.stdout.decode("utf-8")
+    assert "답 없음" not in legacy.stdout.decode("utf-8")
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+def test_hook_registration_keeps_session_paths_guards_and_integrity(runtime):
+    path = PLUGIN / ("hooks/hooks.json" if runtime == "claude" else "codex/hooks.json")
+    hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
+    for event in ("PreToolUse",):
+        matchers = {entry.get("matcher", "") for entry in hooks[event]}
+        for tool in ("Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "ApplyPatch"):
+            assert any(tool in matcher.split("|") for matcher in matchers)
+    for event in ("Stop",):
+        commands = [json.dumps(hook) for entry in hooks[event] for hook in entry["hooks"]]
+        assert any("question_integrity.py" in command for command in commands)
+        assert all(not hook.get("async", False) for entry in hooks[event] for hook in entry["hooks"])
+    assert set(hooks) == {"SessionStart", "PreToolUse", "Stop"}
+    assert sum(len(entry["hooks"]) for entries in hooks.values() for entry in entries) == 4
+    for removed in ("korean_reply.py", "memory_notice.py", "session_title.py"):
+        assert removed not in json.dumps(hooks)
+        assert not (PLUGIN / "hooks" / removed).exists()
+        assert not (PLUGIN / "codex" / removed).exists()
+    assert "mission_guard.py" in json.dumps(hooks["PreToolUse"])
+    assert "subagent_allow.py" in json.dumps(hooks["PreToolUse"])
+    assert "session_rules.py" in json.dumps(hooks["SessionStart"])
+
+
+@pytest.mark.parametrize("event,tool_name", [("Stop", ""), ("Stop", "Bash"), ("Stop", "apply_patch")])
+def test_installed_codex_integrity_uses_config_registry_read_only(project, tmp_path, event, tool_name):
+    (project / ".codex/orchestrator/adapter.json").unlink()
+    installed = tmp_path / "installed/plugins/chef"
+    shutil.copytree(PLUGIN, installed, ignore=shutil.ignore_patterns(
+        "__pycache__", ".pytest_cache", "pytest-cache-files-*", "*.pyc",
+    ))
+    registry = tmp_path / "registry"
+    adapter = registry / "fictional/adapter.json"
+    adapter.parent.mkdir(parents=True)
+    (registry / "projects.json").write_text(json.dumps([{"adapter": "fictional", "roots": [str(project)]}]), encoding="utf-8")
+    adapter.write_text(json.dumps({"schema": 1, "paths": {"stateDir": "state"}}), encoding="utf-8")
+    config_home = tmp_path / "codex-config"
+    config_home.mkdir()
+    (config_home / "config.toml").write_text(f'[shell_environment_policy.set]\nHAN_ADAPTERS_DIR = "{registry.as_posix()}"\n', encoding="utf-8")
+    folder = project / "state/fictional-mission"
+    folder.mkdir(parents=True)
+    (folder.parent / "ACTIVE").write_text(json.dumps({"id": folder.name, "session": "owner"}), encoding="utf-8")
+    (folder / "ask-colors.md").write_text("# Fictional garden palette\n\nUse blue.\n", encoding="utf-8")
+    log = tmp_path / "guard-log.jsonl"
+    env = {key: value for key, value in os.environ.items() if key not in ("HAN_ADAPTERS_DIR", "HAN_REPO", "CLAUDE_PROJECT_DIR")}
+    env.update(CODEX_HOME=str(config_home), HAN_GUARD_LOG=str(log))
+    payload = {"hook_event_name": event, "tool_name": tool_name, "session_id": "owner", "agent_id": "child", "cwd": str(project),
+               "tool_input": {"command": "*** Begin Patch\n*** End Patch"}, "stop_hook_active": True}
+
+    def run(fields):
+        done = subprocess.run([sys.executable, str(installed / "codex/question_integrity.py")], input=json.dumps(fields).encode(),
+                              capture_output=True, check=True, env=env, timeout=15)
+        return json.loads(done.stdout or b"{}")
+
+    before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in folder.parent.rglob("*") if path.is_file()}
+    output = run(payload)
+    assert output["decision"] == "block" and "ask-colors.md" in output["reason"]
+    if event == "PostToolUse":
+        assert output["hookSpecificOutput"]["hookEventName"] == event
+    assert run({**payload, "session_id": "unrelated"}) == {}
+    after = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in folder.parent.rglob("*") if path.is_file()}
+    assert after == before
+    assert not log.exists()
+    assert not list(installed.rglob("__pycache__"))
+
+
+@pytest.fixture
+def shared_docs():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sync_shared", PLUGIN_ROOT.parent.parent / "tools/check_shared.py")
+    sync = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sync)
+    return sync
+
+
+def test_shared_references_are_pointers_to_single_source(shared_docs):
+    files = list(shared_docs.shared_files())
+    assert len(files) >= 10
+    assert any(t.endswith("human-writing.md") for _, t in files)
+    assert shared_docs.differing() == [], "python codex/sync_shared.py --write"
+    assert shared_docs.contract_errors() == []
+    for source, target in files:
+        assert Path(source).read_text(encoding="utf-8") != Path(target).read_text(encoding="utf-8")
+
+
+def test_shared_reference_check_detects_missing_or_copied_pointer(shared_docs, tmp_path, monkeypatch):
+    source = tmp_path / "skills/mission/references/human-writing.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("# Source\n", encoding="utf-8")
+    target = tmp_path / "codex/skills/chef-mission/references/human-writing.md"
+    monkeypatch.setattr(shared_docs, "ROOT", str(tmp_path))
+    assert shared_docs.differing() == [(str(source), str(target))]
+    target.parent.mkdir(parents=True)
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    assert shared_docs.differing() == [(str(source), str(target))]
+    target.write_text(shared_docs.pointer_text(str(source), str(target)), encoding="utf-8")
+    assert shared_docs.differing() == []
+
+
+@pytest.fixture
+def shared_doc_tree(shared_docs, tmp_path, monkeypatch):
+    plugin = tmp_path / "plugin"
+    shutil.copytree(PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(shared_docs, "ROOT", str(plugin))
+    return plugin
+
+
+def test_shared_skill_check_rejects_missing_canonical_or_wrong_entrypoint(shared_docs, shared_doc_tree):
+    plugin = shared_doc_tree
+    assert shared_docs.contract_errors() == []
+    canonical = plugin / "shared/skills/mission.md"
+    canonical.unlink()
+    assert any("shared/skills/mission.md" in error for error in shared_docs.contract_errors())
+    canonical.write_text("# Common mission\n", encoding="utf-8")
+    entrypoint = plugin / "grok/skills/chef-mission/SKILL.md"
+    entrypoint.write_text("# Detached runtime copy\n", encoding="utf-8")
+    assert any("공통 절차 링크 없음" in error and "grok/skills/chef-mission/SKILL.md" in error
+               for error in shared_docs.contract_errors())
+    entrypoint.write_text("[공통 절차](../../../shared/skills/mission.md)\n\n" + canonical.read_text(encoding="utf-8"), encoding="utf-8")
+    assert any("공통 본문 중복" in error for error in shared_docs.contract_errors())
+
+
+@pytest.mark.parametrize("name", ["question.json", "units.tsv", "ledger.tsv", "decisions.tsv", "obsolete.md"])
+def test_shared_reference_check_rejects_unmanaged_runtime_copy(shared_docs, shared_doc_tree, name):
+    reference = shared_doc_tree / "codex/skills/chef-mission/references/templates" / name
+    reference.write_text("unmanaged runtime copy\n", encoding="utf-8")
+    assert shared_docs.obsolete_reference_files() == [str(reference)]
+    assert any("불필요한 참조 사본" in error and name in error for error in shared_docs.contract_errors())
+
+
+@pytest.mark.parametrize("scope", ["section", "paragraph", "whitespace"])
+def test_shared_skill_check_rejects_partial_prose_copy(shared_docs, shared_doc_tree, scope):
+    source = (shared_doc_tree / "shared/skills/mission.md").read_text(encoding="utf-8")
+    section = source.split("## 5. 구현 진행", 1)[1].split("## 6.", 1)[0]
+    paragraph = section.split("\n\n", 2)[1]
+    copied = section
+    if scope == "paragraph":
+        copied = paragraph
+    elif scope == "whitespace":
+        copied = " \n  ".join(paragraph.split())
+    target = shared_doc_tree / "grok/skills/chef-mission/SKILL.md"
+    target.write_text(target.read_text(encoding="utf-8") + "\n" + copied, encoding="utf-8")
+    assert any("공통 문단 중복" in error and "grok/skills/chef-mission/SKILL.md" in error
+               for error in shared_docs.contract_errors())
+
+
+def test_shared_skill_check_does_not_treat_code_examples_as_shared_prose(shared_docs, shared_doc_tree):
+    source = (shared_doc_tree / "shared/skills/mission.md").read_text(encoding="utf-8")
+    code = "```" + source.split("```", 2)[1] + "```"
+    target = shared_doc_tree / "grok/skills/chef-mission/SKILL.md"
+    target.write_text(target.read_text(encoding="utf-8") + "\n" + code, encoding="utf-8")
+    assert shared_docs.contract_errors() == []
+
+
+def test_shared_reference_check_includes_claude_usage_links(shared_docs, shared_doc_tree):
+    source = shared_doc_tree / "skills/mission/references/claude-usage.md"
+    source.write_text(source.read_text(encoding="utf-8") + "\n[missing](unregistered-target.md)\n", encoding="utf-8")
+    assert any("claude-usage.md -> unregistered-target.md" in error for error in shared_docs.contract_errors())
+
+
+def test_codex_role_definitions_are_listed_and_review_inherits_the_model():
+    import tomllib
+
+    roles = (PLUGIN / "codex/skills/chef-mission/references/codex-roles.md").read_text(encoding="utf-8")
+    for path in sorted((PLUGIN / "codex/agents").glob("*.toml")):
+        definition = tomllib.loads(path.read_text(encoding="utf-8"))
+        assert definition["name"].startswith("chef:")
+        assert path.name == "chef-" + definition["name"].split(":", 1)[1] + ".toml"
+        assert definition["description"] and definition["developer_instructions"].strip()
+        assert f"codex/agents/{path.name}" in roles
+    reviewer = tomllib.loads((PLUGIN / "codex/agents/chef-code-reviewer.toml").read_text(encoding="utf-8"))
+    assert reviewer["name"] == "chef:code-reviewer"
+    assert "model" not in reviewer and "model_reasoning_effort" not in reviewer
+    assert "읽기 전용" in reviewer["description"]
+
+
+def test_codex_reviewer_small_is_pinned_and_listed_with_routing():
+    import tomllib
+
+    small = tomllib.loads((PLUGIN / "codex/agents/chef-reviewer-small.toml").read_text(encoding="utf-8"))
+    assert small["name"] == "chef:reviewer-small"
+    assert small["model"] == "gpt-6.1-terra" and small["model_reasoning_effort"] == "high"
+    assert "읽기 전용" in small["description"]
+    assert "변경 전 본과의 diff" in small["developer_instructions"]
+    roles = (PLUGIN / "codex/skills/chef-mission/references/codex-roles.md").read_text(encoding="utf-8")
+    assert "codex/agents/chef-reviewer-small.toml" in roles
+    assert "gpt-6.1-terra" in roles and "GPT-6.1 Terra / high 고정" in roles
+    assert "변경 전 본 대비 diff" in roles
+    mission = (PLUGIN / "codex/skills/chef-mission/SKILL.md").read_text(encoding="utf-8")
+    assert "chef:reviewer-small" in mission and "roles.reviewSmall" in mission and "변경 전 본 대비 diff" in mission
+
+
+def test_claude_code_reviewer_is_read_only_deep_reviewer():
+    text = (PLUGIN / "agents/code-reviewer.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    fields = dict(line.split(": ", 1) for line in text.split("---", 2)[1].strip().splitlines())
+    assert fields["name"] == "code-reviewer"
+    assert fields["model"] == "claude-opus-5-5" and fields["effort"] == "high"
+    assert {tool.strip() for tool in fields["tools"].split(",")} == {"Read", "Grep", "Glob", "Bash", "PowerShell"}
+    assert "reviewer-small" in fields["description"]

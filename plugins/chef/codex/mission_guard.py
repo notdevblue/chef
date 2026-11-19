@@ -1,10 +1,8 @@
-import os
+"""Compatibility entry point; implementation: chef.guards.mission."""
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from chef.cli.entrypoints import expose
 
-import mission_guard
-
-
-if __name__ == "__main__":
-    sys.exit(mission_guard.main(runtime="codex"))
+expose(globals(), 'chef.guards.mission', runtime='codex')

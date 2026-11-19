@@ -1,0 +1,84 @@
+import json
+import os
+import sys
+
+from chef.locations import PLUGIN_ROOT
+
+sys.dont_write_bytecode = True
+SCRIPTS = str(PLUGIN_ROOT / "skills/mission/scripts")
+
+from chef.guards import mission as mission_guard
+from chef.guards.questions import adapter_contexts
+from chef.mission import state as mission_state
+from chef.runtimes.hooks import normalize_payload
+
+
+def repair_direction(located, active, folder, runtime):
+    command = f'python "{os.path.join(SCRIPTS, "mission_state.py")}" --runtime {runtime} question check --project "{located.project}" --mission "{active.id}"'
+    return (
+        f"질문 기록 확인 필요: {folder}. {command} 로 확인할 것. "
+        "Markdown에만 남은 답·승인은 먼저 원문을 별도 보존하고 실제 답·대상 개정을 확인할 것. "
+        "질문 정의·개정이 그대로이고 답 기록만 빠졌으면 question answer <문서.md> --input <reply.json> 으로 사용자 원문과 updates를 기록할 것. "
+        "정본에 누락된 문항·설계까지 복구해야 하면 독립 검토한 JSON으로 question restore "
+        "--input <reviewed.json> --source <saved-original.md> --expect-revision <revision> --expect-sha256 <sha256> 를 사용할 것. "
+        "현재 JSON이 올바르고 생성본만 잘못됐으면 question render <문서.md>, 질문 개정은 question publish --input <draft.json> 를 사용할 것. "
+        "JSON 누락·손상은 신뢰할 수 있는 원본·백업과 대조해 명시적으로 복구할 것. 답·승인을 추론하거나 ACTIVE를 인계하지 말 것."
+    )
+
+
+def decide(payload, runtime=""):
+    if not isinstance(payload, dict):
+        return {}
+    payload = normalize_payload(payload, runtime)
+    runtime = payload["han_runtime"]
+    event = payload.get("hook_event_name")
+    if event != "Stop":
+        return {}
+    if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
+        return {}
+    try:
+        contexts = adapter_contexts(payload, [], mission_guard)
+    except Exception as error:
+        return {}
+    for located, adapter in contexts:
+        try:
+            state_dir = mission_guard.state_dir_of(located.project, adapter)
+            active = mission_guard.read_active(state_dir)
+        except Exception as error:
+            return {}
+        if not mission_guard.participates_in_mission(active, payload):
+            continue
+        folder = os.path.join(state_dir, active.id)
+        try:
+            root = os.path.realpath(state_dir)
+            resolved = os.path.realpath(folder)
+            if os.path.commonpath((root, resolved)) != root or resolved == root:
+                raise ValueError(f"미션 폴더가 stateDir 밖을 가리킴: {folder}")
+            issues = [
+                f"{name}: {issue}" for name, _, issue in mission_state.question_inspections(folder) if issue
+            ]
+        except Exception as error:
+            issues = [f"검사 실패 ({type(error).__name__}: {error})"]
+        if issues:
+            return {
+                "decision": "block",
+                "reason": "\n".join([*issues, repair_direction(located, active, folder, runtime)]),
+            }
+    return {}
+
+
+def main(runtime=""):
+    try:
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8-sig"))
+    except (OSError, ValueError, UnicodeError):
+        output = {}
+    else:
+        output = decide(payload, runtime)
+    if output:
+        sys.stdout.write(json.dumps(output, ensure_ascii=True))
+        sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,26 @@
+
+<script>
+(() => {
+  const KEY = "dashboard-auto-refresh", SCROLL = "dashboard-scroll", OPEN = "dashboard-open";
+  const read = (store, key) => { try { return store.getItem(key); } catch (e) { return null; } };
+  const write = (store, key, value) => { try { store.setItem(key, value); } catch (e) {} };
+  const toggle = document.getElementById("auto");
+  toggle.checked = read(localStorage, KEY) !== "off";
+  toggle.addEventListener("change", () => write(localStorage, KEY, toggle.checked ? "on" : "off"));
+  const details = Array.from(document.querySelectorAll("details[data-key]"));
+  const opened = (read(sessionStorage, OPEN) || "").split("|");
+  details.forEach((d) => { if (opened.includes(d.dataset.key)) d.open = true; });
+  const top = Number(read(sessionStorage, SCROLL) || 0);
+  if (top) window.scrollTo(0, top);
+  write(sessionStorage, SCROLL, "0");
+  write(sessionStorage, OPEN, "");
+  setInterval(() => {
+    const viewer = document.getElementById("document-viewer");
+    if (viewer && viewer.open) return;
+    if (!toggle.checked) return;
+    write(sessionStorage, SCROLL, String(window.scrollY));
+    write(sessionStorage, OPEN, details.filter((d) => d.open).map((d) => d.dataset.key).join("|"));
+    location.reload();
+  }, __REFRESH_MS__);
+})();
+</script>

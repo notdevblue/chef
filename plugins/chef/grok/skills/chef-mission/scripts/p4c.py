@@ -1,11 +1,8 @@
-import os
+"""Compatibility entry point; implementation: chef.cli.p4c."""
 import sys
+from pathlib import Path
 
-shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "skills", "mission", "scripts")
-sys.path.insert(0, os.path.normpath(shared))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from chef.cli.entrypoints import expose
 
-import p4c
-
-
-if __name__ == "__main__":
-    sys.exit(p4c.main(runtime="grok"))
+expose(globals(), 'chef.cli.p4c', runtime='grok')

@@ -1,0 +1,160 @@
+{
+  "codex/mission_guard.py": {
+    "module": "chef.guards.mission",
+    "runtime": "codex"
+  },
+  "codex/question_integrity.py": {
+    "module": "chef.guards.integrity",
+    "runtime": "codex",
+    "noBytecode": true
+  },
+  "codex/session_rules.py": {
+    "module": "chef.runtimes.session",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-adapter-init/scripts/check_guard.py": {
+    "module": "chef.cli.check_guard",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-distill/scripts/distill.py": {
+    "module": "chef.cli.distill",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-doctor/scripts/doctor.py": {
+    "module": "chef.cli.doctor",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-mission/scripts/mission_entry.py": {
+    "module": "chef.cli.mission_entry",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-mission/scripts/mission_state.py": {
+    "module": "chef.mission.state",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-mission/scripts/p4c.py": {
+    "module": "chef.cli.p4c",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-slots/scripts/dashboard.py": {
+    "module": "chef.dashboard.server",
+    "runtime": "codex"
+  },
+  "codex/skills/chef-slots/scripts/slots.py": {
+    "module": "chef.slots.commands",
+    "runtime": "codex"
+  },
+  "codex/subagent_allow.py": {
+    "module": "chef.guards.subagents",
+    "runtime": "codex"
+  },
+  "grok/scripts/grok_inject.py": {
+    "module": "chef.runtimes.grok.injection"
+  },
+  "grok/scripts/grok_transcript.py": {
+    "module": "chef.runtimes.grok.transcript"
+  },
+  "grok/scripts/han_state.py": {
+    "module": "chef.runtimes.grok.state"
+  },
+  "grok/scripts/mission_entry.py": {
+    "module": "chef.cli.mission_entry",
+    "runtime": "grok"
+  },
+  "grok/skills/chef-mission/scripts/p4c.py": {
+    "module": "chef.cli.p4c",
+    "runtime": "grok"
+  },
+  "hooks/hook_runtime.py": {
+    "module": "chef.runtimes.hooks"
+  },
+  "hooks/mission_entry.py": {
+    "module": "chef.cli.mission_entry"
+  },
+  "hooks/mission_guard.py": {
+    "module": "chef.guards.mission"
+  },
+  "hooks/question_integrity.py": {
+    "module": "chef.guards.integrity",
+    "noBytecode": true
+  },
+  "hooks/question_write_guard.py": {
+    "module": "chef.guards.questions"
+  },
+  "hooks/session_rules.py": {
+    "module": "chef.runtimes.session"
+  },
+  "hooks/subagent_allow.py": {
+    "module": "chef.guards.subagents"
+  },
+  "skills/adapter-init/scripts/check_guard.py": {
+    "module": "chef.cli.check_guard"
+  },
+  "skills/distill/scripts/distill.py": {
+    "module": "chef.cli.distill"
+  },
+  "skills/doctor/scripts/doctor.py": {
+    "module": "chef.cli.doctor"
+  },
+  "skills/mission/scripts/check_human_doc.py": {
+    "module": "chef.questions.check"
+  },
+  "skills/mission/scripts/lab.py": {
+    "module": "chef.mission.lab"
+  },
+  "skills/mission/scripts/mission_entry.py": {
+    "module": "chef.cli.mission_entry",
+    "runtime": "claude"
+  },
+  "skills/mission/scripts/mission_state.py": {
+    "module": "chef.mission.state"
+  },
+  "skills/mission/scripts/model_recommendations.py": {
+    "module": "chef.mission.routing"
+  },
+  "skills/mission/scripts/observatory.py": {
+    "module": "chef.mission.observatory"
+  },
+  "skills/mission/scripts/p4c.py": {
+    "module": "chef.cli.p4c"
+  },
+  "skills/mission/scripts/question_blocks.py": {
+    "module": "chef.questions.blocks"
+  },
+  "skills/mission/scripts/question_records.py": {
+    "module": "chef.questions.records"
+  },
+  "skills/mission/scripts/question_summary.py": {
+    "module": "chef.questions.summary"
+  },
+  "skills/mission/scripts/reference_bundle.py": {
+    "module": "chef.verification.references"
+  },
+  "skills/mission/scripts/routing.py": {
+    "module": "chef.mission.routing"
+  },
+  "skills/mission/scripts/run_metrics.py": {
+    "module": "chef.mission.observatory"
+  },
+  "skills/mission/scripts/supervisor.py": {
+    "module": "chef.mission.supervisor"
+  },
+  "skills/mission/scripts/task_queue.py": {
+    "module": "chef.mission.supervisor"
+  },
+  "skills/mission/scripts/usage_report.py": {
+    "module": "chef.mission.usage"
+  },
+  "skills/mission/scripts/verification.py": {
+    "module": "chef.verification.runner"
+  },
+  "skills/slots/scripts/dashboard.py": {
+    "module": "chef.dashboard.server"
+  },
+  "skills/slots/scripts/dashboard_discovery.py": {
+    "module": "chef.dashboard.discovery"
+  },
+  "skills/slots/scripts/slots.py": {
+    "module": "chef.slots.commands"
+  }
+}

@@ -1,0 +1,41 @@
+
+<script>
+const source = JSON.parse(document.getElementById("source").textContent);
+const out = document.getElementById("out");
+if (window.marked) {
+  window.marked.use({
+    tokenizer: {
+      del(src) {
+        if (src.startsWith("~~")) return false;
+      }
+    }
+  });
+  out.innerHTML = window.marked.parse(source);
+  const documentUrl = new URL(document.getElementById("source").dataset.url, location.href);
+  const rootUrl = new URL(document.getElementById("source").dataset.root, location.href);
+  for (const [selector, attribute] of [["a[href]", "href"], ["img[src]", "src"]]) {
+    for (const element of out.querySelectorAll(selector)) {
+      const reference = element.getAttribute(attribute);
+      if (!reference || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\?)/i.test(reference)) continue;
+      if (/^\/(?:$|view(?:\?|$)|mission(?:\?|$))/.test(reference)) continue;
+      const target = reference.startsWith("/raw/") ? new URL(reference, location.href)
+        : reference.startsWith("/") ? new URL(reference.slice(1), rootUrl) : new URL(reference, documentUrl);
+      if (!target.pathname.startsWith("/raw/")) continue;
+      if (attribute === "src" || /\.html?$/i.test(target.pathname)) {
+        element.setAttribute(attribute, target.href);
+      } else {
+        try {
+          const path = decodeURIComponent(target.pathname.slice("/raw/".length).replace(/%(?![0-9a-f]{2})/gi, "%25"));
+          element.setAttribute(attribute, "/view?path=" + encodeURIComponent(path) + target.hash);
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+} else {
+  const pre = document.createElement("pre");
+  pre.textContent = source;
+  out.replaceChildren(pre);
+}
+</script>

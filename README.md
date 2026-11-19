@@ -61,4 +61,5 @@ Windows에서는 junction을 사용합니다. 기존 설치가 있다면 [설치
 
 - [설치·설정·업데이트](docs/install.md)
 - [개발·검증](docs/development.md)
+- [개발 구조와 호환성 계약](docs/architecture.md)
 - [실행 통계·작업 대기열·모델 선택 추천](docs/autonomous-lab.md)

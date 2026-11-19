@@ -43,7 +43,11 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Check shared runtime contracts
         id: shared
-        run: python plugins/chef/codex/sync_shared.py
+        run: python tools/check_shared.py
+      - name: Check package and deployment boundaries
+        run: python tools/check_architecture.py
+      - name: Check generated runtime entry points
+        run: python tools/generate_entrypoints.py
       - name: Run full synthetic suite
         if: ${{ !cancelled() }}
         id: pytest

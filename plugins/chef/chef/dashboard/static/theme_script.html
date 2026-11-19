@@ -1,0 +1,21 @@
+
+<script>
+(() => {
+  const KEY = "dashboard-theme";
+  const preference = window.matchMedia("(prefers-color-scheme: dark)");
+  let selected = "";
+  try {
+    const store = window.localStorage;
+    const saved = store.getItem(KEY);
+    if (saved === "light" || saved === "dark") selected = saved;
+  } catch (e) {}
+  const apply = (theme) => {
+    document.documentElement.dataset.theme = theme;
+  };
+  document.documentElement.dataset.themeChoice = selected;
+  if (selected === "") {
+    if (preference.matches) apply("dark");
+    else apply("light");
+  } else apply(selected);
+})();
+</script>

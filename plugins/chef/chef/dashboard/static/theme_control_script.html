@@ -1,0 +1,26 @@
+
+<script>
+(() => {
+  const toggle = document.getElementById("theme");
+  const root = document.documentElement;
+  const preference = window.matchMedia("(prefers-color-scheme: dark)");
+  toggle.checked = root.dataset.theme === "dark";
+  toggle.addEventListener("change", () => {
+    let selected = "light";
+    if (toggle.checked) selected = "dark";
+    root.dataset.themeChoice = selected;
+    root.dataset.theme = selected;
+    try {
+      const store = window.localStorage;
+      store.setItem("dashboard-theme", selected);
+    } catch (e) {}
+  });
+  preference.addEventListener("change", (event) => {
+    if (root.dataset.themeChoice === "") {
+      if (event.matches) root.dataset.theme = "dark";
+      else root.dataset.theme = "light";
+      toggle.checked = event.matches;
+    }
+  });
+})();
+</script>

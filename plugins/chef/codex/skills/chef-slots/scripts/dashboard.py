@@ -1,11 +1,8 @@
-import os
+"""Compatibility entry point; implementation: chef.dashboard.server."""
 import sys
+from pathlib import Path
 
-shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "skills", "slots", "scripts")
-sys.path.insert(0, os.path.normpath(shared))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from chef.cli.entrypoints import expose
 
-import dashboard
-
-
-if __name__ == "__main__":
-    sys.exit(dashboard.main(runtime="codex"))
+expose(globals(), 'chef.dashboard.server', runtime='codex')

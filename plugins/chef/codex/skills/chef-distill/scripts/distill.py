@@ -1,11 +1,8 @@
-import os
+"""Compatibility entry point; implementation: chef.cli.distill."""
 import sys
+from pathlib import Path
 
-shared = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "skills", "distill", "scripts")
-sys.path.insert(0, os.path.normpath(shared))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from chef.cli.entrypoints import expose
 
-import distill
-
-
-if __name__ == "__main__":
-    sys.exit(distill.main(runtime="codex"))
+expose(globals(), 'chef.cli.distill', runtime='codex')

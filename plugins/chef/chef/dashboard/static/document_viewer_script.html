@@ -1,0 +1,129 @@
+
+<script>
+(() => {
+  const viewer = document.getElementById("document-viewer");
+  if (!viewer || typeof viewer.showModal !== "function") return;
+  const frame = document.getElementById("document-frame");
+  const title = document.getElementById("document-title");
+  const status = document.getElementById("document-status");
+  const back = document.getElementById("document-back");
+  const close = document.getElementById("document-close");
+  let trigger = close;
+  let documents = [];
+  let loading = 0;
+  const plainClick = (event) => event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+  const documentLink = (url) => url.origin === location.origin && url.pathname === "/view"
+    && /[.](?:md|txt|tsv|csv|json|log|yaml|yml|toml|xml|cs|py|js|ts|css|proto|sql|diff|patch)$/i.test(url.searchParams.get("path") || "");
+  const syncTheme = () => {
+    try {
+      frame.contentDocument.documentElement.dataset.theme = document.documentElement.dataset.theme;
+    } catch (e) {}
+  };
+  new MutationObserver(syncTheme).observe(document.documentElement, {attributes: true, attributeFilter: ["data-theme"]});
+  const escape = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      viewer.close();
+    }
+  };
+  const load = () => {
+    const current = documents[documents.length - 1];
+    title.textContent = current.title;
+    back.disabled = documents.length === 1;
+    status.textContent = "문서를 불러오는 중…";
+    frame.hidden = true;
+    clearTimeout(loading);
+    loading = setTimeout(() => {
+      status.textContent = "문서를 불러오지 못했습니다. 이전 문서로 돌아가거나 닫고 다시 열어 주세요.";
+    }, 15000);
+    const target = new URL(current.url);
+    target.searchParams.set("embedded", "1");
+    frame.src = target.href;
+  };
+  const navigate = (url, label) => {
+    if (documents.length) {
+      try {
+        documents[documents.length - 1].scroll = frame.contentWindow.scrollY;
+        documents[documents.length - 1].scrollSaved = true;
+      } catch (e) {}
+    }
+    url.searchParams.delete("embedded");
+    documents.push({url: url.href, title: label || "문서", scroll: 0, scrollSaved: false});
+    load();
+  };
+  document.addEventListener("click", (event) => {
+    if (!plainClick(event)) return;
+    const link = event.target.closest("a[href]");
+    if (!link || link.hasAttribute("download") || link.target) return;
+    const url = new URL(link.href, location.href);
+    if (!documentLink(url)) return;
+    event.preventDefault();
+    trigger = link;
+    documents = [];
+    viewer.showModal();
+    close.focus({preventScroll: true});
+    navigate(url, link.textContent.trim());
+  });
+  close.addEventListener("click", () => viewer.close());
+  viewer.addEventListener("keydown", escape);
+  viewer.addEventListener("close", () => {
+    clearTimeout(loading);
+    frame.src = "about:blank";
+    frame.hidden = true;
+    documents = [];
+    trigger.focus({preventScroll: true});
+  });
+  back.addEventListener("click", () => {
+    if (documents.length > 1) {
+      documents.pop();
+      load();
+    }
+  });
+  frame.addEventListener("error", () => {
+    clearTimeout(loading);
+    status.textContent = "문서를 불러오지 못했습니다. 닫고 다시 열어 주세요.";
+  });
+  frame.addEventListener("load", () => {
+    if (!viewer.open || !documents.length) return;
+    try {
+      const content = frame.contentDocument;
+      if (frame.contentWindow.location.href === "about:blank") return;
+      clearTimeout(loading);
+      syncTheme();
+      content.querySelectorAll(".mast,.foot").forEach((element) => { element.hidden = true; });
+      content.addEventListener("keydown", escape, true);
+      content.addEventListener("click", (event) => {
+        if (!plainClick(event)) return;
+        const link = event.target.closest("a[href]");
+        if (!link || link.hasAttribute("download")) return;
+        const url = new URL(link.href, frame.contentWindow.location.href);
+        const loaded = new URL(frame.contentWindow.location.href);
+        if (url.origin === loaded.origin && url.pathname === loaded.pathname && url.search === loaded.search && url.hash) return;
+        if (documentLink(url) && !link.target) {
+          const current = new URL(documents[documents.length - 1].url);
+          url.searchParams.delete("embedded");
+          if (url.pathname === current.pathname && url.search === current.search && url.hash) return;
+          event.preventDefault();
+          navigate(url, link.textContent.trim());
+        } else if (url.protocol === "http:" || url.protocol === "https:") {
+          event.preventDefault();
+          window.open(url.href, "_blank", "noopener");
+        }
+      }, true);
+      const current = documents[documents.length - 1];
+      if (content.title) {
+        current.title = content.title;
+        title.textContent = current.title;
+      }
+      frame.title = "문서 미리보기 · " + current.title;
+      status.textContent = "";
+      if (/^[45][0-9]{2}$/.test(content.title)) status.textContent = "문서를 열지 못했습니다 · " + content.title;
+      frame.hidden = false;
+      if (current.scrollSaved) frame.contentWindow.scrollTo(0, current.scroll);
+    } catch (e) {
+      clearTimeout(loading);
+      status.textContent = "문서 내용을 표시할 수 없습니다. 닫고 원문 링크를 새 탭에서 열어 주세요.";
+    }
+  });
+})();
+</script>

@@ -9,15 +9,20 @@
 | 구성 | 위치 |
 | --- | --- |
 | 세 런타임 공통 스킬 절차 | `plugins/chef/shared/skills/` |
+| 공통 Python 구현 | `plugins/chef/chef/` |
 | Claude 진입점·역할 | `plugins/chef/skills/`, `plugins/chef/agents/` |
 | Codex 진입점·역할 | `plugins/chef/codex/` |
 | Grok 진입점·역할 | `plugins/chef/grok/` |
-| 공유 가드·훅 | `plugins/chef/hooks/` |
-| 미션·검증·실행 관리 구현 | `plugins/chef/skills/mission/scripts/` |
-| 슬롯·읽기 전용 대시보드 | `plugins/chef/skills/slots/scripts/` |
+| 가드·훅 구현 | `plugins/chef/chef/guards/`, `chef/runtimes/` |
+| 미션·검증·실행 관리 구현 | `plugins/chef/chef/mission/`, `chef/verification/` |
+| 슬롯·읽기 전용 대시보드 | `plugins/chef/chef/slots/`, `chef/dashboard/` |
+| 개발용 테스트·가상 데이터 | `tests/` |
+| 개발·구조 검사 도구 | `tools/` |
 
 공통 계약은 공유 절차에서 관리하고 런타임 진입점은 도구·역할·경로 차이만 둡니다.
 역할의 실제 모델·effort는 각 런타임 정의와 참조 문서를 확인합니다.
+구조를 바꿀 때는 [개발 구조와 호환성 계약](architecture.md)을 따릅니다.
+기존 `scripts/`와 훅 경로는 호환 진입점이며 기능 구현을 추가하지 않습니다.
 
 ## 테스트
 
@@ -25,14 +30,16 @@
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest plugins/chef -q -p no:cacheprovider
-python plugins/chef/codex/sync_shared.py
+python tools/check_architecture.py
+python tools/check_shared.py
+python tools/generate_entrypoints.py
+python -m pytest -q -p no:cacheprovider
 ```
 
 변경 범위에 맞춰 각 디렉터리의 pytest를 실행할 수도 있습니다.
-가드는 `plugins/chef/hooks`, 미션·검증은 `plugins/chef/skills/mission/scripts`,
-슬롯·대시보드는 `plugins/chef/skills/slots/scripts`, doctor는 `plugins/chef/skills/doctor/scripts`입니다.
-Codex 전용 검사는 `plugins/chef/codex/test_codex.py`, Grok 전용 검사는 `plugins/chef/grok`에 있습니다.
+기존 회귀 검사는 `tests/integration/`의 기능별 폴더에 있습니다.
+저장·구현 식별 검사는 `tests/unit/`, 복사한 설치 트리와 기존 명령의 검사는 `tests/contracts/`입니다.
+Codex 전용 검사는 `tests/integration/codex`, Grok 전용 검사는 `tests/integration/grok`에 있습니다.
 전용 검사만 실행한 결과를 세 런타임 전체 검증으로 보고하지 않습니다.
 
 어댑터의 가드 규칙을 고쳤으면 해당 어댑터도 확인합니다.
@@ -41,9 +48,15 @@ Codex 전용 검사는 `plugins/chef/codex/test_codex.py`, Grok 전용 검사는
 python plugins/chef/skills/adapter-init/scripts/check_guard.py <어댑터 이름>
 ```
 
-`sync_shared.py`는 공통 스킬·런타임 링크·참조 포인터를 검사합니다.
+`tools/check_shared.py`는 공통 스킬·런타임 링크·참조 포인터를 검사합니다.
 `--write`는 Codex 참조 포인터를 갱신합니다. 공통 절차의 사본을 런타임 폴더에 추가하지 않습니다.
+호환 스크립트의 정본 목록은 `tools/entrypoints.json`입니다. 경로·대상·기본 런타임을 바꿀 때는
+이 목록을 수정하고 `python tools/generate_entrypoints.py --write`로 생성합니다.
+인자 없이 실행하면 생성 결과와 실제 파일의 일치를 검사합니다.
 CI는 Windows/Linux의 Python 3.11·3.13에서 전체 검사와 JUnit 결과 게시를 수행합니다.
+저장소의 `pytest.ini`가 패키지 경로와 테스트 검색 범위를 정합니다.
+테스트 파일에서 스킬의 구현 디렉터리를 Python 검색 경로로 추가하지 않습니다.
+기존 `python plugins/chef/codex/sync_shared.py`는 체크아웃에서만 쓰는 개발 명령 별칭으로 유지합니다.
 
 ## 운영 절차의 정본
 

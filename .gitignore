@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 *.claim
 .test-tmp/
-.test-tmp/
 adapters/projects.json
 adapters/*/local.json
 adapters/*

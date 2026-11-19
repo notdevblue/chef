@@ -69,7 +69,7 @@ python plugins/chef/grok/scripts/han_state.py brief --project <프로젝트> --r
 python plugins/chef/skills/doctor/scripts/doctor.py --runtime grok
 python plugins/chef/skills/slots/scripts/dashboard.py --runtime grok --project <프로젝트>
 python plugins/chef/skills/distill/scripts/distill.py --runtime grok extract --transcript <실제-대화-기록-경로> --out <저장소-밖-비공개-경로>/distill.md
-python -m pytest plugins/chef/grok/test_han_state.py -q -p no:cacheprovider
+python -m pytest tests/integration/grok/test_han_state.py -q -p no:cacheprovider
 ```
 
 `doctor.py --runtime grok`는 읽기 전용이다. 어댑터를 못 찾는 진단의 정본은 `chef-doctor`의 snapshot이다.

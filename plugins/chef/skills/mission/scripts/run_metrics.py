@@ -1,6 +1,8 @@
-"""Run Metrics (실행 통계): public CLI for the shared metrics implementation."""
-from observatory import main
+"""Compatibility entry point; implementation: chef.mission.observatory."""
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from chef.cli.entrypoints import expose
 
-if __name__ == '__main__':
-    raise SystemExit(main())
+expose(globals(), 'chef.mission.observatory', runtime=None)

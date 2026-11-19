@@ -1,0 +1,384 @@
+import copy
+import json
+import re
+import sys
+from pathlib import Path
+
+import pytest
+from chef.questions import check as check_human_doc
+
+from tests.paths import PLUGIN_ROOT
+
+SCHEMA_TABLE = "| 컬럼 | 타입 |\n| --- | --- |\n| Id | long |"
+CURRENT_TABLE = "| 필드 | 타입 |\n| --- | --- |\n| Color | string |"
+ANSWER_TEXT = "2026-10-20 승인\n\n1번은 권장대로 진행.\n날짜와 원문을 유지."
+
+
+def document():
+    return {
+        "schema": 1,
+        "id": "confirm-A",
+        "revision": 1,
+        "title": "설계 확인",
+        "intro": "결정할 내용을 확인합니다.",
+        "items": [{"id": "1", "title": "방향", "body": "권장대로 진행할까요?", "status": "pending", "answer": ""}],
+        "body": SCHEMA_TABLE,
+        "approval": {"status": "none", "reason": ""},
+        "answers": [{"schema": 1, "id": "legacy-1", "revision": 1, "at": "2026-10-20T12:00:00+09:00", "text": ANSWER_TEXT, "updates": []}],
+    }
+
+
+def write_record(path, record):
+    path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def migration(tmp_path):
+    raw = "\ufeff# 원문\r\n\r\n" + SCHEMA_TABLE.replace("\n", "\r\n")
+    raw += "\r\n\r\n```md\r\n## 답\r\n예시 답은 이관 대상 아님\r\n```\r\n\r\n## 답변 (2026-10-20)\r\n\r\n"
+    raw += ANSWER_TEXT.replace("\n", "\r\n") + "\r\n\r\n## 후속\r\n\r\n후속 설명\r\n"
+    source = tmp_path / "source.md"
+    source.write_bytes(raw.encode("utf-8"))
+    record = document()
+    record["legacy_markdown"] = raw
+    target = write_record(tmp_path / "draft.json", record)
+    return source, target, record
+
+
+def test_large_design_table_remains_allowed_in_short_report(tmp_path):
+    table = "| 컬럼 | 타입 | 제약 |\n| --- | --- | --- |\n" + "".join(f"| Field{number} | int | 0 이상 |\n" for number in range(100))
+    original = tmp_path / "original.md"
+    original.write_text("# 원문\n" + table, encoding="utf-8")
+    report = tmp_path / "report.md"
+    report.write_text("# 설계 결과\n\n## 지금\n\n설계 표를 확인받습니다.\n\n" + table, encoding="utf-8")
+    assert not check_human_doc.check(report, original)["issues"]
+
+
+def test_rewrite_cannot_change_approved_answer_or_schema(tmp_path):
+    original = tmp_path / "original.md"
+    original.write_text("# 확인\n\n| 컬럼 | 타입 |\n| --- | --- |\n| Id | long |\n\n## 답\n\n2026-10-20 승인\n", encoding="utf-8")
+    result = tmp_path / "confirm-A.md"
+    result.write_text("# 확인\n\n| 컬럼 | 타입 |\n| --- | --- |\n| Id | int |\n\n## 답\n", encoding="utf-8")
+    assert len(check_human_doc.check(result, original)["issues"]) == 2
+
+
+def test_length_alone_does_not_decide_readability(tmp_path):
+    report = tmp_path / "report.md"
+    report.write_text("# 진행 보고\n\n## 지금\n\n" + "상세 실행 기록입니다. " * 150, encoding="utf-8")
+    result = check_human_doc.check(report)
+    assert not result["issues"]
+    assert result["semantic_review_required"]
+
+
+def test_markdown_migration_preserves_raw_source_and_answer_under_generated_history_heading(tmp_path):
+    source, target, _ = migration(tmp_path)
+    result = check_human_doc.check(target, source)
+    assert not result["issues"]
+    assert result["semantic_review_required"]
+    assert result["prose_characters"] > len(ANSWER_TEXT)
+
+
+@pytest.mark.parametrize("body", [
+    "<!-- 답 작성 예시 -->",
+    "```text\n답 작성 예시\n```",
+    "    답 작성 예시",
+    "(대기)",
+    "대기",
+    "답변 대기",
+    "답변대기",
+    "<!-- 안내 -->\n\n```text\n예시\n```\n\n(대기)",
+])
+def test_markdown_migration_does_not_require_hidden_examples_or_placeholder_answers(tmp_path, body):
+    raw = "# 원문\n\n## 답\n\n" + body + "\n\n## 후속\n\n설명\n"
+    source = tmp_path / "source.md"
+    source.write_bytes(raw.encode("utf-8"))
+    record = document()
+    record.update(answers=[], legacy_markdown=raw)
+    target = write_record(tmp_path / "draft.json", record)
+    assert not check_human_doc.check(target, source)["issues"]
+
+
+def test_real_answer_preserves_raw_body_including_surrounding_examples_and_comments(tmp_path):
+    body = "<!-- 안내 -->\n\n```text\n예시\n```\n\n권장대로 진행."
+    raw = "# 원문\n\n## 답\n\n" + body + "\n"
+    source = tmp_path / "source.md"
+    source.write_bytes(raw.encode("utf-8"))
+    record = document()
+    record["legacy_markdown"] = raw
+    record["answers"][0]["text"] = body
+    target = write_record(tmp_path / "draft.json", record)
+    assert not check_human_doc.check(target, source)["issues"]
+    record["answers"][0]["text"] = "권장대로 진행."
+    write_record(target, record)
+    assert any("답 절 본문" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+@pytest.mark.parametrize("date", ["2026-10-20", "2026.10.20", "2026/10/20", "2026.1.2"])
+@pytest.mark.parametrize("preservation", ["at", "text", "missing"])
+def test_markdown_migration_preserves_answer_heading_date_in_history(tmp_path, date, preservation):
+    body = "권장대로 진행."
+    raw = f"# 원문\n\n## 답({date})\n\n{body}\n"
+    source = tmp_path / "source.md"
+    source.write_bytes(raw.encode("utf-8"))
+    record = document()
+    record["legacy_markdown"] = raw
+    history = record["answers"][0]
+    history.update(at="2026-10-26T16:00:00+09:00", text=body)
+    if preservation == "at":
+        year, month, day = (int(part) for part in re.split(r"[-./]", date))
+        history["at"] = f"{year:04}-{month:02}-{day:02}T12:00:00+09:00"
+    if preservation == "text":
+        history["text"] = f"{date}\n\n{body}"
+    target = write_record(tmp_path / "draft.json", record)
+    issues = check_human_doc.check(target, source)["issues"]
+    if preservation == "missing":
+        assert any("제목의 날짜" in issue for issue in issues)
+    else:
+        assert not issues
+
+
+def test_migration_can_group_past_answers_with_heading_dates_in_one_history_text(tmp_path):
+    raw = "# 원문\n\n## 답변 (2026-10-20)\n\n첫 답.\n\n## 답: 2026/10/21\n\n둘째 답.\n"
+    source = tmp_path / "source.md"
+    source.write_bytes(raw.encode("utf-8"))
+    record = document()
+    record["legacy_markdown"] = raw
+    record["answers"][0].update(at="2026-10-26T16:00:00+09:00", text="2026-10-20\n\n첫 답.\n\n2026/10/21\n\n둘째 답.")
+    target = write_record(tmp_path / "draft.json", record)
+    assert not check_human_doc.check(target, source)["issues"]
+
+
+@pytest.mark.parametrize("change", [
+    lambda record: record.pop("legacy_markdown"),
+    lambda record: record.update(legacy_markdown=record["legacy_markdown"].lstrip("\ufeff")),
+    lambda record: record.update(legacy_markdown=record["legacy_markdown"].replace("\r\n", "\n")),
+    lambda record: record.update(legacy_markdown=record["legacy_markdown"].replace("후속 설명", "변경 설명")),
+])
+def test_markdown_migration_rejects_any_raw_source_change(tmp_path, change):
+    source, target, record = migration(tmp_path)
+    change(record)
+    write_record(target, record)
+    assert any("legacy_markdown" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+@pytest.mark.parametrize("change", [
+    lambda record: record.update(answers=[]),
+    lambda record: record["answers"][0].update(text=ANSWER_TEXT.replace("2026-10-20", "2026-10-21")),
+    lambda record: record["answers"][0].update(text=ANSWER_TEXT.replace("권장대로", "대안대로")),
+])
+def test_markdown_migration_requires_original_answer_text_in_history(tmp_path, change):
+    source, target, record = migration(tmp_path)
+    change(record)
+    write_record(target, record)
+    assert any("답 절 본문" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+@pytest.mark.parametrize("change", [
+    lambda record: record.update(answers=[]),
+    lambda record: record["answers"][0].update(text="바뀐 답"),
+    lambda record: record["answers"][0].update(at="2026-10-21T12:00:00+09:00"),
+])
+def test_json_revision_rejects_deleted_or_changed_answer_history(tmp_path, change):
+    original = document()
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    revised["revision"] = 2
+    change(revised)
+    target = write_record(tmp_path / "draft.json", revised)
+    assert any("답 원문 이력" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+@pytest.mark.parametrize("change", [
+    lambda record: record.pop("legacy_markdown"),
+    lambda record: record.update(legacy_markdown="변경 원문"),
+])
+def test_json_revision_preserves_original_legacy_markdown(tmp_path, change):
+    original = document()
+    original["legacy_markdown"] = "\ufeff# 원문\r\n"
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    change(revised)
+    target = write_record(tmp_path / "draft.json", revised)
+    assert any("legacy_markdown" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+def test_json_revision_accepts_appended_history_and_unchanged_schema(tmp_path):
+    original = document()
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    revised["revision"] = 2
+    appended = copy.deepcopy(revised["answers"][0])
+    appended.update(id="reply-2", revision=2, text="새 개정의 추가 답")
+    revised["answers"].append(appended)
+    target = write_record(tmp_path / "draft.json", revised)
+    assert not check_human_doc.check(target, source)["issues"]
+
+
+@pytest.mark.parametrize("source_type", ["markdown", "json"])
+def test_structured_document_rejects_schema_column_type_change(tmp_path, source_type):
+    source, target, record = migration(tmp_path)
+    if source_type == "json":
+        source = write_record(tmp_path / "source.json", record)
+    record["body"] = SCHEMA_TABLE.replace("long", "int")
+    write_record(target, record)
+    assert any("설계 표" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+def test_generated_markdown_must_match_source_json(tmp_path):
+    record = document()
+    source = write_record(tmp_path / "source.json", record)
+    target = tmp_path / "preview.md"
+    target.write_bytes(check_human_doc.question_records.render_document(record).replace("\n", "\r\n").encode("utf-8"))
+    assert not check_human_doc.check(target, source)["issues"]
+    target.write_text("# 임의로 바꾼 화면", encoding="utf-8")
+    assert any("렌더 결과" in issue for issue in check_human_doc.check(target, source)["issues"])
+
+
+def test_json_without_source_checks_structure_and_rendered_prose(tmp_path):
+    record = document()
+    target = write_record(tmp_path / "draft.json", record)
+    result = check_human_doc.check(target)
+    assert not result["issues"]
+    assert result["prose_characters"] == check_human_doc.prose_length(check_human_doc.question_records.render_document(record))
+    record["items"] = []
+    write_record(target, record)
+    assert check_human_doc.check(target)["issues"]
+
+
+def test_damaged_json_is_reported_as_cli_failure_without_traceback(tmp_path, capsys):
+    target = tmp_path / "broken.json"
+    target.write_text('{"schema":', encoding="utf-8")
+    assert check_human_doc.main([str(target)]) == 1
+    output = capsys.readouterr()
+    assert json.loads(output.out)["issues"]
+    assert not output.err
+
+
+def test_revision_can_retire_old_design_only_after_actual_archive_verification(tmp_path):
+    record = document()
+    check_human_doc.question_records.publish_document(tmp_path, record)
+    source = tmp_path / "questions/confirm-A.json"
+    revised = copy.deepcopy(record)
+    revised.update(revision=2, body="## Current shape\n\n" + CURRENT_TABLE)
+    target = write_record(tmp_path / "draft.json", revised)
+    assert not check_human_doc.check(target, source)["issues"]
+    archive = check_human_doc.question_records.history_path(tmp_path, "confirm-A.md")
+    archive.unlink()
+    assert any("설계 표" in issue for issue in check_human_doc.check(target, source)["issues"])
+    assert any("전체 이력" in issue for issue in check_human_doc.check(target, source, archive)["issues"])
+
+
+@pytest.mark.parametrize("change", ["tampered", "wrong-document", "wrong-revision", "arbitrary-path", "damaged-snapshot"])
+def test_archive_cannot_exempt_loss_when_content_identity_revision_or_path_is_wrong(tmp_path, change):
+    records = check_human_doc.question_records
+    original = document()
+    records.publish_document(tmp_path, original)
+    source = write_record(tmp_path / "original.json", original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, body=CURRENT_TABLE)
+    target = write_record(tmp_path / "draft.json", revised)
+    archive = records.history_path(tmp_path, "confirm-A.md")
+    if change == "tampered":
+        archive.write_text("# Missing original design", encoding="utf-8")
+    elif change == "wrong-document":
+        another = copy.deepcopy(original)
+        another["id"] = "confirm-B"
+        records.publish_document(tmp_path, another)
+        archive = records.history_path(tmp_path, "confirm-B.md")
+    elif change == "wrong-revision":
+        original["revision"] = 9
+        write_record(source, original)
+    elif change == "arbitrary-path":
+        copied = tmp_path / "copied.md"
+        copied.write_bytes(archive.read_bytes())
+        archive = copied
+    else:
+        newer = copy.deepcopy(original)
+        newer.update(revision=2, title="Second wording")
+        records.publish_document(tmp_path, newer, 1, editorial=True)
+        snapshot = tmp_path / "questions/history/confirm-A/1.json"
+        damaged = copy.deepcopy(original)
+        damaged["body"] = "Changed original field."
+        write_record(snapshot, damaged)
+    issues = check_human_doc.check(target, source, archive)["issues"]
+    assert any("전체 이력" in issue for issue in issues)
+    assert any("설계 표" in issue for issue in issues)
+
+
+def test_explicit_archive_checks_unpublished_draft_and_prior_revision_snapshot(tmp_path, capsys):
+    records = check_human_doc.question_records
+    original = document()
+    records.publish_document(tmp_path, original)
+    old_source = write_record(tmp_path / "original.json", original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, body=CURRENT_TABLE)
+    revised["approval"] = {"status": "pending", "reason": "Review the new design."}
+    draft = write_record(tmp_path / "draft.json", revised)
+    archive = records.history_path(tmp_path, "confirm-A.md")
+    assert check_human_doc.main([str(draft), "--source", str(old_source), "--archive", str(archive)]) == 0
+    assert not json.loads(capsys.readouterr().out)["issues"]
+    records.publish_document(tmp_path, revised, 1)
+    assert not check_human_doc.check(draft, old_source, archive)["issues"]
+    generated = tmp_path / "confirm-A.md"
+    assert not check_human_doc.check(generated, tmp_path / "questions/confirm-A.json")["issues"]
+
+
+@pytest.mark.parametrize("body", ["", "## Current plan\n\nThe old design is only in history."])
+def test_verified_archive_does_not_allow_removing_every_current_design_table(tmp_path, body):
+    records = check_human_doc.question_records
+    original = document()
+    records.publish_document(tmp_path, original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, body=body)
+    target = write_record(tmp_path / "draft.json", revised)
+    archive = records.history_path(tmp_path, "confirm-A.md")
+    assert records.validate_history_archive(archive, original)
+    assert any("설계 표" in issue for issue in check_human_doc.check(target, tmp_path / "questions/confirm-A.json", archive)["issues"])
+
+
+@pytest.mark.parametrize("field_type", ["long", "int"])
+def test_legacy_schema_migration_compares_actual_current_field_definitions(tmp_path, field_type):
+    source, target, record = migration(tmp_path)
+    record.update(body="", blocks=[{"id": "shape", "type": "fields", "fields": [{"name": "Id", "type": field_type}]}])
+    write_record(target, record)
+    result = check_human_doc.check(target, source)
+    assert result["semantic_review_required"]
+    assert bool(result["issues"]) == (field_type != "long")
+
+
+@pytest.mark.parametrize("location", ["blocks", "detail_blocks"])
+def test_verified_archive_requires_fields_in_current_body_not_only_details(tmp_path, location):
+    records = check_human_doc.question_records
+    original = document()
+    records.publish_document(tmp_path, original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, body="")
+    revised[location] = [{"id": "shape", "type": "fields", "fields": [{"name": "Color", "type": "string"}]}]
+    target = write_record(tmp_path / "draft.json", revised)
+    result = check_human_doc.check(target, tmp_path / "questions/confirm-A.json")
+    assert result["semantic_review_required"]
+    assert bool(result["issues"]) == (location == "detail_blocks")
+
+
+def test_detail_only_fields_are_not_treated_as_current_approval_contract(tmp_path):
+    original = document()
+    original.update(body="Current purpose.", detail_blocks=[{"id": "extra", "type": "fields", "fields": [{"name": "Note", "type": "string"}]}])
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    revised.update(revision=2, detail_blocks=[])
+    target = write_record(tmp_path / "draft.json", revised)
+    assert not check_human_doc.check(target, source)["issues"]
+
+
+def test_structured_field_loss_is_detected_without_legacy_header_heuristic(tmp_path):
+    records = check_human_doc.question_records
+    original = document()
+    original.update(body="", blocks=[{"id": "shape", "type": "fields", "fields": [{"name": "Id", "type": "long"}]}])
+    source = write_record(tmp_path / "source.json", original)
+    revised = copy.deepcopy(original)
+    revised["blocks"][0]["fields"][0]["type"] = "int"
+    target = write_record(tmp_path / "draft.json", revised)
+    assert any("필드 정의" in issue for issue in check_human_doc.check(target, source)["issues"])
+    generated = tmp_path / "preview.md"
+    generated.write_text(records.render_document(original), encoding="utf-8")
+    assert not check_human_doc.check(generated, source)["issues"]
