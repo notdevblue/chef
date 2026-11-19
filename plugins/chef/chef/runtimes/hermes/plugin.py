@@ -237,20 +237,25 @@ class Bridge:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
     def context(self, session_id="", task_id="", **_):
+        python_context = (
+            "Chef CLI Python executable: " + json.dumps(sys.executable) + ". "
+            "Invoke Chef CLI scripts with this absolute interpreter path (Python 3.11+), "
+            "including slot preparation before selecting a slot. "
+        )
         try:
             cwd = self.cwd(session_id, task_id or session_id)
             payload = {"cwd": cwd, "han_runtime": "hermes"}
             if not mission.locate_adapter(payload):
-                return None
+                return {"context": python_context}
             return {"context": (
-                "Chef Hermes: load skill_view(name='chef:mission') for mission work. "
+                python_context + "Chef Hermes: load skill_view(name='chef:mission') for mission work. "
                 "Use chef_slot to select a ready slot in this existing session. "
                 "Use chef_delegate for role workers; native delegate_task is unavailable. "
                 "Preserve question/approval records and actual verification evidence. "
                 "Current task working directory: " + cwd
             )}
         except Exception:
-            return {"context": "Chef context unavailable. Tool guards will block unresolved operations; inspect the runtime setup."}
+            return {"context": python_context + "Chef context unavailable. Tool guards will block unresolved operations; inspect the runtime setup."}
 
     def verify(self, session_id="", **kwargs):
         try:

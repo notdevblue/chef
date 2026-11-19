@@ -14,6 +14,13 @@ from chef.infrastructure.python import python_environment
 from tests.paths import PLUGIN_ROOT
 
 
+def test_unsupported_python_is_rejected_before_loading_a_product_module(monkeypatch):
+    from chef.cli import entrypoints
+    monkeypatch.setattr(entrypoints.sys, "version_info", (3, 9))
+    with pytest.raises(SystemExit, match="Python 3.11 or newer"):
+        entrypoints.expose({"__name__": "fictional_module"}, "must_not_import_missing_module")
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX python3-only installation")
 def test_installed_hook_starts_with_only_python3_on_original_path(tmp_path):
     original_bin = tmp_path / "only python3"

@@ -35,6 +35,11 @@ are required. Use `.hermes/orchestrator/adapter.json`, or the explicit
 machine-specific paths and commands belong in excluded `local.json`. If present,
 `$HERMES_HOME/chef/adapters` is the Hermes home registry fallback.
 
+The native context supplies the absolute `Chef CLI Python executable` from the
+running Hermes process, including before a project adapter or slot is selected.
+Use that interpreter for Chef commands. A terminal's `python3` may resolve to an
+older system Python even when Hermes itself uses a supported virtual environment.
+
 ## Current-session work
 
 1. Load `skill_view(name="chef:mission")` and its linked shared procedure.

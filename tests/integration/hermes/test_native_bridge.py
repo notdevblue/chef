@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +34,18 @@ def world(tmp_path, monkeypatch):
 
 def call(world, tool, args, session="owner", **kwargs):
     return world.bridge.before_tool(tool, args, session_id=session, task_id="task", **kwargs)
+
+
+def test_bootstrap_context_exposes_actual_python_even_before_adapter_selection(world, monkeypatch):
+    for located in (None, SimpleNamespace(project=str(world.project))):
+        monkeypatch.setattr(plugin.mission, "locate_adapter", lambda *_: located)
+        context = world.bridge.context(session_id="owner", task_id="task")["context"]
+        assert json.dumps(sys.executable) in context
+        assert "absolute interpreter path" in context
+    def unavailable(*_):
+        raise ValueError("fictional registry unavailable")
+    monkeypatch.setattr(plugin.mission, "locate_adapter", unavailable)
+    assert json.dumps(sys.executable) in world.bridge.context(session_id="owner", task_id="task")["context"]
 
 
 def test_native_terminal_denial_prevents_execution(world):

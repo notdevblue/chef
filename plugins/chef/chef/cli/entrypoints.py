@@ -5,6 +5,8 @@ from importlib import import_module
 
 
 def expose(namespace, module_name, runtime=None):
+    if sys.version_info < (3, 11):
+        raise SystemExit("Chef requires Python 3.11 or newer. In Hermes, use the absolute Chef CLI Python executable provided in the native context.")
     name = namespace["__name__"]
     if name == "__main__":
         for stream in (sys.stdout, sys.stderr):

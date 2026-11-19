@@ -59,9 +59,11 @@ def test_node_process_matches_configured_entry_script_with_unquoted_spaces(posix
     script.parent.mkdir()
     script.write_text("// fictional entrypoint")
     monkeypatch.setenv("GROK_BIN", str(script))
-    assert injection.node_grok_command(f"/usr/bin/node {script} --resume session")
-    assert injection.node_grok_command(f'/usr/bin/node --require helper "{script}" --resume session')
-    assert not injection.node_grok_command(f"/usr/bin/node /fictional/other.js {script}")
+    # Exercise the POSIX process-list format even on a Windows test host.
+    rendered = script.as_posix()
+    assert injection.node_grok_command(f"/usr/bin/node {rendered} --resume session")
+    assert injection.node_grok_command(f'/usr/bin/node --require helper "{rendered}" --resume session')
+    assert not injection.node_grok_command(f"/usr/bin/node /fictional/other.js {rendered}")
 
 
 @pytest.mark.parametrize("failed", ["pid=,comm=", "pid=,args="])
