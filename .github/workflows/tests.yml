@@ -31,6 +31,10 @@ jobs:
           git -C "$RUNNER_TEMP/hermes-agent" checkout --detach FETCH_HEAD
           python -m pip install -r requirements-dev.txt
           python -m pip install -e "$RUNNER_TEMP/hermes-agent"
+          # Hermes keeps Python <3.14 as an updater bridge and omits its
+          # runtime dependencies there. Install the provider-free host subset
+          # exercised by this native plugin contract explicitly.
+          python -m pip install 'ruamel.yaml>=0.18,<0.19' 'rich>=14,<15' 'python-dotenv>=1,<2' 'PyYAML>=6,<7' 'requests>=2,<3' 'jinja2>=3,<4' 'typing-extensions>=4,<5' 'pydantic>=2,<3'
       - name: Verify real native plugin and task context without providers
         shell: bash
         run: HERMES_AGENT_SOURCE="$RUNNER_TEMP/hermes-agent" python -m pytest -q -p no:cacheprovider tests/integration/hermes/test_native_host.py
