@@ -802,6 +802,11 @@ class Config:
             raise UsageError("slots.beforeRun 은 단계 배열이어야 함")
         self.refresh_ids = list(slots.get("refresh") or [])
         self.editor = slots.get("editor") or ""
+        self.runtime_arguments = slots.get("runtimeArguments", [])
+        if not isinstance(self.runtime_arguments, list):
+            raise UsageError("slots.runtimeArguments 는 문자열 배열이어야 함")
+        for index, argument in enumerate(self.runtime_arguments):
+            self.check_runtime_argument(argument, index)
         default_autocompact = 200000
         if runtime == "claude":
             default_autocompact = 500000
@@ -842,6 +847,23 @@ class Config:
 
     def slot_path(self, name):
         return normalize(os.path.join(self.root, name))
+
+    @staticmethod
+    def check_runtime_argument(argument, index):
+        if not isinstance(argument, str) or any(char in argument for char in "\x00\r\n"):
+            raise UsageError(f"slots.runtimeArguments[{index}] 는 NUL·개행 없는 문자열이어야 함")
+        try:
+            argument.encode("utf-8")
+        except UnicodeError as exc:
+            raise UsageError(f"slots.runtimeArguments[{index}] 는 유효한 UTF-8이어야 함") from exc
+
+    def runtime_arguments_for(self, name):
+        arguments = []
+        for index, template in enumerate(self.runtime_arguments):
+            argument = expand(template, self.values(name))
+            self.check_runtime_argument(argument, index)
+            arguments.append(argument)
+        return arguments
 
     def codex_agent_entries(self, name):
         entries = []
@@ -1580,18 +1602,19 @@ def wt_argument(value):
 
 
 def wt_child_command(executable, arguments):
-    return [wt_argument(value) for value in [executable, *arguments]]
+    # Windows Terminal interprets semicolons even inside quoted arguments.
+    return [wt_argument(value.replace(";", "\\;")) for value in [executable, *arguments]]
 
 
 def wt_command(config, name, task, session_task="", resume_session=""):
     prompts = {"claude": "/chef:mission", "codex": "$chef:chef-mission", "grok": "/chef-mission"}
     prompt = f"{prompts[config.runtime]} {task}"
-    escaped = prompt.replace(";", "\\;")
     title = f"{config.project_name}:{name}"
     executable = shutil.which(config.runtime) or config.runtime
     command = ["wt.exe", "-w", "0", "nt", "--title", title, "-d", config.slot_path(name)]
+    runtime_arguments = config.runtime_arguments_for(name)
     if config.runtime == "codex":
-        options = ["-c", f"model_auto_compact_token_limit={config.autocompact}"]
+        options = runtime_arguments + ["-c", f"model_auto_compact_token_limit={config.autocompact}"]
         if config.codex_sandbox_mode:
             options += ["--sandbox", config.codex_sandbox_mode]
         if config.codex_project_doc_max_bytes:
@@ -1601,15 +1624,15 @@ def wt_command(config, name, task, session_task="", resume_session=""):
             options += ["-c", f"agents.{toml_key(alias)}.description={toml_string(description)}"]
         if resume_session:
             options += ["resume", resume_session]
-        return command + wt_child_command(executable, options + [escaped])
+        return command + wt_child_command(executable, options + [prompt])
     if config.runtime == "grok":
         # 리더 모드로 띄워야 inject 가 같은 리더에 붙어 열린 TUI 화면에 새 턴을 보여 줌
-        options = ["--leader", "--leader-socket", grok_leader_socket(config, name), "--cwd", config.slot_path(name)]
+        options = runtime_arguments + ["--leader", "--leader-socket", grok_leader_socket(config, name), "--cwd", config.slot_path(name)]
         if resume_session:
             options += ["--resume", resume_session]
         else:
             options += ["--session-id", str(uuid.uuid4())]
-        return command + wt_child_command(executable, options + ["--", escaped])
+        return command + wt_child_command(executable, options + ["--", prompt])
     session_name = f"{name}: {session_task or task}"
     if len(session_name) > SESSION_NAME_LIMIT:
         session_name = session_name[: SESSION_NAME_LIMIT - 1] + "…"
@@ -1617,9 +1640,9 @@ def wt_command(config, name, task, session_task="", resume_session=""):
     session_option = "--session-id"
     if resume_session:
         session_option = "--resume"
-    return command + wt_child_command(executable, [
-        "--autocompact", str(config.autocompact), "-n", session_name.replace(";", "\\;"),
-        session_option, session, "--", escaped,
+    return command + wt_child_command(executable, runtime_arguments + [
+        "--autocompact", str(config.autocompact), "-n", session_name,
+        session_option, session, "--", prompt,
     ])
 
 

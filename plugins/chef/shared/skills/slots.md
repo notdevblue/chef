@@ -41,6 +41,11 @@ name	path	client	created	synced	state
 설정이 없으면 아무것도 하지 않고, `--dry-run`은 실행할 단계만 표시한다. 단계 형식·런타임별 설정은 어댑터 계약의 "슬롯"을 따른다.
 출력 로그는 `<stateDir>/slots/beforeRun/<이름>-beforeRun.<id>.out.log`다.
 
+`slots.runtimeArguments`는 새 시작·재개 시 선택한 런타임 CLI에 추가할 argv 문자열 배열이다.
+Claude는 최상위 `slots`에, Codex·Grok의 런타임별 옵션은 `runtimes.<런타임>.slots.runtimeArguments`에 두며,
+슬롯 `run`이 템플릿 확장과 인자 전달을 맡는다.
+셸 명령으로 합치거나 별도 CLI 실행으로 우회하지 않는다. 형식·템플릿·Codex 세션 설정 예시는 어댑터 계약의 "슬롯"을 따른다.
+
 | `{launchMode}` | 부르는 때 |
 | --- | --- |
 | `new` | `run <이름> <작업...>`. 상태·ACTIVE 검사와 `--refresh` 갱신이 끝난 뒤, 에디터·CLI 실행 전에 한 번 |

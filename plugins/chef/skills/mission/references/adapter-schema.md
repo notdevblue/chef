@@ -291,6 +291,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `slots.mainClient` | 메인 워크스페이스 이름. 새 슬롯의 옵션을 따라 만들 원본이자 `{baseline}`을 조회하는 대상. `refresh`는 슬롯을 갱신하기 전에 이 워크스페이스를 먼저 head로 sync한다(`create`는 하지 않음). 사람마다 달라 `local.json`에 둔다 |
 | `slots.prepare[]` | 슬롯 준비·갱신 단계 목록(아래) |
 | `slots.beforeRun[]` | 슬롯 `create`·`create --resume`·`refresh`가 성공해 `ready`가 된 직후(`launchMode=prepare`)와, 새 미션 시작(`new`)·재개(`resume`) 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |
+| `slots.runtimeArguments` | 선택한 런타임 CLI에 전달할 추가 인자 문자열 배열. 기본 `[]`. 새 시작·재개 모두 런타임의 기본 옵션·재개 하위 명령·프롬프트 앞에 전달하며, 각 항목은 하나의 argv로 유지함. Claude는 최상위 `slots`에, Codex·Grok의 런타임별 값은 `runtimes.<런타임>.slots.runtimeArguments`에 둠 |
 | `slots.codexProjectDocMaxBytes` | Codex 프로젝트 지침 읽기 한도(바이트). 양의 정수만 허용하며 bool·실수·문자열은 거부. 새 세션과 재개 모두 `-c project_doc_max_bytes=N` 적용. 생략하면 CLI 기본 동작 유지 |
 | `slots.sandboxMode` | Codex 슬롯의 선택적 sandbox 설정. `read-only`·`workspace-write`·`danger-full-access`만 허용하며, 새 시작·재개에 `--sandbox <값>`을 전달함. 런타임별 값은 `runtimes.codex.slots.sandboxMode`에 둠. 생략하면 기존 CLI·프로젝트 설정을 상속하고 Claude·Grok에는 적용하지 않음 |
 | `slots.codexAgentConfigs` | Codex native 역할 별칭별 `{configFile, description}` 객체. 선택 설정이며 기본은 빈 객체. 새 시작·재개에 역할 설정 파일과 설명을 명시적으로 등록함(아래) |
@@ -345,6 +346,33 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 `beforeRun.run`에서 실행 문맥을 넘기려면 `--launch-mode "{launchMode}" --session-id "{sessionId}"`처럼 값에
 큰따옴표를 쓴다(JSON 문자열에서는 `\"`로 이스케이프). 빈 `sessionId`도 빈 인자 하나로 전달된다.
 `sessionId`는 새 CLI 세션 ID를 예약하지 않으며, 기존 슬롯·ACTIVE·세션 검사를 대신하지 않는다.
+
+`runtimeArguments`는 셸 명령 문자열이 아니다. 배열이 아닌 값(`null` 포함), 문자열이 아닌 항목, NUL·CR·LF·잘못된 UTF-8은 거부한다.
+빈 문자열도 인자 하나로 유지하고, 공백·유니코드·따옴표·세미콜론은 Windows Terminal 전달 과정에서 보존한다.
+각 항목은 `{name}`·`{slot}`·`{client}`·`{main}`·`vars`와 Claude의 메모리 변수를 기존 템플릿 규칙으로 확장한다.
+정의되지 않은 변수와 확장 뒤 잘못된 문자열은 실행 전에 거부하며, `beforeRun` 전용 변수와 `{baseline}`은 제공하지 않는다.
+인자의 의미와 TOML 등 내부 형식은 해당 런타임 CLI가 해석한다. 셸 인용부호를 배열 항목 바깥에 덧붙이지 않는다.
+템플릿은 문자열을 그대로 치환하므로, TOML 문자열 안의 경로는 TOML의 인용·이스케이프 규칙도 충족해야 한다.
+기존 런타임·로컬 병합 순서를 따르며 배열은 합치지 않고 대체하므로, 로컬 `[]`로 추가 인자를 비울 수 있다.
+프로젝트 설정 파일을 변경하지 않고 Codex의 세션 설정을 전달하는 가상 예:
+
+```json
+{
+  "runtimes": {
+    "codex": {
+      "slots": {
+        "runtimeArguments": [
+          "-c",
+          "hooks.PreToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command='python \"{slot}/tools/example_guard.py\"'}]}]"
+        ]
+      }
+    }
+  }
+}
+```
+
+이 배열은 공식 슬롯 `run` 경로의 CLI 실행에만 적용하며, `prepare`·`beforeRun`·에디터 명령에는 붙이지 않는다.
+Claude·Grok도 각 런타임 슬롯 설정에서 같은 배열 계약을 사용한다. 훅 지원 여부·설정 키 등은 사용하는 CLI 버전의 계약을 따른다.
 
 `codexAgentConfigs`의 각 값은 `configFile`·`description` 두 키만 가지며 둘 다 비어 있지 않은 문자열이어야 한다.
 별칭은 영문자·숫자·`_`·`-`만 허용하며, `chef:dev-medium`처럼 콜론 하나로 나뉜 두 부분도 허용한다(콜론이 든 별칭은 `-c` 키에서 따옴표로 감싼다). `agents`의 스칼라 설정 이름인 `max_threads`·`max_depth`·

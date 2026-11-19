@@ -1328,6 +1328,92 @@ def test_malformed_before_run_steps_report_the_setting(project, step):
     assert code == slots.USAGE and "slots.beforeRun[0]" in err
 
 
+@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("resume", [False, True])
+def test_runtime_arguments_are_discrete_and_precede_native_launch_arguments(project, runtime, resume):
+    arguments = ["--model", "fictional model 🚀", "", 'literal "quotes" \\ tail', "moon;archive", "{slot}/Role Files/{name}"]
+    project.write_adapter([], runtimeArguments=arguments)
+    located = slots.locate(str(project.dir), runtime)
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+    session = "12345678-1234-1234-1234-123456789012" if resume else ""
+    command = slots.wt_command(config, "a", "task", resume_session=session)
+    expected = arguments[:-1] + [config.slot_path("a") + "/Role Files/a"]
+    assert config.runtime_arguments_for("a") == expected
+    assert command[9:9 + len(expected)] == [slots.wt_argument(value.replace(";", "\\;")) for value in expected]
+    assert command[-1] == {"claude": "/chef:mission", "codex": "$chef:chef-mission", "grok": "/chef-mission"}[runtime] + " task"
+    if resume:
+        assert command.index(session) > 9 + len(expected)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows command-line parser")
+@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("resume", [False, True])
+def test_runtime_arguments_preserve_inline_hook_toml_through_terminal_serialization(project, runtime, resume):
+    import tomllib
+
+    hook = """hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command='python "{slot}/Tool Files/guard.py" --label moon;🚀'}]}]"""
+    project.write_adapter([], runtimeArguments=["-c", hook])
+    located = slots.locate(str(project.dir), runtime)
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+    session = "12345678-1234-1234-1234-123456789012" if resume else ""
+    command = slots.wt_command(config, "a", "task", resume_session=session)
+    # WT removes its semicolon escape before reserializing the child command.
+    child = windows_terminal_child_arguments([value.replace("\\;", ";") for value in command[8:]])
+    expected = config.runtime_arguments_for("a")
+    assert child[1:3] == expected
+    parsed = tomllib.loads(child[2])["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert parsed["command"] == f'python "{config.slot_path("a")}/Tool Files/guard.py" --label moon;🚀'
+    assert child[-1].endswith(" task")
+
+
+@pytest.mark.parametrize("arguments", [None, "--model fictional", {}, 3, False, [None], [3], [False], [[]], ["line\nbreak"], ["line\rbreak"], ["NUL\x00value"], ["\ud800"]])
+def test_runtime_arguments_reject_invalid_types_and_control_characters(project, arguments):
+    project.write_adapter([], runtimeArguments=arguments)
+    code, _, err = project.run("run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and "slots.runtimeArguments" in err
+
+
+@pytest.mark.parametrize("value", ["line\nbreak", "line\rbreak", "NUL\x00value", "\ud800"])
+def test_runtime_arguments_validate_expanded_values(project, value):
+    project.write_adapter([], runtimeArguments=["{label}"])
+    located = slots.locate(str(project.dir))
+    config = slots.Config(located, slots.read_adapter(located.adapter_path))
+    config.vars["label"] = value
+    with pytest.raises(slots.UsageError, match="slots.runtimeArguments"):
+        slots.wt_command(config, "a", "task")
+
+
+def test_runtime_arguments_reject_unknown_template_variables_before_launch(project):
+    project.write_adapter([], runtimeArguments=["{unknown}"])
+    seed_slot(project, "a")
+    code, _, err = project.run("run", "a", "task", "--dry-run")
+    assert code == slots.USAGE and "{unknown}" in err
+
+
+@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+def test_runtime_arguments_use_existing_runtime_and_local_overlay_precedence(project, runtime):
+    project.write_adapter([], runtimeArguments=["base"])
+    folder = project.dir / ".claude/orchestrator"
+    adapter_path = folder / "adapter.json"
+    adapter = json.loads(adapter_path.read_text(encoding="utf-8"))
+    adapter["runtimes"] = {runtime: {"slots": {"runtimeArguments": ["runtime"]}}}
+    adapter_path.write_text(json.dumps(adapter), encoding="utf-8")
+    local_path = folder / "local.json"
+    local = json.loads(local_path.read_text(encoding="utf-8"))
+    local["slots"]["runtimeArguments"] = ["local-base"]
+    local["runtimes"] = {runtime: {"slots": {"runtimeArguments": ["local-runtime"]}}}
+    local_path.write_text(json.dumps(local), encoding="utf-8")
+    located = slots.locate(str(project.dir), runtime)
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+    expected = "local-base" if runtime == "claude" else "local-runtime"
+    assert config.runtime_arguments_for("a") == [expected]
+    local["slots"]["runtimeArguments"] = []
+    local["runtimes"][runtime]["slots"]["runtimeArguments"] = []
+    local_path.write_text(json.dumps(local), encoding="utf-8")
+    config = slots.Config(located, slots.read_adapter(located.adapter_path, runtime), runtime)
+    assert config.runtime_arguments_for("a") == []
+
+
 @pytest.mark.parametrize("configured", [{}, {"codexProjectDocMaxBytes": 65536}])
 @pytest.mark.parametrize("resume", [False, True])
 def test_codex_document_limit_option_for_new_and_recorded_resume(recorded_session, configured, resume):
