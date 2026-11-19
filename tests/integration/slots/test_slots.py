@@ -497,7 +497,8 @@ def test_remove_refuses_slot_folder_that_is_a_junction(project, tmp_path):
     subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(precious)], check=True, capture_output=True)
     slots.Rows(project.rows_path).upsert("a", state="ready")
     code, out, _ = project.run("remove", "a", "--yes")
-    assert code == slots.FAILED and "링크" in out
+    # Physical containment may reject the link before link-type detection.
+    assert code == slots.FAILED and "거부" in out
     assert (precious / "keep.txt").exists()
     os.rmdir(link)
 

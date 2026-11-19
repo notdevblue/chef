@@ -57,6 +57,7 @@ python plugins/chef/skills/adapter-init/scripts/check_guard.py <어댑터 이름
 이 목록을 수정하고 `python tools/generate_entrypoints.py --write`로 생성합니다.
 인자 없이 실행하면 생성 결과와 실제 파일의 일치를 검사합니다.
 CI는 Windows/macOS/Linux의 Python 3.11·3.13에서 전체 검사와 JUnit 결과 게시를 수행합니다.
+macOS/Linux의 별도 Hermes native job은 고정한 공개 Hermes 소스로 실제 플러그인 로더·도구 등록·훅·작업 경로 계약을 검사합니다. 모델·외부 메시징·인증정보를 사용하지 않습니다.
 저장소의 `pytest.ini`가 패키지 경로와 테스트 검색 범위를 정합니다.
 테스트 파일에서 스킬의 구현 디렉터리를 Python 검색 경로로 추가하지 않습니다.
 기존 `python plugins/chef/codex/sync_shared.py`는 체크아웃에서만 쓰는 개발 명령 별칭으로 유지합니다.

@@ -9,6 +9,31 @@ permissions:
   contents: read
 
 jobs:
+  hermes-native:
+    name: Hermes native / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned public Hermes host
+        shell: bash
+        run: |
+          git init "$RUNNER_TEMP/hermes-agent"
+          git -C "$RUNNER_TEMP/hermes-agent" remote add origin https://github.com/NousResearch/hermes-agent.git
+          git -C "$RUNNER_TEMP/hermes-agent" fetch --depth 1 origin 6d54f96ed213a700f69b25826c65b158e9e57cad
+          git -C "$RUNNER_TEMP/hermes-agent" checkout --detach FETCH_HEAD
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -e "$RUNNER_TEMP/hermes-agent"
+      - name: Verify real native plugin and task context without providers
+        shell: bash
+        run: HERMES_AGENT_SOURCE="$RUNNER_TEMP/hermes-agent" python -m pytest -q -p no:cacheprovider tests/integration/hermes/test_native_host.py
   tests:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
