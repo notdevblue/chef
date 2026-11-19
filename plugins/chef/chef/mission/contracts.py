@@ -101,7 +101,7 @@ NONE_CELL = "-"
 VERDICT_LIMIT = 4
 
 
-RUNTIMES = ("claude", "codex", "grok")
+RUNTIMES = ("claude", "codex", "grok", "hermes")
 
 
 UNIT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")

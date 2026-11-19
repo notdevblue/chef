@@ -605,6 +605,11 @@ def decide_write(payload):
 
 def decide(payload):
     payload = normalize_payload(payload)
+    if payload.get("han_hermes_worker"):
+        from chef.runtimes.hermes.workers import worker_denial
+        denied = worker_denial(payload)
+        if denied:
+            return Outcome(deny=denied)
     payload = question_write_guard.resolved_payload(payload)
     outcome = Outcome()
     try:
@@ -695,6 +700,9 @@ def decide(payload):
                 "Grok 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
             )
             return outcome
+        if payload.get("han_runtime") == "hermes" and payload.get("agent_id"):
+            outcome.deny = "Hermes 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
+            return outcome
         if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
             outcome.deny = "미션 마커에 소유 session_id가 없음"
             return outcome
@@ -726,6 +734,7 @@ def decide(payload):
                 outcome,
                 str(payload.get("transcript_path") or ""),
                 stale_hours,
+                "hermes" if payload.get("han_runtime") == "hermes" else "",
             )
     elif verdict.kind == "rule":
         try:
@@ -759,10 +768,13 @@ def main(runtime=""):
         payload = normalize_payload(payload, runtime)
         log_payload(payload)
         outcome = decide(payload)
+        if payload.get("han_hermes_worker"):
+            from chef.runtimes.hermes.workers import acknowledge_guard
+            acknowledge_guard(payload, outcome.deny)
     except GuardOff as e:
-        outcome = Outcome(messages=[f"미션 가드 꺼짐: {e}"])
+        outcome = Outcome(deny=f"Codex 워커 가드 확인 실패: {e}") if os.environ.get("CHEF_HERMES_WORKER") else Outcome(messages=[f"미션 가드 꺼짐: {e}"])
     except Exception as e:  # 가드 오류로 도구를 막지 않음
-        outcome = Outcome(messages=[f"미션 가드 꺼짐: 내부 오류 ({e})"])
+        outcome = Outcome(deny=f"Codex 워커 가드 확인 실패: {e}") if os.environ.get("CHEF_HERMES_WORKER") else Outcome(messages=[f"미션 가드 꺼짐: 내부 오류 ({e})"])
     output = render_output(outcome)
     if output:
         sys.stdout.write(json.dumps(output, ensure_ascii=True))

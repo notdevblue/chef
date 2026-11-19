@@ -76,6 +76,7 @@ def entrypoints():
             ("skills", name),
             ("codex/skills", "chef-" + name),
             ("grok/skills", "chef-" + name),
+            ("hermes/skills", name),
         ):
             target = os.path.join(ROOT, *folder.split("/"), skill, "SKILL.md")
             yield source, target

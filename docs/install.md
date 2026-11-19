@@ -5,8 +5,9 @@
 
 ## 필요 조건
 
-- Python 3.11 이상, 사용할 Claude Code·Codex CLI·Grok CLI.
-- 슬롯에서 새 CLI 세션을 열 때는 Windows와 Windows Terminal(`wt.exe`).
+- Python 3.11 이상, 사용할 Claude Code·Codex CLI·Grok CLI 또는 Hermes Agent.
+- Claude·Codex·Grok 슬롯에서 새 CLI 세션을 열 때는 Windows와 Windows Terminal(`wt.exe`).
+- Hermes는 macOS·Linux의 native plugin API와 로컬 terminal backend. 역할 파견에는 Codex CLI의 ChatGPT 구독 로그인과 신뢰한 Chef 훅이 필요합니다.
 - 프로젝트 어댑터가 사용하는 도구. Perforce·Unity는 해당 프로젝트에서 사용하는 경우에만 필요합니다.
 
 Python과 어댑터 환경은 다음 명령으로 점검합니다.
@@ -25,7 +26,7 @@ python <repo>/plugins/chef/skills/adapter-init/scripts/check_guard.py --doctor
    어댑터 이름과 프로젝트·슬롯 roots를 지정합니다. PC별 경로는 어댑터의 `local.json`에 둡니다.
 4. 런타임을 시작할 셸에 `HAN_ADAPTERS_DIR=<repo>/adapters`를 설정합니다.
    로컬 프로젝트의 `.claude/orchestrator/adapter.json`·`.codex/orchestrator/adapter.json`·
-   `.grok/orchestrator/adapter.json`을 사용하는 방식도 지원합니다. 발견 순서는 위 계약을 따릅니다.
+   `.grok/orchestrator/adapter.json`·`.hermes/orchestrator/adapter.json`을 사용하는 방식도 지원합니다. 발견 순서는 위 계약을 따릅니다.
 
 PowerShell:
 
@@ -44,6 +45,16 @@ codex
 
 이 명령은 현재 셸에 적용됩니다. 새 셸에서도 쓰려면 환경변수를 셸 시작 설정에 저장합니다.
 개인 어댑터와 `projects.json`·`local.json`은 공개 Git에 추가하지 않습니다.
+예제의 프로젝트 준비·빌드 명령은 대상 OS에서 실행 가능한 명령으로 설정합니다.
+Windows의 `.bat`, `cmd`, `robocopy` 명령을 macOS·Linux에서 자동 변환하지 않습니다.
+
+준비 단계와 `beforeRun`에는 기존 `run` 문자열 대신 `argv` 문자열 배열을 사용할 수 있습니다.
+각 인자를 따로 확장하고 셸 없이 실행하므로 공백·한글 경로를 별도로 따옴표로 감쌀 필요가 없습니다.
+한 단계에는 `run`과 `argv` 중 하나만 지정합니다. 셸 기능이 필요하면 셸 실행 파일을 명시합니다.
+
+```json
+{"id": "prepare", "argv": ["python", "tools/prepare.py", "--slot", "{slot}"], "cwd": "{main}"}
+```
 
 ## Codex 역할과 훅
 
@@ -93,6 +104,27 @@ Windows에서는 junction, POSIX에서는 symlink로 `~/.grok/plugins/chef`를 �
 `grok inspect`에서 native Chef의 선택 경로, 스킬 8개·훅 1개와 실제 역할 6개의 이름·원본 경로를 확인합니다.
 `provides.agents`는 역할 수가 아닙니다. 실행 중인 Grok 세션은 새로 엽니다.
 
+## Hermes 연결
+
+[Hermes native 플러그인 안내](../plugins/chef/hermes/README.md)에 따라 등록하고 Hermes 프로세스를 재시작합니다.
+프로젝트·서비스 계정·게이트웨이별 값은 개인 설정에 둡니다. 플러그인은 외부 서비스 인증이나 메시지 대상을 저장하지 않습니다.
+
+Hermes의 레지스트리는 `HAN_ADAPTERS_DIR`이 우선이며, 없으면 `$HERMES_HOME/chef/adapters`가 존재할 때 사용합니다.
+`HERMES_HOME`이 없으면 `~/.hermes`입니다. 이후 체크아웃의 `adapters/`를 확인합니다.
+프로젝트 폴더를 위로 탐색할 때 각 폴더에서 `.hermes` → `.claude` → `.codex` → `.grok`의
+`orchestrator/adapter.json`을 확인합니다. 가까운 폴더가 우선입니다.
+병합 순서는 `adapter.json` → `runtimes.hermes` → `local.json` → 그 파일의 `runtimes.hermes`입니다.
+
+현재 Hermes 작업의 `chef_slot`으로 ready 슬롯을 선택하고, 해당 세션에서 미션을 시작합니다.
+같은 Hermes 소유 세션의 진행 중 미션은 `resume`으로 연결하며 다른 세션의 ACTIVE는 인계하지 않습니다.
+native `delegate_task` 대신 `chef_delegate`로 Chef 역할을 파견합니다.
+역할 워커는 Codex 로그인·설치 훅을 확인하며, 설정이 부족하면 실행을 중단하고 필요한 설정을 안내합니다.
+
+Hermes의 네이티브 SQLite 대화 기록은 `distill`의 JSONL 입력으로 읽지 않습니다.
+명시적으로 내보낸 호환 대화 기록만 지정하고, 사용량이 필요하면 관측한 명시적 메타데이터를 제공합니다.
+대기열은 새 Hermes 세션을 자동 생성하지 않습니다. 질문 무결성의 `pre_verify`는 Hermes의 제한된 반복 확인이며
+프로세스 종료를 무조건 막는 훅이 아닙니다. 실제 결과·질문·승인을 확인한 뒤 완료를 보고합니다.
+
 ## 업데이트
 
 Codex는 마켓플레이스를 먼저 갱신한 뒤 다시 설치합니다.
@@ -110,7 +142,9 @@ claude plugin update chef@chef
 ```
 
 Grok은 체크아웃을 갱신하고 `grok inspect`로 선택된 native 경로를 확인합니다.
-세 런타임 모두 새 세션에서 스킬과 훅을 확인합니다. 개인 어댑터는 설치 캐시 밖에 보관합니다.
+Claude·Codex·Grok은 새 세션에서 스킬과 훅을 확인합니다. Hermes도 체크아웃을 갱신한 뒤 프로세스를 재시작합니다.
+Hermes의 Codex 역할 워커는 설치된 Chef 코드와 실행 중인 Hermes의 코드가 일치해야 합니다.
+개인 어댑터는 설치 캐시 밖에 보관합니다.
 
 로컬 경로를 마켓플레이스로 등록한 Codex 설치는 위 Git 마켓플레이스 갱신과 구분해야 합니다.
 설정된 소스와 명령 문법은 `codex plugin marketplace list --json`과 각 명령의 `--help`로 확인합니다.

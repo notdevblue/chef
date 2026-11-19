@@ -19,7 +19,10 @@ USAGE = 2
 BUSY = 3
 
 
-RUNTIMES = ("claude", "codex", "grok")
+TERMINAL_RUNTIMES = ("claude", "codex", "grok")
+
+
+RUNTIMES = (*TERMINAL_RUNTIMES, "hermes")
 
 
 ROW_FIELDS = ("name", "path", "client", "created", "synced", "state")

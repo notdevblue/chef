@@ -6,7 +6,7 @@ import re
 
 from chef.guards import mission as mission_guard
 from chef.infrastructure.errors import UsageError
-from chef.infrastructure.paths import inside_root, is_link, normalize
+from chef.infrastructure.paths import inside_real_root, is_link, normalize, same_path
 from chef.infrastructure.vcs import build_vcs
 from chef.runtimes.claude.session import claude_memory_dir
 from chef.slots.contracts import NAME_PATTERN, SYNC_STEP
@@ -225,8 +225,21 @@ class Config:
             step_id = ""
             if isinstance(raw, dict):
                 step_id = str(raw.get("id") or "")
-            if not step_id or not isinstance(raw.get("run"), str) or not raw["run"]:
-                raise UsageError(f"slots.{source}[{index}] 에 id 와 run 문자열이 필요함")
+            if not step_id:
+                raise UsageError(f"slots.{source}[{index}] 에 id 가 필요함")
+            if ("run" in raw) == ("argv" in raw):
+                raise UsageError(f"slots.{source}[{index}] 에 run 문자열 또는 argv 배열 중 하나만 필요함")
+            if "run" in raw and (not isinstance(raw["run"], str) or not raw["run"]):
+                raise UsageError(f"slots.{source}[{index}] 의 run 은 비어 있지 않은 문자열이어야 함")
+            if "argv" in raw:
+                argv = raw["argv"]
+                if (
+                    not isinstance(argv, list)
+                    or not argv
+                    or any(not isinstance(argument, str) or "\x00" in argument for argument in argv)
+                    or not argv[0]
+                ):
+                    raise UsageError(f"slots.{source}[{index}] 의 argv 는 실행 파일로 시작하는 NUL 없는 문자열 배열이어야 함")
             if not isinstance(raw.get("cwd") or "", str):
                 raise UsageError(f"slots.{source}[{index}] ({step_id}) 의 cwd 가 문자열이 아님")
             try:
@@ -260,7 +273,8 @@ class Config:
                 step_id = f"{namespace}.{step_id}"
             values = self.values(name, step_id, namespace)
             values.update(extra_values)
-            if "{baseline}" in raw["run"] + (raw.get("cwd") or ""):
+            templates = raw["argv"] if "argv" in raw else [raw["run"]]
+            if any("{baseline}" in template for template in [*templates, raw.get("cwd") or ""]):
                 if not self.baseline:
                     self.baseline = self.vcs.baseline()
                 values["baseline"] = self.baseline
@@ -269,10 +283,19 @@ class Config:
                 cwd = expand(raw["cwd"], values)
             if cwd:
                 cwd = normalize(cwd)
+            command = (
+                [expand(argument, values) for argument in raw["argv"]]
+                if "argv" in raw
+                else expand(raw["run"], values)
+            )
+            if isinstance(command, list) and (
+                not command[0] or any("\x00" in argument for argument in command)
+            ):
+                raise UsageError(f"slots.{namespace or 'prepare'} ({step_id}) 의 확장된 argv 가 잘못됨")
             steps.append(
                 Step(
                     id=step_id,
-                    command=expand(raw["run"], values),
+                    command=command,
                     cwd=cwd,
                     group=group,
                     exclusive=bool(raw.get("exclusive")),
@@ -319,8 +342,10 @@ class Config:
 
     def path_problem(self, name):
         slot = self.slot_path(name)
-        if not inside_root(self.root, slot):
+        if not inside_real_root(self.root, slot):
             return f"슬롯 경로가 root({self.root}) 안이 아니거나 root 자체임: {slot}"
         if is_link(slot):
             return f"슬롯 폴더가 링크·junction 임: {slot}"
+        if same_path(self.main, slot) or inside_real_root(self.main, slot) or inside_real_root(slot, self.main):
+            return f"슬롯 경로가 메인 작업 공간과 겹침: {slot}"
         return ""

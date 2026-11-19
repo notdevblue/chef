@@ -163,3 +163,6 @@ python "<dashboard-script>" <dashboard-runtime> [--project <메인 프로젝트 
   `exclusive` 단계와 `slots.tsv` 쓰기도 프로세스 간 잠금을 쓰므로 여러 세션이 동시에 `create`해도 된다.
 - 런타임별 설정·개인 지침·메모리·MCP 준비와 폴더·훅 신뢰는 해당 진입점 및 어댑터의 준비 단계를 따른다. 전역 설정은 임의로 바꾸지 않는다.
 - 기록 안 된 로컬 변경 확인(`reconcile -n`)은 슬롯 전체를 훑어 1분 넘게 걸릴 수 있다(`refresh`는 편집 확인만이라 더 짧다).
+# Hermes 실행 경로
+
+Hermes는 [전용 진입점](../../hermes/skills/slots/SKILL.md)의 `chef_slot`으로 현재 작업을 연결한다. 아래 `run`의 새 터미널 동작은 Claude·Codex·Grok에 적용된다. Hermes의 슬롯 준비·갱신·제거 보호 조건은 동일하다.

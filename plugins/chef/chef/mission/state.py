@@ -775,6 +775,9 @@ def cmd_transcripts(ctx, args):
         "claude": (search_claude, search_codex, grok_transcript.find_transcript),
         "codex": (search_codex, search_claude, grok_transcript.find_transcript),
         "grok": (grok_transcript.find_transcript, search_codex, search_claude),
+        # Hermes owns a SQLite session store. Only an explicitly recorded
+        # exported transcript is a file; never guess another runtime's log.
+        "hermes": (),
     }[ctx.runtime]
     home = os.path.expanduser("~")
     lines = []

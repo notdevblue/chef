@@ -31,7 +31,9 @@ class Runner:
 
     def execute(self, step):
         os.makedirs(os.path.dirname(step.out), exist_ok=True)
-        argv = step.command if os.name == "nt" else shlex.split(step.command)
+        argv = step.command
+        if isinstance(argv, str) and os.name != "nt":
+            argv = shlex.split(argv)
         with open(step.out, "wb") as out:
             try:
                 return subprocess.run(

@@ -420,3 +420,8 @@ Codex에 그대로 쓰지 않는다. 예시 어댑터(`adapters/example/`)는 �
 Codex 전용 MCP 설정과 AGENTS.md가 로컬 파일이면 준비 단계에 실제 복사 절차를 명시한다.
 Codex의 기본 셸은 Windows에서 PowerShell로 해석하고, 명시된 shell이 있으면 그 값을 따른다.
 가드는 도구 차단 보조 수단이며 write_stdin의 후속 입력이나 의도적 우회를 통제하지 않는다.
+# Hermes와 이식 가능한 준비 명령
+
+Hermes는 `runtimes.hermes`에 런타임 덮어쓰기를 둔다. 병합은 기본 adapter → 런타임 덮어쓰기 → local → local 런타임 덮어쓰기 순서이며 배열은 교체한다. 프로젝트별 경로·도구·스크립트는 개인 어댑터에 유지한다. [Hermes 안내](../../../hermes/README.md)를 따른다.
+
+`slots.prepare`와 `slots.beforeRun` 단계는 기존 `run` 문자열 또는 새 `argv` 문자열 배열 중 하나만 지정한다. `argv`는 각 인자에 변수를 개별 확장하고 셸을 거치지 않는다. 셸 문법이 필요하면 해당 셸을 명시적으로 호출한다. 예: `{"id":"setup","argv":["{python}","{main}/tools/setup.py","--slot","{slot}"]}`. `run`의 기존 실행 의미는 유지한다. `cwd`, `group`, `exclusive`, `okExit`는 두 형식 모두 동일하다.

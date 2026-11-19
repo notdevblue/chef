@@ -15,7 +15,7 @@ from chef.locations import PLUGIN_ROOT
 CONFIG_FILE = "mission-entry.json"
 RECEIPTS_DIR = "mission-entry-receipts"
 RECEIPT_SECONDS = 600
-RUNTIMES = ("claude", "codex", "grok")
+RUNTIMES = ("claude", "codex", "grok", "hermes")
 MODES = ("new", "resume")
 DEPLOY_ROOT = str(PLUGIN_ROOT)
 

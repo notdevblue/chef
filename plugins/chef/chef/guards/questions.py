@@ -30,7 +30,14 @@ def absolute_path(path, cwd):
 
 
 def canonical_path(path):
-    return os.path.normpath(os.path.realpath(path)).replace("\\", "/").rstrip("/").casefold()
+    # Context identity must preserve distinct paths on case-sensitive volumes.
+    # A conservative question-name match is a separate policy below.
+    return os.path.normcase(os.path.normpath(os.path.realpath(path))).replace(os.sep, "/").rstrip("/")
+
+
+def question_path(path):
+    """Conservative question spelling match, never a project identity key."""
+    return canonical_path(path).casefold()
 
 
 def input_mapping(payload):
@@ -118,20 +125,20 @@ def adapter_contexts(payload, targets, guard):
 def generated_history(folder, name):
     if not QUESTION_NAME.fullmatch(name):
         return False
-    root = canonical_path(folder)
+    root = question_path(folder)
     sources = (
         (folder, name, root),
         (os.path.join(folder, "questions"), name[:-3] + ".json", root + "/questions"),
     )
     for directory, filename, expected in sources:
-        if not os.path.isdir(directory) or canonical_path(directory) != expected:
+        if not os.path.isdir(directory) or question_path(directory) != expected:
             continue
         with os.scandir(directory) as entries:
             for entry in entries:
                 if (
                     entry.name.casefold() == filename.casefold()
                     and entry.is_file()
-                    and canonical_path(entry.path) == expected + "/" + filename.casefold()
+                    and question_path(entry.path) == expected + "/" + filename.casefold()
                 ):
                     return True
     return False
@@ -190,7 +197,7 @@ def protected_tree(target, cwd, contexts, guard):
     path = filesystem_path.casefold()
     for located, adapter in contexts:
         state_dir = guard.state_dir_of(located.project, adapter)
-        state = canonical_path(state_dir)
+        state = question_path(state_dir)
         if path.startswith(state + "/"):
             parts = path[len(state) + 1 :].split("/")
             if parts[1:] in (["details"], ["details", "history"]):
@@ -214,7 +221,7 @@ def protected_tree(target, cwd, contexts, guard):
             for mission in missions:
                 if not mission.is_dir():
                     continue
-                mission_path = canonical_path(mission.path)
+                mission_path = question_path(mission.path)
                 if path != mission_path and not mission_path.startswith(path + "/"):
                     continue
                 with os.scandir(mission.path) as children:

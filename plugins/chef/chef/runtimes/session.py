@@ -92,7 +92,7 @@ def decide(payload, runtime=""):
         for export_warning in (export_registry_dir(), export_transcript_path(payload)):
             if export_warning:
                 warnings.append(export_warning)
-    if runtime in ("codex", "grok"):
+    if runtime in ("codex", "grok", "hermes"):
         transcript = payload.get("transcript_path")
         if isinstance(transcript, str) and transcript.strip():
             contexts.append(

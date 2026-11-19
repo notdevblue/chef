@@ -16,8 +16,9 @@ SLOT_FIELDS = ("name", "path", "client", "created", "synced", "state")
 PROMPTS = {
     "claude": "/chef:mission {goal}",
     "codex": "$chef:chef-mission {goal}",
+    "hermes": "chef-mission {goal}",
 }
-RUNTIME_LABEL = {"grok": "Grok", "claude": "Claude", "codex": "Codex"}
+RUNTIME_LABEL = {"grok": "Grok", "claude": "Claude", "codex": "Codex", "hermes": "Hermes"}
 SLOT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
@@ -295,7 +296,7 @@ def build_brief(project, goal, runtime, slot=""):
     if not collapsed:
         raise Usage("goal 이 비어 있음")
     if runtime not in RUNTIME_LABEL:
-        raise Usage("runtime 은 grok, claude, codex 중 하나")
+        raise Usage("runtime 은 grok, claude, codex, hermes 중 하나")
     snapshot = build_snapshot(project, runtime)
     lines = list(snapshot.lines)
     if snapshot.active.corrupt:
@@ -338,7 +339,7 @@ def configure_stdio():
 def main(argv=None):
     configure_stdio()
     parser = argparse.ArgumentParser(
-        prog="han_state.py", description="chef 상태 조회와 Grok·Claude·Codex 인계 문장"
+        prog="han_state.py", description="chef 상태 조회와 런타임별 인계 문장"
     )
     sub = parser.add_subparsers(dest="command", required=True)
     snapshot = sub.add_parser("snapshot")

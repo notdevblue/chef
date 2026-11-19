@@ -987,14 +987,17 @@ def test_registry_glob_root_and_subfolder_walk_up(project):
     assert is_denied(run_guard(nested, "p4 submit -c 1", env=env))
 
 
-def test_registry_match_ignores_case_and_separators(project):
+def test_registry_match_respects_native_filesystem_case(project):
     repo = project / "Repo"
     repo.mkdir()
     shouted = str(repo).upper().replace("\\", "/")
     registry = make_registry(project / "registry", [{"adapter": "example", "roots": [shouted]}])
     env = {"HAN_ADAPTERS_DIR": str(registry)}
-    run_guard(repo, "echo han-mission open m-1", env=env)
-    assert is_denied(run_guard(repo, "p4 submit -c 1", env=env))
+    if os.path.exists(shouted) and os.path.samefile(repo, shouted):
+        run_guard(repo, "echo han-mission open m-1", env=env)
+        assert is_denied(run_guard(repo, "p4 submit -c 1", env=env))
+    else:
+        assert not mission_guard.root_matches(str(repo), shouted)
 
 
 def test_registry_no_match_is_silent(project):

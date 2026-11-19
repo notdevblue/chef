@@ -1,7 +1,9 @@
 """guards / adapters."""
 
 import fnmatch
+import glob
 import json
+import ntpath
 import os
 from typing import NamedTuple
 
@@ -16,7 +18,7 @@ from chef.guards.contracts import (
     USER_CONFIG_ENV,
 )
 from chef.guards.logging import append_log
-from chef.infrastructure.paths import normalize_path
+from chef.infrastructure.paths import normalize_path, same_path
 from chef.locations import PLUGIN_ROOT
 
 
@@ -64,6 +66,13 @@ def han_repo_adapters_dir():
 
 
 def adapter_relatives(runtime):
+    if runtime == "hermes":
+        return (
+            (".hermes", "orchestrator", "adapter.json"),
+            ADAPTER_RELATIVE,
+            (".codex", "orchestrator", "adapter.json"),
+            (".grok", "orchestrator", "adapter.json"),
+        )
     if runtime == "codex":
         return ((".codex", "orchestrator", "adapter.json"), ADAPTER_RELATIVE)
     if runtime == "grok":
@@ -77,6 +86,8 @@ def adapter_relatives(runtime):
 
 
 def registry_missing_message(runtime):
+    if runtime == "hermes":
+        return f"레지스트리 경로 미설정 ({REGISTRY_ENV}·Hermes home의 chef/adapters·<저장소>/adapters 가 비어 있음)"
     if runtime == "codex":
         return f"레지스트리 경로 미설정 ({REGISTRY_ENV}·Codex config.toml·<저장소>/adapters 가 비어 있음)"
     if runtime == "grok":
@@ -134,6 +145,11 @@ def resolve_registry(runtime="claude"):
         configured = han_repo_adapters_dir()
         if configured:
             return Registry(configured, "hanRepo")
+    if runtime == "hermes":
+        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        configured = os.path.join(home, "chef", "adapters")
+        if os.path.isdir(configured):
+            return Registry(os.path.abspath(configured), "hermesHome")
     fallback = in_place_adapters_dir()
     if os.path.isdir(fallback):
         return Registry(fallback, "in-place")
@@ -149,11 +165,20 @@ def registry_adapter_path(name, runtime="claude"):
 
 
 def root_matches(folder, root):
+    if ntpath.splitdrive(root)[0]:
+        folder = ntpath.normcase(ntpath.normpath(folder)).replace("\\", "/").rstrip("/")
+        root = ntpath.normcase(ntpath.normpath(root)).replace("\\", "/").rstrip("/")
+    elif not glob.has_magic(root):
+        return same_path(folder, root)
     folder_parts = normalize_path(folder).split("/")
     root_parts = normalize_path(root).split("/")
-    if len(folder_parts) != len(root_parts):
-        return False
-    return all(fnmatch.fnmatchcase(part, pattern) for part, pattern in zip(folder_parts, root_parts))
+    if len(folder_parts) == len(root_parts) and all(
+        fnmatch.fnmatchcase(part, pattern) for part, pattern in zip(folder_parts, root_parts)
+    ):
+        return True
+    # Resolve actual matched directories so native aliases and filesystem case
+    # behavior work without applying Windows case folding to POSIX paths.
+    return any(same_path(folder, candidate) for candidate in glob.iglob(root, include_hidden=True))
 
 
 def load_registry(directory):
@@ -271,10 +296,10 @@ def load_adapter(adapter_path, problems=None, runtime="claude"):
     if not isinstance(adapter, dict):
         raise GuardOff(f"adapter.json schema 가 1이 아님 ({adapter_path})")
     local = read_local(adapter_path, problems)
-    if runtime in ("codex", "grok"):
+    if runtime in ("codex", "grok", "hermes"):
         adapter = merge_local(adapter, runtime_overlay(adapter, runtime, "adapter.json"))
     adapter = merge_local(adapter, local)
-    if runtime in ("codex", "grok"):
+    if runtime in ("codex", "grok", "hermes"):
         adapter = merge_local(adapter, runtime_overlay(local, runtime, "local.json"))
     if adapter.get("schema") != SUPPORTED_SCHEMA:
         raise GuardOff(f"adapter.json schema 가 1이 아님 ({adapter_path})")

@@ -32,7 +32,7 @@ from chef.slots import commands as slots
 
 guard = mission_state.mission_guard
 verification = mission_state.verification
-RUNTIMES = ("claude", "codex", "grok")
+RUNTIMES = ("claude", "codex", "grok", "hermes")
 HOLDING = {"reserved", "launched", "running", "needs-operator"}
 STATUSES = HOLDING | {"pending", "completed"}
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -213,6 +213,8 @@ def enqueue(state, config, task_id, project, goal, runtime=None, priority=0, aft
 
 
 def runtime_ready(runtime):
+    if runtime == "hermes":
+        return False  # Native current-session entry is not an unattended launcher.
     return bool(shutil.which(runtime) and shutil.which("wt.exe"))
 
 

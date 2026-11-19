@@ -68,6 +68,8 @@ def log_path(runtime="claude"):
         base = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
     elif runtime == "grok":
         base = grok_transcript.grok_home()
+    elif runtime == "hermes":
+        base = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
     else:
         base = os.path.join(os.path.expanduser("~"), ".claude")
     return os.environ.get(LOG_ENV) or os.path.join(base, "han", "distill", "log.tsv")
@@ -273,18 +275,18 @@ def cmd_record(args):
 
 def build_parser(runtime="claude"):
     parser = OneLineParser(prog="distill.py", description="대화 기록에서 사용자 메시지 추출, 처리 지점 기록")
-    parser.add_argument("--runtime", choices=("claude", "codex", "grok"), default=runtime)
+    parser.add_argument("--runtime", choices=("claude", "codex", "grok", "hermes"), default=runtime)
     sub = parser.add_subparsers(dest="command", required=True, parser_class=OneLineParser)
 
     extract = sub.add_parser("extract")
-    extract.add_argument("--runtime", choices=("claude", "codex", "grok"), default=argparse.SUPPRESS)
+    extract.add_argument("--runtime", choices=("claude", "codex", "grok", "hermes"), default=argparse.SUPPRESS)
     extract.set_defaults(handler=cmd_extract)
     extract.add_argument("--transcript", action="append", default=[])
     extract.add_argument("--out", required=True)
     extract.add_argument("--all", action="store_true")
 
     record = sub.add_parser("record")
-    record.add_argument("--runtime", choices=("claude", "codex", "grok"), default=argparse.SUPPRESS)
+    record.add_argument("--runtime", choices=("claude", "codex", "grok", "hermes"), default=argparse.SUPPRESS)
     record.set_defaults(handler=cmd_record)
     record.add_argument("--session", required=True)
     record.add_argument("--until", required=True)

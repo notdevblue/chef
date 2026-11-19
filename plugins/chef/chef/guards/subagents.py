@@ -1,5 +1,6 @@
 import fnmatch
 import json
+import os
 import sys
 
 from chef.guards import mission as mission_guard
@@ -9,10 +10,11 @@ from chef.runtimes.hooks import normalize_payload
 SPAWN_TOOLS = {
     "claude": ("Agent", "Task"),
     "grok": ("spawn_subagent", "Task", "Agent"),
+    "hermes": ("delegate_task",),
 }
 CODEX_SPAWN_SUFFIX = "spawn_agent"
-TYPE_KEYS = {"claude": "subagent_type", "grok": "subagent_type", "codex": "agent_type"}
-DEFAULT_TYPES = {"claude": "general-purpose", "grok": "general-purpose", "codex": "default"}
+TYPE_KEYS = {"claude": "subagent_type", "grok": "subagent_type", "codex": "agent_type", "hermes": "subagent_type"}
+DEFAULT_TYPES = {"claude": "general-purpose", "grok": "general-purpose", "codex": "default", "hermes": "general-purpose"}
 NON_AGENT_ROLE_KEYS = ("reviewLoopSkill",)
 ROLE_DEFAULTS = (
     ("research", "chef:researcher"),
@@ -129,6 +131,11 @@ def deny_reason(name, patterns, adapter, runtime="claude"):
 
 def decide(payload):
     payload = normalize_payload(payload)
+    if payload.get("han_hermes_worker"):
+        from chef.runtimes.hermes.workers import worker_denial
+        denied = worker_denial(payload)
+        if denied:
+            return mission_guard.Outcome(deny=denied)
     outcome = mission_guard.Outcome()
     runtime = payload["han_runtime"]
     if not is_spawn_tool(runtime, payload.get("tool_name")):
@@ -175,6 +182,8 @@ def main(runtime=""):
         outcome = mission_guard.Outcome(messages=[f"{OFF_PREFIX}: {e}"])
     except Exception as e:  # 허용 목록 오류로 도구를 막지 않음
         outcome = mission_guard.Outcome(messages=[f"{OFF_PREFIX}: 내부 오류 ({e})"])
+    if os.environ.get("CHEF_HERMES_WORKER") and outcome.messages:
+        outcome.deny = "Codex 워커 역할 가드 확인 실패"
     output = render_output(outcome)
     if output:
         sys.stdout.write(json.dumps(output, ensure_ascii=True))

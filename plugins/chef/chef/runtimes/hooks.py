@@ -6,7 +6,7 @@ from chef.locations import PLUGIN_ROOT
 def runtime_of(payload, runtime=""):
     if runtime:
         return runtime
-    if payload.get("han_runtime") in ("claude", "codex", "grok"):
+    if payload.get("han_runtime") in ("claude", "codex", "grok", "hermes"):
         return payload["han_runtime"]
     if os.environ.get("GROK_HOOK_EVENT") or os.environ.get("GROK_SESSION_ID"):
         return "grok"
@@ -60,7 +60,7 @@ def normalize_payload(payload, runtime=""):
                 tool_input["file_path"] = path
         if "content" not in tool_input and "contents" in tool_input:
             tool_input["content"] = tool_input["contents"]
-    if runtime in ("codex", "grok") and tool == "Bash":
+    if runtime in ("codex", "grok", "hermes") and tool == "Bash":
         shell = str(tool_input.get("shell") or "")
         if runtime == "grok" and not shell:
             shell = os.environ.get("GROK_SHELL", "")
@@ -72,6 +72,10 @@ def normalize_payload(payload, runtime=""):
         result["tool_input"] = original_input
     else:
         result["tool_input"] = tool_input
+    if runtime == "codex" and os.environ.get("CHEF_HERMES_WORKER"):
+        from chef.runtimes.hermes.workers import normalize_worker_payload
+
+        result = normalize_worker_payload(result)
     return result
 
 

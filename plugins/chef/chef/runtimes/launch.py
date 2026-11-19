@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 
 from chef.infrastructure.paths import normalize
+from chef.infrastructure.errors import UsageError
 from chef.infrastructure.process import launch_env
 from chef.runtimes.grok import transcript as grok_transcript
 from chef.slots.configuration import expand, toml_key, toml_string
@@ -29,6 +30,8 @@ def wt_child_command(executable, arguments):
 
 
 def wt_command(config, name, task, session_task="", resume_session=""):
+    if config.runtime == "hermes":
+        raise UsageError("Hermes는 chef_slot으로 현재 세션에서 실행한다")
     prompts = {"claude": "/chef:mission", "codex": "$chef:chef-mission", "grok": "/chef-mission"}
     prompt = f"{prompts[config.runtime]} {task}"
     title = f"{config.project_name}:{name}"

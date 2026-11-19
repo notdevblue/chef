@@ -107,6 +107,7 @@ from chef.slots.contracts import (
     ROW_FIELDS,
     RUNTIME_PROBE_LINES,
     RUNTIMES,
+    TERMINAL_RUNTIMES,
     SESSION_NAME_LIMIT,
     STATE_CREATING,
     STATE_FAILED,
@@ -797,6 +798,8 @@ def cmd_run_resume(config, args, name):
 
 
 def cmd_run(config, args):
+    if config.runtime == "hermes":
+        raise UsageError("Hermes는 현재 세션의 chef_slot 도구로 슬롯을 선택한다. 새 터미널을 열지 않는다")
     name = config.check_name(args.name)
     if args.resume:
         return cmd_run_resume(config, args, name)
@@ -873,6 +876,56 @@ def cmd_run(config, args):
             return FAILED
     print(f"요약: {name} 에서 미션 시작 요청 — {subprocess.list2cmdline(command)}")
     return OK
+
+
+def current_session_context(project, name, session_id, resume=False, dry_run=False):
+    """Prepare a Hermes slot without launching a process or claiming ACTIVE.
+
+    Only a native tool handler may bind the returned directory to its trusted
+    task. Opening the mission still goes through the normal guarded marker.
+    """
+    if not isinstance(session_id, str) or not session_id or any(c in session_id for c in "\x00\t\r\n"):
+        raise UsageError("Hermes 작업 세션 ID가 필요함")
+    if not isinstance(project, str) or not os.path.isabs(project):
+        raise UsageError("프로젝트 절대 경로가 필요함")
+    located = locate(project, "hermes")
+    config = Config(located, read_adapter(located.adapter_path, "hermes"), "hermes")
+    config.check_name(name)
+    with (contextlib.nullcontext() if dry_run else FileLock(config.slot_lock_path(name), f"슬롯 {name}")):
+        mission_id = ""
+        if resume:
+            refusal, mission_id = resume_refusal(config, name)
+            active = active_of(config, name)
+            if not refusal and (active.runtime != "hermes" or active.session != session_id):
+                refusal = "기존 Hermes 소유 세션에서 재개할 것. 다른 세션의 ACTIVE를 인계하지 않음"
+        else:
+            refusal = idle_refusal(config, name, allow_refresh_failed=False)
+        if refusal:
+            raise UsageError(refusal)
+        mode = "resume" if resume else "new"
+        steps = config.before_run_steps(name, mode, session_id)
+        if not dry_run:
+            failed = before_run_failure(config, name, mode, session_id)
+            if failed:
+                raise UsageError(f"beforeRun 실패: {failed}")
+            active = active_of(config, name)
+            if active.corrupt or (resume and (active.id != mission_id or active.session != session_id or active.runtime != "hermes")) or (not resume and active.id):
+                raise UsageError("beforeRun 중 미션 소유 상태가 바뀌어 현재 세션 진입을 중단함")
+        try:
+            slot_location = locate(config.slot_path(name), "hermes")
+            slot_adapter = read_adapter(slot_location.adapter_path, "hermes")
+        except UsageError as exc:
+            raise UsageError("Hermes 슬롯 어댑터를 찾지 못함: 슬롯 로컬 어댑터 또는 레지스트리 roots를 설정할 것") from exc
+        if not same_path(slot_location.project, config.slot_path(name)) or not same_path(
+            mission_guard.state_dir_of(slot_location.project, slot_adapter), config.slot_state_dir(name)
+        ):
+            raise UsageError("슬롯의 어댑터와 stateDir이 현재 작업 대상에 일치하지 않음")
+        return {
+            "runtime": "hermes", "cwd": os.path.realpath(config.slot_path(name)),
+            "project": os.path.realpath(located.project), "slot": name,
+            "session_id": session_id, "mission": mission_id, "mode": mode,
+            "beforeRun": [step.id for step in steps], "dry_run": bool(dry_run),
+        }
 
 
 def blockers_of(config, name, has_client):

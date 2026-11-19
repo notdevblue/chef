@@ -943,7 +943,7 @@ def test_run_resume_rejects_task_and_sync_flags(project, extra):
     assert project.run("run", "a", "--resume", "--dry-run", *extra)[0] == slots.USAGE
 
 
-@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("runtime", slots.TERMINAL_RUNTIMES)
 @pytest.mark.parametrize("resume", [False, True])
 def test_before_run_executes_once_under_slot_lock_before_editor_and_terminal(project, monkeypatch, runtime, resume):
     project.write_adapter([], beforeRun=[project.tick_step("instructions", 0, cwd="{slot}")])
@@ -1331,7 +1331,7 @@ def test_malformed_before_run_steps_report_the_setting(project, step):
     assert code == slots.USAGE and "slots.beforeRun[0]" in err
 
 
-@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("runtime", slots.TERMINAL_RUNTIMES)
 @pytest.mark.parametrize("resume", [False, True])
 def test_runtime_arguments_are_discrete_and_precede_native_launch_arguments(project, runtime, resume):
     arguments = ["--model", "fictional model 🚀", "", 'literal "quotes" \\ tail', "moon;archive", "{slot}/Role Files/{name}"]
@@ -1349,7 +1349,7 @@ def test_runtime_arguments_are_discrete_and_precede_native_launch_arguments(proj
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows command-line parser")
-@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("runtime", slots.TERMINAL_RUNTIMES)
 @pytest.mark.parametrize("resume", [False, True])
 def test_runtime_arguments_preserve_inline_hook_toml_through_terminal_serialization(project, runtime, resume):
     import tomllib
@@ -1393,7 +1393,7 @@ def test_runtime_arguments_reject_unknown_template_variables_before_launch(proje
     assert code == slots.USAGE and "{unknown}" in err
 
 
-@pytest.mark.parametrize("runtime", slots.RUNTIMES)
+@pytest.mark.parametrize("runtime", slots.TERMINAL_RUNTIMES)
 def test_runtime_arguments_use_existing_runtime_and_local_overlay_precedence(project, runtime):
     project.write_adapter([], runtimeArguments=["base"])
     folder = project.dir / ".claude/orchestrator"

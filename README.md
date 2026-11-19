@@ -1,6 +1,6 @@
 # chef
 
-Claude Code · Codex CLI · Grok CLI에서 개발 작업을 계획하고, 에이전트에게 조사·구현·검증·리뷰를 맡기는 플러그인입니다.
+Claude Code · Codex CLI · Grok CLI · Hermes Agent에서 개발 작업을 계획하고, 에이전트에게 조사·구현·검증·리뷰를 맡기는 플러그인입니다.
 중요한 계획과 결과는 사용자 승인을 받으며, 진행 상태를 기록해 이어서 작업할 수 있습니다.
 
 - **미션**: 작업을 마일스톤으로 나눠 구현·검증·리뷰를 진행합니다.
@@ -43,6 +43,12 @@ grok inspect
 
 Windows에서는 junction을 사용합니다. 기존 설치가 있다면 [설치·업데이트 안내](docs/install.md)를 따르세요.
 
+### Hermes Agent (macOS·Linux)
+
+Hermes native 플러그인은 실행 중인 Hermes 작업 세션에서 슬롯을 선택합니다. GUI 터미널이나 새 Hermes 프로세스를
+열지 않습니다. 역할 작업은 기존 Chef Codex 역할 정의와 **Codex CLI의 ChatGPT 구독 로그인**을 사용합니다.
+API 키로 자동 전환하지 않습니다. native 훅·설치·제한 사항은 [Hermes 안내](plugins/chef/hermes/README.md)를 따르세요.
+
 ## 시작하기
 
 프로젝트의 경로·도구·검증 방법을 담는 **어댑터**를 만든 뒤 미션을 시작합니다.
@@ -52,10 +58,12 @@ Windows에서는 junction을 사용합니다. 기존 설치가 있다면 [설치
 | Codex | `$chef:chef-adapter-init` | `$chef:chef-mission <작업>` |
 | Claude Code | `/chef:adapter-init` | `/chef:mission <작업>` |
 | Grok | `chef-adapter-init` | `chef-run <작업>` |
+| Hermes | `skill_view(name="chef:adapter-init")` | `skill_view(name="chef:mission")` 후 현재 대화에서 작업 요청 |
 
 개인 어댑터 폴더는 `HAN_ADAPTERS_DIR`로 지정합니다. Codex의 역할 등록과 훅 신뢰를 포함한
 프로젝트 연결 절차는 [설치 안내](docs/install.md#프로젝트-연결)에 있습니다.
-슬롯에서 새 CLI 세션을 여는 기능은 Windows Terminal이 필요합니다.
+Claude·Codex·Grok 슬롯에서 새 CLI 세션을 여는 기능은 Windows Terminal이 필요합니다.
+Hermes는 macOS·Linux의 로컬 terminal backend에서 `chef_slot`으로 현재 작업 세션을 슬롯에 연결합니다.
 
 ## 문서
 

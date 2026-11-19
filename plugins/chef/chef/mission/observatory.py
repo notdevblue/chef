@@ -14,7 +14,7 @@ from chef.mission.state import write_text
 from chef.runtimes.grok import transcript as grok_transcript
 
 SCHEMA = 2
-RUNTIMES = ("claude", "codex", "grok", "manual")
+RUNTIMES = ("claude", "codex", "grok", "hermes", "manual")
 TOKEN_FIELDS = (
     "input_tokens",
     "cache_read_input_tokens",
@@ -32,6 +32,11 @@ CAPABILITIES = {
         "effort": "turn_context",
     },
     "grok": {
+        "tokens": "unsupported; use explicit manual metadata",
+        "model": "explicit metadata only",
+        "effort": "explicit metadata only",
+    },
+    "hermes": {
         "tokens": "unsupported; use explicit manual metadata",
         "model": "explicit metadata only",
         "effort": "explicit metadata only",

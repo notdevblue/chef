@@ -11,16 +11,46 @@ def normalize(path):
 
 
 def same_path(first, second):
-    return normalize_path(first) == normalize_path(second)
+    if not first or not second:
+        return False
+    try:
+        return os.path.samefile(first, second)
+    except (OSError, ValueError):
+        return canonical_path(first) == canonical_path(second)
+
+
+def canonical_path(path):
+    """Resolve aliases in existing parents, including for a not-yet-created path."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
 
 
 def inside_root(root, path):
+    """Lexical containment; callers may deliberately distinguish link spellings."""
     root_key = os.path.normcase(os.path.abspath(root))
     path_key = os.path.normcase(os.path.abspath(path))
     try:
         return path_key != root_key and os.path.commonpath([root_key, path_key]) == root_key
     except ValueError:
         return False
+
+
+def inside_real_root(root, path):
+    """Containment after resolving existing aliases, including parent aliases."""
+    root_key, path_key = canonical_path(root), canonical_path(path)
+    if same_path(root_key, path_key):
+        return False
+    if inside_root(root_key, path_key):
+        return True
+    # Case behavior belongs to the filesystem (including case-insensitive Mac
+    # volumes), not the OS name. Compare existing parents by their identity.
+    parent = os.path.dirname(path_key)
+    while True:
+        if same_path(root_key, parent):
+            return True
+        next_parent = os.path.dirname(parent)
+        if next_parent == parent:
+            return False
+        parent = next_parent
 
 
 REQUEST_PATHS = threading.local()
@@ -69,4 +99,7 @@ def is_link(path):
 
 
 def normalize_path(path):
-    return os.path.normpath(path).replace("\\", "/").rstrip("/").lower()
+    # This function also normalizes registry glob patterns: do not resolve them.
+    # POSIX paths may name different files solely through letter case.
+    value = os.path.normcase(os.path.normpath(path))
+    return value.replace(os.sep, "/").rstrip("/") or "/"

@@ -8,11 +8,13 @@
 
 | 구성 | 위치 |
 | --- | --- |
-| 세 런타임 공통 스킬 절차 | `plugins/chef/shared/skills/` |
+| 런타임 공통 스킬 절차 | `plugins/chef/shared/skills/` |
 | 공통 Python 구현 | `plugins/chef/chef/` |
 | Claude 진입점·역할 | `plugins/chef/skills/`, `plugins/chef/agents/` |
 | Codex 진입점·역할 | `plugins/chef/codex/` |
 | Grok 진입점·역할 | `plugins/chef/grok/` |
+| Hermes native 등록·스킬 | `plugins/chef/hermes/` |
+| Hermes 도구 연결·Codex 역할 워커 | `plugins/chef/chef/runtimes/hermes/` |
 | 가드·훅 구현 | `plugins/chef/chef/guards/`, `chef/runtimes/` |
 | 미션·검증·실행 관리 구현 | `plugins/chef/chef/mission/`, `chef/verification/` |
 | 슬롯·읽기 전용 대시보드 | `plugins/chef/chef/slots/`, `chef/dashboard/` |
@@ -40,7 +42,8 @@ python -m pytest -q -p no:cacheprovider
 기존 회귀 검사는 `tests/integration/`의 기능별 폴더에 있습니다.
 저장·구현 식별 검사는 `tests/unit/`, 복사한 설치 트리와 기존 명령의 검사는 `tests/contracts/`입니다.
 Codex 전용 검사는 `tests/integration/codex`, Grok 전용 검사는 `tests/integration/grok`에 있습니다.
-전용 검사만 실행한 결과를 세 런타임 전체 검증으로 보고하지 않습니다.
+Hermes 연결·현재 세션·역할 워커 검사는 `tests/integration/hermes`에 있습니다.
+전용 검사만 실행한 결과를 전체 런타임 검증으로 보고하지 않습니다.
 
 어댑터의 가드 규칙을 고쳤으면 해당 어댑터도 확인합니다.
 
@@ -53,10 +56,15 @@ python plugins/chef/skills/adapter-init/scripts/check_guard.py <어댑터 이름
 호환 스크립트의 정본 목록은 `tools/entrypoints.json`입니다. 경로·대상·기본 런타임을 바꿀 때는
 이 목록을 수정하고 `python tools/generate_entrypoints.py --write`로 생성합니다.
 인자 없이 실행하면 생성 결과와 실제 파일의 일치를 검사합니다.
-CI는 Windows/Linux의 Python 3.11·3.13에서 전체 검사와 JUnit 결과 게시를 수행합니다.
+CI는 Windows/macOS/Linux의 Python 3.11·3.13에서 전체 검사와 JUnit 결과 게시를 수행합니다.
 저장소의 `pytest.ini`가 패키지 경로와 테스트 검색 범위를 정합니다.
 테스트 파일에서 스킬의 구현 디렉터리를 Python 검색 경로로 추가하지 않습니다.
 기존 `python plugins/chef/codex/sync_shared.py`는 체크아웃에서만 쓰는 개발 명령 별칭으로 유지합니다.
+
+Hermes 회귀 검사는 가상의 프로젝트·분리된 홈·가짜 native host/CLI로 가드, 인자 전달, 소유권과 오류 처리를 확인합니다.
+이 결과를 실제 Hermes gateway나 구독 모델 호출의 검증으로 대신하지 않습니다. 실제 검증은 macOS·Linux 각각의
+서비스 실행 계정에서 GUI 없이 슬롯 선택, 미션 시작, 역할 파견, 질문 응답과 재시작 후 재개를 확인합니다.
+구독 인증·native API·지원 OS를 실제로 확인하지 못한 항목은 완료로 보고하지 않습니다.
 
 ## 운영 절차의 정본
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 @dataclass
 class Step:
     id: str
-    command: str
+    command: str | list[str]
     cwd: str
     group: int
     exclusive: bool
