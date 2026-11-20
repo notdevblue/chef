@@ -2207,7 +2207,8 @@ def test_churn_pattern_wildcards(pattern, path, matches):
 
 def test_churn_lines_match_by_depot_path_only(project):
     vcs = slots.build_vcs(
-        {"vcs": "perforce", "stream": "//Depot/Main/", "mainClient": "m", "churn": ["Assets/*.asset"]}, str(project.dir)
+        {"vcs": "perforce", "stream": "//Depot/Main/", "mainClient": "m", "p4": sys.executable,
+         "churn": ["Assets/*.asset"]}, str(project.dir)
     )
     assert vcs.is_churn("//Depot/Main/Assets/f.asset#3 - edit change 5 (text)")
     assert vcs.is_churn("//Depot/Main/Assets/f.asset - reconcile to add")

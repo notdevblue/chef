@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.process import tool_search_path
 from chef.verification import references as reference_bundle
 from chef.verification.contracts import (
     WINDOWS_RESERVED_NAMES,
@@ -34,7 +35,7 @@ def command_runtime(project, command):
     local = (cwd / name).resolve()
     executable = local
     if not local.is_file():
-        search_path = os.pathsep.join(str((cwd / entry).resolve()) for entry in os.get_exec_path())
+        search_path = os.pathsep.join(str((cwd / entry).resolve()) for entry in tool_search_path().split(os.pathsep))
         found = ""
         if not Path(name).is_absolute() and Path(name).parent == Path("."):
             found = shutil.which(name, path=os.pathsep.join([str(cwd), search_path])) or ""

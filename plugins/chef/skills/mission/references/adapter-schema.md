@@ -305,7 +305,7 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
 | `slots.vcs` | 슬롯 작업 공간을 만들고 기준 리비전을 조회하는 VCS. `perforce` 또는 `none`(기본). `perforce`면 `stream`·`mainClient` 필수. `none`이면 `{baseline}`을 못 쓴다 |
 | `slots.client` | 작업 공간 이름 규칙. `{name}`이 슬롯 이름으로 바뀐다. 사람마다 달라 `local.json`에 둔다 |
 | `slots.stream` | 슬롯이 받을 스트림·브랜치 |
-| `slots.p4` | `p4` 실행 명령(문자열 또는 인자 배열, 예: 경로·접속 옵션 포함). 없으면 PATH의 `p4` |
+| `slots.p4` | `p4` 실행 명령(문자열 또는 실행 파일로 시작하는 인자 배열). 생략하면 `P4_BIN`, `CHEF_P4`의 절대 경로, 보강된 PATH와 표준 설치 위치 순으로 탐색한다. |
 | `slots.mainClient` | 메인 워크스페이스 이름. 새 슬롯의 옵션을 따라 만들 원본이자 `{baseline}`을 조회하는 대상. `refresh`는 슬롯을 갱신하기 전에 이 워크스페이스를 먼저 head로 sync한다(`create`는 하지 않음). 사람마다 달라 `local.json`에 둔다 |
 | `slots.prepare[]` | 슬롯 준비·갱신 단계 목록(아래) |
 | `slots.beforeRun[]` | 슬롯 `create`·`create --resume`·`refresh`가 성공해 `ready`가 된 직후(`launchMode=prepare`)와, 새 미션 시작(`new`)·재개(`resume`) 직전에 실행할 단계 목록. 생략하면 실행하지 않음. 항목 형식은 `prepare[]`와 같음 |

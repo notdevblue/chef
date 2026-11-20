@@ -6,7 +6,7 @@ import subprocess
 
 from chef.infrastructure.errors import UsageError
 from chef.infrastructure.paths import same_path
-from chef.infrastructure.process import child_env, decode
+from chef.infrastructure.process import child_env, decode, resolve_p4
 
 BASELINE_LINE = re.compile(r"Change (\d+) on ")
 
@@ -78,6 +78,7 @@ def p4config_client(slot):
 class NoVcs:
     name = "none"
     has_workspaces = False
+    executable = None
 
     def client_exists(self, client):
         return False
@@ -146,13 +147,17 @@ class Perforce:
         self.churn = list(churn)
         self.churn_patterns = [churn_pattern(stream, entry) for entry in self.churn]
 
+    @property
+    def executable(self):
+        return self.argv[0]
+
     def call(self, client, *args, stdin=""):
         command = [*self.argv, "-c", client, *args]
         try:
             done = subprocess.run(
                 command,
                 cwd=self.main,
-                env=child_env(self.main),
+                env=child_env(self.main, self.executable),
                 input=stdin.encode("utf-8"),
                 capture_output=True,
             )
@@ -277,7 +282,8 @@ class Perforce:
 
     def workspace_name_in(self, slot):
         try:
-            done = subprocess.run([*self.argv, "info"], cwd=slot, env=child_env(slot), capture_output=True)
+            done = subprocess.run([*self.argv, "info"], cwd=slot,
+                                  env=child_env(slot, self.executable), capture_output=True)
         except OSError:
             return ""
         match = CLIENT_NAME_LINE.search(decode(done.stdout))
@@ -380,9 +386,10 @@ def build_vcs(slots, main):
     for key in ("stream", "mainClient"):
         if not slots.get(key):
             raise UsageError(f"slots.vcs 가 perforce 면 slots.{key} 필요 (local.json 확인)")
-    argv = slots.get("p4") or "p4"
+    configured = slots.get("p4") or [None]
+    executable, *arguments = configured if isinstance(configured, list) else [configured]
     return Perforce(
-        argv if isinstance(argv, list) else [argv],
+        [resolve_p4(executable, cwd=main), *arguments],
         slots["mainClient"],
         slots["stream"],
         main,

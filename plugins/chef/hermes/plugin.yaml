@@ -1,5 +1,5 @@
 name: chef
-version: 0.6.4
+version: 0.6.5
 description: Chef missions and guarded current-session execution for Hermes on macOS and Linux
 kind: standalone
 provides_tools:

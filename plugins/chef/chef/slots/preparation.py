@@ -8,19 +8,21 @@ import shutil
 from pathlib import Path
 
 from chef.infrastructure.paths import is_link, same_path, inside_real_root
+from chef.infrastructure.process import tool_search_path
 
 
 class PreparationError(ValueError):
     pass
 
 
-def preflight(executables=(), files=(), *, cwd=None):
+def preflight(executables=(), files=(), *, cwd=None, p4_executable=None):
     """Validate external setup/build inputs before running any preparation."""
+    search_path = tool_search_path(p4_executable)
     for value in executables:
         path_value = str(value)
         if not os.path.isabs(path_value) and any(separator in path_value for separator in (os.sep, os.altsep) if separator):
             path_value = str(Path(cwd or os.getcwd()) / path_value)
-        resolved = shutil.which(path_value)
+        resolved = shutil.which(path_value, path=search_path)
         if not resolved or not Path(resolved).is_file():
             raise PreparationError("required executable is unavailable: " + value)
     for value in files:

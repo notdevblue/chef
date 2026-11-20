@@ -60,9 +60,12 @@ def global_client_given(args):
     return False
 
 
-def p4_argv(adapter):
-    configured = (adapter.get("slots") or {}).get("p4") or "p4"
-    return list(configured) if isinstance(configured, list) else [str(configured)]
+def p4_argv(adapter, *, cwd=None):
+    configured = (adapter.get("slots") or {}).get("p4")
+    argv = list(configured) if isinstance(configured, list) and configured else [str(configured or "p4")]
+    if cwd is not None:
+        argv[0] = infrastructure_process.resolve_p4(argv[0] if configured else None, cwd=cwd)
+    return argv
 
 
 def main(argv=None, runtime="claude"):
@@ -93,15 +96,16 @@ def main(argv=None, runtime="claude"):
         return USAGE
     if global_client_given(args):
         return fail("전역 -c 는 래퍼가 붙임 — 빼고 다시 실행")
-    command = [*p4_argv(adapter), "-c", client, *args]
+    arguments = ["-c", client, *args]
     if options["dry_run"]:
-        print(subprocess.list2cmdline(command))
+        print(subprocess.list2cmdline([*p4_argv(adapter), *arguments]))
         return 0
     try:
+        command = [*p4_argv(adapter, cwd=located.project), *arguments]
         return subprocess.run(
-            command, cwd=located.project, env=infrastructure_process.child_env(located.project)
+            command, cwd=located.project, env=infrastructure_process.child_env(located.project, command[0])
         ).returncode
-    except OSError as e:
+    except (OSError, infrastructure_errors.UsageError) as e:
         return fail(f"p4 실행 실패: {e}")
 
 

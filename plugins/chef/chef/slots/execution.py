@@ -1,7 +1,9 @@
 """slots / execution."""
 
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -15,6 +17,18 @@ from chef.slots.models import StepResult
 from chef.slots.storage import Rows
 
 EXCLUSIVE_LOCK_TIMEOUT = 30 * 60
+
+
+def windows_executable(command, search_path):
+    # CreateProcess does not use the child environment to find its executable.
+    if isinstance(command, str):
+        match = re.match(r'^\s*(?:"([^"]+)"|(\S+))', command)
+        name = (match[1] or match[2]) if match else ""
+    else:
+        name = command[0]
+    if name and not os.path.dirname(name):
+        return shutil.which(name, path=search_path)
+    return None
 
 
 class Runner:
@@ -34,12 +48,17 @@ class Runner:
         argv = step.command
         if isinstance(argv, str) and os.name != "nt":
             argv = shlex.split(argv)
+        environment = child_env(step.cwd, self.config.vcs.executable)
+        executable = None
+        if os.name == "nt" and environment["PATH"] != os.environ.get("PATH"):
+            executable = windows_executable(argv, environment["PATH"])
         with open(step.out, "wb") as out:
             try:
                 return subprocess.run(
                     argv,
                     cwd=step.cwd or None,
-                    env=child_env(step.cwd),
+                    env=environment,
+                    executable=executable,
                     stdout=out,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,

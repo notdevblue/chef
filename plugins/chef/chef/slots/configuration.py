@@ -252,6 +252,7 @@ class Config:
                 [expand(value, values) for value in self.requirements.get("executables", [])],
                 [expand(value, values) for value in self.requirements.get("files", [])],
                 cwd=self.main,
+                p4_executable=self.vcs.executable,
             )
         except (PreparationError, OSError) as exc:
             raise UsageError(str(exc)) from exc

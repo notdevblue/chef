@@ -1,6 +1,16 @@
 """infrastructure / process."""
 
 import os
+import shutil
+
+from chef.infrastructure.errors import UsageError
+
+
+P4_INSTALLATIONS = (
+    (r"C:\Program Files\Perforce\p4.exe", r"C:\Program Files (x86)\Perforce\p4.exe")
+    if os.name == "nt"
+    else ("/opt/homebrew/bin/p4", "/usr/local/bin/p4", "/opt/perforce/bin/p4", "/usr/bin/p4")
+)
 
 PARENT_SESSION_ENV = (
     "CLAUDECODE",
@@ -36,9 +46,60 @@ def launch_env():
     return {key: value for key, value in os.environ.items() if key.upper() not in dropped}
 
 
-def child_env(cwd):
+def tool_search_path(p4_executable=None):
+    original = os.environ.get("PATH", os.defpath)
+    entries = original.split(os.pathsep) if original else []
+    seen = {os.path.normcase(os.path.normpath(entry)) for entry in entries}
+    candidates = [os.path.dirname(path) for path in P4_INSTALLATIONS]
+    if p4_executable:
+        candidates.insert(0, os.path.dirname(p4_executable))
+    added = []
+    for directory in candidates:
+        key = os.path.normcase(os.path.normpath(directory))
+        if key not in seen and os.path.isdir(directory):
+            added.append(directory)
+            seen.add(key)
+    return os.pathsep.join([*added, *entries])
+
+
+def resolve_p4(configured=None, *, cwd=None):
+    search_path = tool_search_path()
+    hint = "Set slots.p4, P4_BIN, or CHEF_P4 to the absolute path to the p4 executable."
+
+    def executable_file(path):
+        return os.path.isfile(path) and os.access(path, os.X_OK)
+
+    if configured:
+        if os.path.isabs(configured):
+            if executable_file(configured):
+                return configured
+            raise UsageError(f"Perforce CLI not found at slots.p4: {configured!r}. {hint}")
+        target = os.path.join(cwd, configured) if cwd and os.path.dirname(configured) else configured
+        found = shutil.which(target, path=search_path)
+        if found:
+            return os.path.abspath(found)
+        raise UsageError(f"Perforce CLI from slots.p4 ({configured!r}) not found on PATH ({search_path}). {hint}")
+
+    for name in ("P4_BIN", "CHEF_P4"):
+        path = os.environ.get(name)
+        if path:
+            if os.path.isabs(path) and executable_file(path):
+                return path
+            raise UsageError(f"{name}={path!r} must be an absolute path to an executable file. {hint}")
+
+    found = shutil.which("p4", path=search_path)
+    if found:
+        return os.path.abspath(found)
+    for path in P4_INSTALLATIONS:
+        if executable_file(path):
+            return path
+    attempted = ", ".join(P4_INSTALLATIONS)
+    raise UsageError(f"Perforce CLI (p4) not found. Searched PATH ({search_path}) and {attempted}. {hint}")
+
+
+def child_env(cwd, p4_executable=None):
     # p4 는 실제 cwd 보다 PWD 로 .p4config 를 찾음, 부모 PWD 가 남으면 레지스트리 P4CLIENT 로 떨어짐
-    return {**os.environ, "PWD": cwd or os.getcwd()}
+    return {**os.environ, "PWD": cwd or os.getcwd(), "PATH": tool_search_path(p4_executable)}
 
 
 def decode(data):
