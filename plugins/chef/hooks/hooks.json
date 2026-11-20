@@ -7,8 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/session_rules.py"],
+            "command": "set \"CHEF_HOOK=\"#; exec /bin/sh \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/session_rules.py\"; # & python -P -c __import__('runpy').run_path(__import__('os').environ['CLAUDE_PLUGIN_ROOT']+'/hooks/session_rules.py',run_name='__main__') & exit /b\npython (Join-Path ([Environment]::GetEnvironmentVariable('CLAUDE_PLUGIN_ROOT')) 'hooks/session_rules.py'); exit (Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Stop)",
             "timeout": 10
           }
         ]
@@ -20,8 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/mission_guard.py"],
+            "command": "set \"CHEF_HOOK=\"#; exec /bin/sh \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/mission_guard.py\"; # & python -P -c __import__('runpy').run_path(__import__('os').environ['CLAUDE_PLUGIN_ROOT']+'/hooks/mission_guard.py',run_name='__main__') & exit /b\npython (Join-Path ([Environment]::GetEnvironmentVariable('CLAUDE_PLUGIN_ROOT')) 'hooks/mission_guard.py'); exit (Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Stop)",
             "timeout": 10
           }
         ]
@@ -31,8 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/subagent_allow.py"],
+            "command": "set \"CHEF_HOOK=\"#; exec /bin/sh \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/subagent_allow.py\"; # & python -P -c __import__('runpy').run_path(__import__('os').environ['CLAUDE_PLUGIN_ROOT']+'/hooks/subagent_allow.py',run_name='__main__') & exit /b\npython (Join-Path ([Environment]::GetEnvironmentVariable('CLAUDE_PLUGIN_ROOT')) 'hooks/subagent_allow.py'); exit (Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Stop)",
             "timeout": 10
           }
         ]
@@ -43,8 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/question_integrity.py"],
+            "command": "set \"CHEF_HOOK=\"#; exec /bin/sh \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT:?Chef plugin root missing}/hooks/question_integrity.py\"; # & python -P -c __import__('runpy').run_path(__import__('os').environ['CLAUDE_PLUGIN_ROOT']+'/hooks/question_integrity.py',run_name='__main__') & exit /b\npython (Join-Path ([Environment]::GetEnvironmentVariable('CLAUDE_PLUGIN_ROOT')) 'hooks/question_integrity.py'); exit (Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Stop)",
             "timeout": 10
           }
         ]

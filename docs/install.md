@@ -51,9 +51,9 @@ Windows의 `.bat`, `cmd`, `robocopy` 명령을 macOS·Linux에서 자동 변환�
 
 ### Python 3 진입점
 
-`python` 명령 없이 `python3`만 있다면 `python3 <repo>/plugins/chef/runtime.py codex`로 시작합니다.
-마지막 인자는 `claude`, `grok`, `hermes`도 가능합니다. macOS·Linux에서는 현재 Python을 가리키는 `python3`과 `python`을 자식 PATH에 추가합니다.
-슬롯 런처와 Hermes 역할 워커는 이 환경을 자동으로 전달합니다. macOS·Linux에서 Codex를 직접 시작해도 훅이 PATH에서 `python3`, `python` 순으로 찾습니다. Claude·Grok의 공유 훅은 실행 파일을 직접 호출하므로 `python3`만 있는 환경에서는 위 진입점으로 실행합니다.
+macOS·Linux에서 Claude Code·Codex CLI·Grok CLI를 직접 시작하면 Chef 훅이 PATH의 `python3`, `python` 순으로 Python 3.11 이상을 찾습니다. Windows의 훅은 PATH의 `python`을 사용합니다.
+
+도구 명령에도 두 Python 이름을 모두 제공하려면 `python3 <repo>/plugins/chef/runtime.py codex`로 시작할 수 있습니다. 마지막 인자는 `claude`, `grok`, `hermes`도 가능합니다. macOS·Linux에서 이 진입점은 현재 Python을 가리키는 `python3`과 `python`을 자식 PATH에 추가합니다. 슬롯 런처와 Hermes 역할 워커도 이 환경을 자동으로 전달합니다.
 
 ### 슬롯 터미널과 에디터
 

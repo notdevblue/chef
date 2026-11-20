@@ -295,7 +295,7 @@ def test_claude_and_grok_share_hooks_json_registration():
     assert len(entries) == 1
     matcher = entries[0]["matcher"].split("|")
     assert {"Agent", "Task", "spawn_subagent"} == set(matcher)
-    assert entries[0]["hooks"][0]["args"] == ["${CLAUDE_PLUGIN_ROOT}/hooks/subagent_allow.py"]
+    assert "hooks/subagent_allow.py" in entries[0]["hooks"][0]["command"]
     assert "mission_guard.py" in json.dumps(hooks[0])
     assert not any(tool in hooks[0]["matcher"].split("|") for tool in matcher)
 

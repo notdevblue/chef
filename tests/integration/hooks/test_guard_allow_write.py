@@ -127,6 +127,6 @@ def test_coordinator_write_off_without_active_or_setting(write_project):
 def test_hooks_json_routes_write_tools_to_guard():
     hooks = json.loads(((PLUGIN_ROOT / 'hooks') / "hooks.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     matchers = [group["matcher"] for group in hooks for hook in group["hooks"]
-                if hook.get("type") == "command" and "${CLAUDE_PLUGIN_ROOT}/hooks/mission_guard.py" in hook.get("args", [])]
+                if hook.get("type") == "command" and "hooks/mission_guard.py" in hook["command"]]
     for tool in ("Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "ApplyPatch"):
         assert any(re.fullmatch(matcher, tool) for matcher in matchers), tool

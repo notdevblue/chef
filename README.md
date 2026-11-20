@@ -9,7 +9,7 @@ Claude Code · Codex CLI · Grok CLI · Hermes Agent에서 개발 작업을 계�
 
 ## 설치
 
-Python 3.11 이상과 사용할 런타임의 CLI가 필요합니다. `python3`만 제공되는 환경도 지원하며 [설치 안내](docs/install.md)의 실행 진입점을 사용합니다.
+Python 3.11 이상과 사용할 런타임의 CLI가 필요합니다. macOS·Linux에서는 `python3` 또는 `python`을, Windows에서는 `python`을 PATH에 둡니다. [설치 안내](docs/install.md#python-3-진입점)
 
 ```bash
 git clone https://github.com/notdevblue/chef.git

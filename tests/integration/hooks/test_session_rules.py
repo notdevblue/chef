@@ -218,8 +218,7 @@ def test_hooks_json_registers_session_start_for_every_source():
     group = hooks["SessionStart"][0]
     assert set(group["matcher"].split("|")) >= {"startup", "resume", "clear", "compact"}
     handler = group["hooks"][0]
-    assert handler["command"] == "python"
-    assert handler["args"] == ["${CLAUDE_PLUGIN_ROOT}/hooks/session_rules.py"]
+    assert "hooks/session_rules.py" in handler["command"]
     assert "PreToolUse" in hooks
 
 
