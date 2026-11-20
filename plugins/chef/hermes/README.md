@@ -83,13 +83,14 @@ provider to ChatGPT authentication and refuse an API-key-only login.
 An adapter can add project Codex settings to every worker and its probe with
 `workers.codexArguments` (`"-c", "key=value"` pairs; usually under
 `runtimes.hermes.workers`), for example `sandbox_workspace_write.network_access`.
-Chef keeps the account, model, instructions, sandbox mode, hook feature, approval
-policy and hooks pinned; invalid or pinned keys fail before authentication.
+Chef keeps the account, model, instructions, sandbox mode and writable roots, hook
+feature, approval policy, hooks and MCP servers pinned; invalid or pinned keys fail before authentication.
 Session-flag hooks need persisted hook trust that headless workers never get, so a
 project check uses `workers.guardCommand` instead: Chef's trusted worker hook runs
 that argv for every guarded worker tool call with the normalized payload (owner
 Hermes session, agent id `chef-codex-worker`) on stdin. Any deny, unexpected output,
-failure or timeout (8 seconds) denies the call.
+failure or timeout (8 seconds) denies the call. The command is fixed in the worker
+context when the delegation starts, so an adapter the worker writes later cannot drop it.
 
 Before a write-capable worker starts, a read-only probe must observe both a
 matching installed Chef SessionStart hook and an actual denied PreToolUse call.

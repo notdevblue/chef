@@ -243,6 +243,8 @@ def test_worker_arguments_default_to_none(project):
     {"codexArguments": ["-c", 'approval_policy="never"']},
     {"codexArguments": ["-c", 'developer_instructions="replace"']},
     {"codexArguments": ["-c", PROJECT_HOOK]},
+    {"codexArguments": ["-c", 'mcp_servers.orchard.command="fictional"']},
+    {"codexArguments": ["-c", 'sandbox_workspace_write.writable_roots=["/fictional"]']},
     {"guardCommand": "fictional-guard"},
     {"guardCommand": []},
     {"guardCommand": ["fictional-guard", ""]},
@@ -326,6 +328,7 @@ def context(project, monkeypatch, **updates):
         "cwd": str(project.root.resolve()), "state": str((project.root / "state").resolve()),
         "ready": str(record.with_suffix(".ready")),
         "guard_ready": str(record.with_suffix(".guard-ready")), "digest": workers.implementation_digest(),
+        "guard": None,
         **updates,
     }
     write_json(record, data)
@@ -533,10 +536,11 @@ def guarded_project(project, tmp_path):
     script = tmp_path / "project_guard.py"
     script.write_text(GUARD_SCRIPT, encoding="utf-8")
     seen = tmp_path / "seen.json"
+    argv = [sys.executable, str(script), str(seen)]
     adapter = json.loads(project.adapter.read_text(encoding="utf-8"))
-    adapter["runtimes"] = {"hermes": {"workers": {"guardCommand": [sys.executable, str(script), str(seen)]}}}
+    adapter["runtimes"] = {"hermes": {"workers": {"guardCommand": argv}}}
     write_json(project.adapter, adapter)
-    return seen
+    return seen, argv
 
 
 def worker_call(project, command):
@@ -547,8 +551,8 @@ def worker_call(project, command):
 
 
 def test_project_guard_command_sees_owner_identity_and_can_deny(project, monkeypatch, tmp_path):
-    seen = guarded_project(project, tmp_path)
-    context(project, monkeypatch)
+    seen, argv = guarded_project(project, tmp_path)
+    context(project, monkeypatch, guard=argv)
     assert not worker_call(project, "echo allowed").deny
     payload = json.loads(seen.read_text(encoding="utf-8"))
     assert (payload["session_id"], payload["agent_id"], payload["han_runtime"]) == ("garden-owner", "chef-codex-worker", "hermes")
@@ -559,19 +563,45 @@ def test_project_guard_command_sees_owner_identity_and_can_deny(project, monkeyp
 
 @pytest.mark.parametrize("command,reason", [("echo crash", "실패"), ("echo noise", "JSON"), ("echo sleep", "실행하지 못함")])
 def test_project_guard_failures_deny_the_worker_call(project, monkeypatch, tmp_path, command, reason):
-    guarded_project(project, tmp_path)
-    context(project, monkeypatch)
+    _, argv = guarded_project(project, tmp_path)
+    context(project, monkeypatch, guard=argv)
     monkeypatch.setattr(workers, "GUARD_TIMEOUT", 1)
     assert reason in worker_call(project, command).deny
 
 
 def test_project_guard_is_not_run_outside_hermes_workers(project, monkeypatch, tmp_path):
-    seen = guarded_project(project, tmp_path)
+    seen, _ = guarded_project(project, tmp_path)
     assert not worker_call(project, "echo deny").deny
     assert not seen.exists()
 
 
 def test_worker_with_project_guard_still_reaches_the_role_worker(project, codex, tmp_path):
-    guarded_project(project, tmp_path)
+    _, argv = guarded_project(project, tmp_path)
     assert delegate(project)["ok"]
     assert len(codex.calls) == 2
+    assert all(call[4]["guard"] == argv for call in codex.calls)
+
+
+def test_planted_adapter_cannot_drop_the_fixed_project_guard(project, monkeypatch, tmp_path):
+    seen, argv = guarded_project(project, tmp_path)
+    context(project, monkeypatch, guard=argv)
+    # A worker writes a nearer adapter without workers.guardCommand; the hook keeps the fixed guard.
+    write_json(project.root / ".hermes/orchestrator/adapter.json", {"schema": 1, "project": "planted", "paths": {"stateDir": "state"}})
+    assert worker_call(project, "echo deny").deny == "프로젝트 워커 가드: fictional project rule"
+    assert seen.exists()
+
+
+def test_context_without_a_fixed_guard_entry_fails_closed(project, monkeypatch):
+    data = context(project, monkeypatch)
+    data.pop("guard")
+    write_json(Path(os.environ[workers.WORKER_ENV]), data)
+    with pytest.raises(ValueError, match="update Chef"):
+        worker_call(project, "echo allowed")
+    # The hook entry turns any worker-context error into a denial.
+    output = io.StringIO()
+    payload = {"session_id": "codex-child", "cwd": str(project.root), "hook_event_name": "PreToolUse",
+               "tool_name": "Bash", "tool_input": {"command": "echo allowed"}}
+    monkeypatch.setattr(mission.sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode())))
+    monkeypatch.setattr(mission.sys, "stdout", output)
+    assert mission.main("codex") == 0
+    assert json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"] == "deny"

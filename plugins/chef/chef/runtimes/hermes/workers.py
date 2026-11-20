@@ -24,7 +24,10 @@ READ_ONLY = ("researcher", "code-reviewer", "reviewer-small")
 # Session-flag hooks would need persisted hook trust that headless workers never get, so project
 # checks use workers.guardCommand inside Chef's trusted worker hook instead of `-c hooks...`.
 PINNED_SETTINGS = ("model_provider", "model_providers", "forced_login_method", "developer_instructions", "model",
-                   "model_reasoning_effort", "sandbox_mode", "profile", "profiles", "features", "approval_policy", "hooks")
+                   "model_reasoning_effort", "sandbox_mode", "profile", "profiles", "features", "approval_policy", "hooks",
+                   "mcp_servers")
+# Dotted keys that would widen the sandbox or add unguarded write channels.
+PINNED_PATHS = ("sandbox_workspace_write.writable_roots",)
 # Chef's Codex PreToolUse hook has a 10 second limit; the project check must finish first.
 GUARD_TIMEOUT = 8
 
@@ -118,9 +121,9 @@ def worker_denial(payload):
 def extra_arguments(adapter):
     """Adapter `workers.codexArguments`: project `-c key=value` overrides for every worker.
 
-    Projects use them for their own Codex hooks or sandbox settings. Settings
-    that select the account, model, instructions, sandbox mode, hook feature or
-    approval policy stay pinned by Chef and cannot be overridden here.
+    Projects use them for sandbox details or the shell environment. Settings that
+    select the account, model, instructions, sandbox mode or writable roots, hooks,
+    MCP servers, features or approval policy stay pinned by Chef.
     """
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
@@ -133,7 +136,7 @@ def extra_arguments(adapter):
         key = value.split("=", 1)[0].strip()
         if option != "-c" or "=" not in value or not key:
             raise ValueError("workers.codexArguments 는 \"-c\", \"key=value\" 쌍만 허용함")
-        if key.split(".", 1)[0] in PINNED_SETTINGS:
+        if key.split(".", 1)[0] in PINNED_SETTINGS or any(key == path or key.startswith(path + ".") for path in PINNED_PATHS):
             raise ValueError(f"workers.codexArguments 는 Chef 가 고정한 설정을 바꿀 수 없음: {key}")
     return list(values)
 
@@ -157,15 +160,20 @@ def project_denial(payload):
 
     The command receives the normalized hook payload (owner session, worker agent id)
     as JSON on stdin. Empty output allows; a deny/block decision, other output,
-    a nonzero exit, a missing executable or a timeout denies.
+    a nonzero exit, a missing executable or a timeout denies. The command is the
+    one fixed in the worker context when the delegation started: a worker cannot
+    drop it by writing an adapter that a later lookup would find first.
     """
     data = payload.get("han_hermes_worker")
     if not data:
         return ""
-    located = locate(data["cwd"], "hermes")
-    argv = guard_command(read_adapter(located.adapter_path, "hermes"))
+    if "guard" not in data:
+        raise ValueError("Hermes worker context has no fixed project guard; update Chef")
+    argv = data["guard"]
     if not argv:
         return ""
+    if not isinstance(argv, list) or any(not isinstance(value, str) or not value for value in argv):
+        raise ValueError("invalid project guard in Hermes worker context")
     request = {key: value for key, value in payload.items() if key != "han_hermes_worker"}
     cwd = payload.get("cwd") or data["cwd"]
     try:
@@ -305,7 +313,7 @@ def delegate(args, *, session_id, task_id="", cwd):
             guard_ready = Path(directory) / "guard-ready"
             data = {"schema": 1, "pid": os.getpid(), "session": session_id, "role": role,
                     "cwd": os.path.realpath(cwd), "state": state, "mission": active.id, "ready": str(ready),
-                    "guard_ready": str(guard_ready),
+                    "guard_ready": str(guard_ready), "guard": checker,
                     "digest": implementation_digest()}
             context.write_text(json.dumps(data), encoding="utf-8")
             context.chmod(0o600)
