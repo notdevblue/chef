@@ -93,8 +93,16 @@ def adapter_contexts(payload, targets, guard):
     errors = []
     if pending:
         try:
-            registry = guard.resolve_registry(runtime)
-            entries = guard.load_registry(registry.path) if registry.path else []
+            from chef.guards.slot_binding import discover_slot_binding, entry_matches
+
+            seed = pending[0][0] if pending and pending[0] else None
+            _, binding = discover_slot_binding(seed) if seed else ("", {})
+            registry = (
+                guard.Registry(os.path.abspath(binding["registry"]), "slotBinding")
+                if binding
+                else guard.resolve_registry(runtime, project=seed)
+            )
+            entries = guard.load_registry(registry.path) if registry.path and os.path.isdir(registry.path) else []
         except guard.GuardOff as error:
             errors.append(error)
             entries = []
@@ -103,7 +111,7 @@ def adapter_contexts(payload, targets, guard):
                 matches = [
                     entry
                     for entry in entries
-                    if any(guard.root_matches(folder, root) for root in entry["roots"])
+                    if entry_matches(folder, entry, slot_name=os.path.basename(folder.rstrip(os.sep)))
                 ]
                 if matches:
                     item = guard.Located(

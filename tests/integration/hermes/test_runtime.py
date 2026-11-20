@@ -153,3 +153,19 @@ def test_hermes_registry_uses_home_even_when_folder_is_missing(tmp_path):
     expected = tmp_path / "hermes-home" / "chef" / "adapters"
     assert not expected.exists()
     assert adapters.resolve_registry("hermes") == adapters.Registry(str(expected), "hermesHome")
+
+
+def test_in_place_registry_is_not_used_for_a_foreign_project(tmp_path, monkeypatch):
+    repo_adapters = tmp_path / "chef-repo" / "adapters"
+    repo_adapters.mkdir(parents=True)
+    monkeypatch.setattr(adapters, "in_place_adapters_dir", lambda: str(repo_adapters))
+    foreign = tmp_path / "other-project"
+    foreign.mkdir()
+    assert adapters.resolve_registry("claude", project=str(foreign)) == adapters.Registry("", "none")
+    inside = tmp_path / "chef-repo" / "src"
+    inside.mkdir()
+    assert adapters.resolve_registry("claude", project=str(inside)) == adapters.Registry(
+        str(repo_adapters), "in-place"
+    )
+    message = adapters.registry_missing_message("claude", project=str(foreign))
+    assert "in-place" in message and "건너뜀" in message

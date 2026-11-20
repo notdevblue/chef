@@ -3,12 +3,11 @@ import ntpath
 import os
 import sys
 
+from chef.guards.contracts import REGISTRY_ENV, USER_CONFIG_ENV
 from chef.locations import PLUGIN_ROOT
 from chef.runtimes.hooks import normalize_payload
 
 ENV_FILE_ENV = "CLAUDE_ENV_FILE"
-USER_CONFIG_ENV = "CLAUDE_PLUGIN_OPTION_ADAPTERS_DIR"
-REGISTRY_ENV = "HAN_ADAPTERS_DIR"
 TRANSCRIPT_ENV = "HAN_TRANSCRIPT"
 SESSION_START = "SessionStart"
 SHELL_ESCAPED = ('"', "$", "`")

@@ -64,7 +64,7 @@ def test_prepare_reuses_novcs_slots_and_separates_hidden_cases(tmp_path, monkeyp
         assert all(row['expected'] == lab.oracle(row['input']) for row in public)
         assert not (folder / 'holdout.json').exists()
         assert not (folder / 'private').exists()
-        assert set(folder.rglob('*.json')) == {folder / 'public.json', folder / 'strategy.json'}
+        assert set(folder.rglob('*.json')) == {folder / 'public.json', folder / 'strategy.json', folder / '.chef' / 'binding.json'}
     assert not (root / 'results/released-holdout.json').exists()
     with pytest.raises(lab.LabError):
         lab.prepare(root, configuration())

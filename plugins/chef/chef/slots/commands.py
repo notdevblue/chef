@@ -17,6 +17,7 @@ from datetime import date, datetime
 
 from chef.cli.slots_parser import build_parser
 from chef.guards import mission as mission_guard
+from chef.guards.slot_binding import entry_matches, record_slot_registry
 from chef.infrastructure.configuration import locate, read_adapter
 from chef.infrastructure.errors import UsageError
 from chef.infrastructure.locking import (
@@ -179,17 +180,23 @@ def describe_refresh(config, name, steps, keep_local):
 
 
 def registry_warning(config):
-    directory = mission_guard.registry_dir()
+    choice = mission_guard.resolve_registry(config.runtime, project=config.root)
+    directory = choice.path
     if not directory:
-        return "레지스트리를 찾지 못해 roots 확인 못 함 (HAN_ADAPTERS_DIR 가 세션 환경에 없음)"
+        return (
+            "레지스트리를 찾지 못해 roots 확인 못 함 "
+            f"({mission_guard.registry_missing_message(config.runtime, project=config.root)})"
+        )
+    if not os.path.isdir(directory):
+        return f"레지스트리 폴더 없음: {directory} (출처 {choice.source})"
     try:
         entries = mission_guard.load_registry(directory)
     except mission_guard.GuardOff as e:
         return f"레지스트리를 읽지 못해 roots 확인 못 함: {e}"
     sample = config.slot_path("x")
-    if any(mission_guard.root_matches(sample, root) for entry in entries for root in entry["roots"]):
+    if any(entry_matches(sample, entry, slot_name="x", allow_basename=True) for entry in entries):
         return ""
-    return f"레지스트리 roots 에 {config.root}/* 가 없음 — 슬롯에서 띄운 세션이 어댑터를 못 찾음"
+    return f"레지스트리 roots 에 {config.root}/* 가 없음 — 슬롯에서 띄운 세션이 어댑터를 못 찾음 (출처 {choice.source}: {directory})"
 
 
 def read_mission_fields(slot_state, mission_id):
@@ -373,6 +380,11 @@ def create_one(runner, name, steps, resume):
         if failure:
             runner.rows.upsert(name, state=STATE_FAILED + failure.id)
             return Outcome(name, "failed", failure.failure_text())
+        try:
+            record_slot_registry(config, name)
+        except OSError as exc:
+            runner.rows.upsert(name, state=STATE_FAILED + "binding")
+            return Outcome(name, "failed", f"슬롯 레지스트리 바인딩을 쓰지 못함: {exc}")
         runner.rows.upsert(name, synced=today, state=STATE_READY)
         outcome = Outcome(
             name,

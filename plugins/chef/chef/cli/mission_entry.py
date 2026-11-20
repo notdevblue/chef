@@ -71,8 +71,11 @@ def digest_json(data):
 
 
 def registration(cwd, runtime):
+    from chef.guards.slot_binding import discover_slot_binding
+
     cwd = os.path.realpath(cwd)
-    directory = mission_guard.registry_dir(runtime)
+    _, binding = discover_slot_binding(cwd)
+    directory = (binding.get("registry") if binding else "") or mission_guard.registry_dir(runtime, project=cwd)
     if not directory:
         return {}
     path = os.path.join(directory, CONFIG_FILE)

@@ -414,7 +414,7 @@ def test_create_records_row_and_timing(project):
     assert rows[0]["name"] == "x" and rows[0]["client"] == "fake_x" and rows[0]["synced"] != "-"
     assert rows[0]["state"] == "ready"
     assert [line.split("\t")[1] for line in timing] == ["one", "two"]
-    assert "레지스트리 roots" in out
+    assert "레지스트리" in out and "경고" in out
     assert not project.lock_path("x").exists()
 
 
@@ -2531,7 +2531,11 @@ def test_memory_dir_variables_expand_for_slot_and_main(project, monkeypatch, tmp
 
 
 def test_registry_warning_without_registry_does_not_read_cwd(project, monkeypatch, tmp_path):
-    monkeypatch.setattr(slots.mission_guard, "registry_dir", lambda: "")
+    monkeypatch.setattr(
+        slots.mission_guard,
+        "resolve_registry",
+        lambda runtime="claude", **kwargs: slots.mission_guard.Registry("", "none"),
+    )
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     roots = [str(project.slot_root).replace("\\", "/") + "/*"]
