@@ -19,7 +19,7 @@ from chef.guards.contracts import (
     USER_CONFIG_ENV,
 )
 from chef.guards.logging import append_log
-from chef.infrastructure.paths import normalize_path, same_path
+from chef.infrastructure.paths import inside_real_root, normalize_path, same_path
 from chef.locations import PLUGIN_ROOT
 
 
@@ -86,14 +86,25 @@ def adapter_relatives(runtime):
     return (ADAPTER_RELATIVE,)
 
 
-def registry_missing_message(runtime):
+def registry_missing_message(runtime, *, project=None, tried=()):
+    parts = list(tried)
     if runtime == "hermes":
-        return f"레지스트리 경로 미설정 ({REGISTRY_ENV}·Hermes home의 chef/adapters·<저장소>/adapters 가 비어 있음)"
-    if runtime == "codex":
-        return f"레지스트리 경로 미설정 ({REGISTRY_ENV}·Codex config.toml·<저장소>/adapters 가 비어 있음)"
-    if runtime == "grok":
-        return f"레지스트리 경로 미설정 ({REGISTRY_ENV}·HAN_REPO·<저장소>/adapters 가 비어 있음)"
-    return f"레지스트리 경로 미설정 ({REGISTRY_ENV}·플러그인 설정 adapters_dir 이 비어 있고 <저장소>/adapters 도 없음)"
+        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        parts.append(f"HERMES_HOME/chef/adapters={os.path.abspath(os.path.join(home, 'chef', 'adapters'))}")
+    elif runtime == "codex":
+        parts.append("Codex config.toml shell_environment_policy.set.HAN_ADAPTERS_DIR")
+    elif runtime == "grok":
+        parts.append("HAN_REPO/adapters")
+    else:
+        parts.append(f"{USER_CONFIG_ENV} (Claude adapters_dir)")
+    env_value = os.environ.get(REGISTRY_ENV, "")
+    parts.insert(0, f"{REGISTRY_ENV}={env_value or 'unset'}")
+    inplace = in_place_adapters_dir()
+    if os.path.isdir(inplace) and not project_may_use_in_place(project):
+        parts.append(f"in-place={inplace} (건너뜀: 이 프로젝트는 chef 저장소가 아님)")
+    elif os.path.isdir(inplace):
+        parts.append(f"in-place={inplace}")
+    return "레지스트리 경로 미설정 (" + "; ".join(parts) + ")"
 
 
 def codex_config_registry_dir():
@@ -130,7 +141,27 @@ def codex_config_registry_dir():
     return configured
 
 
-def resolve_registry(runtime="claude"):
+def in_place_repo_root():
+    return os.path.dirname(in_place_adapters_dir())
+
+
+def project_may_use_in_place(project=None):
+    """The in-tree adapters/ example is only for the chef repository itself."""
+    folder = in_place_adapters_dir()
+    if not os.path.isdir(folder):
+        return False
+    root = in_place_repo_root()
+    start = os.path.abspath(project or os.getcwd())
+    return same_path(start, root) or inside_real_root(root, start)
+
+
+def resolve_registry(runtime="claude", *, project=None):
+    """Single registry-path resolver for CLI, plugins, chef_slot, and mission entry.
+
+    chef-studio and any other launcher must call this (not a private copy) so
+    start and later sessions agree on the path. The in-tree example adapters/
+    folder is never a silent fallback for a real project.
+    """
     sources = [("env", REGISTRY_ENV)]
     if runtime == "claude":
         sources.append(("userConfig", USER_CONFIG_ENV))
@@ -148,24 +179,19 @@ def resolve_registry(runtime="claude"):
             return Registry(configured, "hanRepo")
     if runtime == "hermes":
         home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
-        # Always the Hermes default, even if the folder has not been created yet.
-        # Falling through to the plugin's in-place adapters/ (example tree) hides
-        # a missing $HERMES_HOME/chef/adapters and can make chef_slot miss a
-        # registry that chef-studio wrote elsewhere.
         configured = os.path.join(home, "chef", "adapters")
         return Registry(os.path.abspath(configured), "hermesHome")
-    fallback = in_place_adapters_dir()
-    if os.path.isdir(fallback):
-        return Registry(fallback, "in-place")
+    if project_may_use_in_place(project):
+        return Registry(os.path.abspath(in_place_adapters_dir()), "in-place")
     return Registry("", "none")
 
 
-def registry_dir(runtime="claude"):
-    return resolve_registry(runtime).path
+def registry_dir(runtime="claude", *, project=None):
+    return resolve_registry(runtime, project=project).path
 
 
-def registry_adapter_path(name, runtime="claude"):
-    return os.path.join(registry_dir(runtime), name, "adapter.json")
+def registry_adapter_path(name, runtime="claude", *, project=None):
+    return os.path.join(registry_dir(runtime, project=project), name, "adapter.json")
 
 
 def root_matches(folder, root):
@@ -220,6 +246,8 @@ def ancestors(start):
 
 
 def find_adapter(payload):
+    from chef.guards.slot_binding import discover_slot_binding, entry_matches
+
     runtime = payload.get("han_runtime", "claude")
     start = (os.environ.get("CLAUDE_PROJECT_DIR") if runtime == "claude" else "") or payload.get("cwd") or ""
     if not start:
@@ -230,22 +258,47 @@ def find_adapter(payload):
             path = os.path.join(folder, *relative)
             if os.path.isfile(path):
                 return Located(folder, path)
-    registry = resolve_registry(runtime)
-    append_log({"registry_source": registry.source, "registry_dir": registry.path})
-    directory = registry.path
-    if not directory:
-        raise AdapterNotFound(registry_missing_message(runtime))
-    registry_file = os.path.join(directory, REGISTRY_FILE)
-    if not os.path.isdir(directory):
-        raise AdapterNotFound(f"레지스트리 폴더 없음: {directory} (출처 {registry.source})")
-    if not os.path.isfile(registry_file):
-        raise AdapterNotFound(f"{REGISTRY_FILE} 없음: {registry_file}")
-    entries = load_registry(directory)
-    for folder in chain:
-        for entry in entries:
-            if any(root_matches(folder, root) for root in entry["roots"]):
-                return Located(folder, os.path.join(directory, entry["adapter"], "adapter.json"))
-    raise AdapterNotFound(f"레지스트리 roots 에 {start} 가 맞는 항목 없음 ({registry_file})")
+    bound_folder, binding = discover_slot_binding(start)
+    registries = []
+    if binding:
+        bound_registry = Registry(os.path.abspath(binding["registry"]), "slotBinding")
+        registries.append(bound_registry)
+        adapter_path = binding.get("adapterPath") or ""
+        if not adapter_path and binding.get("adapter"):
+            adapter_path = os.path.join(bound_registry.path, binding["adapter"], "adapter.json")
+        if adapter_path and os.path.isfile(adapter_path):
+            append_log({"registry_source": "slotBinding", "registry_dir": bound_registry.path,
+                        "adapter_path": os.path.abspath(adapter_path)})
+            return Located(bound_folder, os.path.abspath(adapter_path))
+    env_registry = resolve_registry(runtime, project=start)
+    log = {"registry_source": env_registry.source, "registry_dir": env_registry.path}
+    if binding:
+        log["binding_registry"] = binding["registry"]
+    append_log(log)
+    if env_registry.path and all(os.path.abspath(env_registry.path) != item.path for item in registries):
+        registries.append(env_registry)
+    if not registries or not any(item.path for item in registries):
+        raise AdapterNotFound(registry_missing_message(runtime, project=start))
+    tried = []
+    slot_name = os.path.basename(os.path.abspath(start).rstrip(os.sep))
+    for registry in registries:
+        directory = registry.path
+        registry_file = os.path.join(directory, REGISTRY_FILE)
+        if not os.path.isdir(directory):
+            tried.append(f"레지스트리 폴더 없음: {directory} (출처 {registry.source})")
+            continue
+        if not os.path.isfile(registry_file):
+            tried.append(f"{REGISTRY_FILE} 없음: {registry_file} (출처 {registry.source})")
+            continue
+        entries = load_registry(directory)
+        allow_basename = registry.source == "slotBinding"
+        for folder in chain:
+            name = os.path.basename(folder.rstrip(os.sep)) or slot_name
+            for entry in entries:
+                if entry_matches(folder, entry, slot_name=name, allow_basename=allow_basename):
+                    return Located(folder, os.path.join(directory, entry["adapter"], "adapter.json"))
+        tried.append(f"레지스트리 roots/identities 에 {start} 가 맞는 항목 없음 ({registry_file}, 출처 {registry.source})")
+    raise AdapterNotFound("; ".join(tried))
 
 
 def locate_adapter(payload):
