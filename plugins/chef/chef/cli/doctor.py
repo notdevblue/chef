@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -90,8 +91,14 @@ def check_active(report, adapter, root, runtime):
     limit = mission_guard.stale_hours_of(adapter)
     state = mission_guard.staleness(state_dir, active, limit) if limit else None
     if state and state.stale:
-        runtime_flag = f" --runtime {runtime}" if runtime in ("grok", "hermes") else ""
-        command = f'python "{MISSION_STATE[runtime]}"{runtime_flag} --project "{root}" --mission {active.id} close-stale'
+        argv = [sys.executable, MISSION_STATE[runtime]]
+        if runtime in ("grok", "hermes"):
+            argv.extend(["--runtime", runtime])
+        argv.extend(["--project", str(root), "--mission", active.id, "close-stale"])
+        if os.name == "nt":
+            command = "& " + " ".join("'" + part.replace("'", "''") + "'" for part in argv)
+        else:
+            command = shlex.join(argv)
         report.add(
             "WARN",
             "active",

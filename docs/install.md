@@ -11,6 +11,7 @@
 - 프로젝트 어댑터가 사용하는 도구. Perforce·Unity는 해당 프로젝트에서 사용하는 경우에만 필요합니다.
 
 Python과 어댑터 환경은 다음 명령으로 점검합니다.
+예제의 `python`은 실행 환경에 따라 `python3`으로 바꿀 수 있습니다.
 
 ```text
 python <repo>/plugins/chef/skills/adapter-init/scripts/check_guard.py --doctor
@@ -51,8 +52,8 @@ Windows의 `.bat`, `cmd`, `robocopy` 명령을 macOS·Linux에서 자동 변환�
 ### Python 3 진입점
 
 `python` 명령 없이 `python3`만 있다면 `python3 <repo>/plugins/chef/runtime.py codex`로 시작합니다.
-마지막 인자는 `claude`, `grok`, `hermes`도 가능합니다. 현재 Python을 가리키는 개인 캐시 별칭을 자식 PATH에만 추가하므로 시스템 별칭은 바꾸지 않습니다.
-슬롯 런처와 Hermes 역할 워커는 같은 처리를 자동 적용합니다. 별도 터미널에서 CLI를 직접 시작할 때도 이 진입점을 사용하거나 유효한 `python`이 있는 환경을 사용합니다.
+마지막 인자는 `claude`, `grok`, `hermes`도 가능합니다. macOS·Linux에서는 현재 Python을 가리키는 `python3`과 `python`을 자식 PATH에 추가합니다.
+슬롯 런처와 Hermes 역할 워커는 이 환경을 자동으로 전달합니다. macOS·Linux에서 Codex를 직접 시작해도 훅이 PATH에서 `python3`, `python` 순으로 찾습니다. Claude·Grok의 공유 훅은 실행 파일을 직접 호출하므로 `python3`만 있는 환경에서는 위 진입점으로 실행합니다.
 
 ### 슬롯 터미널과 에디터
 

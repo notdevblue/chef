@@ -14,6 +14,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -100,23 +101,27 @@ def evaluate(adapter_path, cases_path, runtime="claude"):
 
 
 def doctor():
-    path = shutil.which("python")
-    if not path:
-        print("python=NOT FOUND (PATH 에 python 없음 — 훅의 command 'python' 이 실행 안 됨)")
-        return 1
-    try:
-        result = subprocess.run([path, "--version"], capture_output=True, timeout=15)
-        output = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
-        returncode = result.returncode
-    except (OSError, subprocess.SubprocessError) as e:
-        output, returncode = f"실행 실패: {e}", -1
-    in_windowsapps = "windowsapps" in path.lower()
-    runs = returncode == 0 and output.lower().startswith("python ")
-    print(f"python={path}")
-    print(f"windowsapps_path={in_windowsapps}")
-    print(f"version_output={output!r} exit={returncode}")
-    print(f"stub={in_windowsapps and not runs}")
-    return 0 if runs else 1
+    names = ("python", "python3") if os.name == "nt" else ("python3", "python")
+    for name in names:
+        path = shutil.which(name)
+        if not path:
+            continue
+        try:
+            result = subprocess.run([path, "--version"], capture_output=True, timeout=15)
+            output = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
+            returncode = result.returncode
+        except (OSError, subprocess.SubprocessError) as error:
+            output, returncode = f"실행 실패: {error}", -1
+        in_windowsapps = "windowsapps" in path.lower()
+        version = re.match(r"Python (\d+)\.(\d+)", output)
+        print(f"python={path}")
+        print(f"windowsapps_path={in_windowsapps}")
+        print(f"version_output={output!r} exit={returncode}")
+        print(f"stub={in_windowsapps and (returncode != 0 or version is None)}")
+        if returncode == 0 and version and tuple(map(int, version.groups())) >= (3, 11):
+            return 0
+    print("python=NOT FOUND (PATH에 실행 가능한 Python 3.11 이상의 python 또는 python3 필요)")
+    return 1
 
 
 RUNTIMES = ("claude", "codex", "grok", "hermes")

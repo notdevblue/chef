@@ -227,7 +227,10 @@ def test_doctor_grok_runtime_uses_shared_mission_script(tmp_path, monkeypatch, c
     assert doctor.MISSION_STATE["grok"] == doctor.MISSION_STATE["claude"]
     doctor.main(["--runtime", "grok"])
     out = capsys.readouterr().out.replace("\\", "/")
-    assert 'skills/mission/scripts/mission_state.py" --runtime grok --project' in out
+    preview = next(line for line in out.splitlines() if "close-stale" in line)
+    assert "skills/mission/scripts/mission_state.py" in preview
+    assert "--runtime" in preview and "grok" in preview and "--project" in preview
+    assert sys.executable.replace("\\", "/") in preview
     assert "codex/skills" not in out
     assert active.exists()
 

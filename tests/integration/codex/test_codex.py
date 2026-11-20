@@ -359,6 +359,19 @@ def test_codex_entrypoints_resolve_shared_code_from_another_cwd(project):
             assert not (project.parent / "slots").exists()
 
 
+@pytest.mark.parametrize("interpreter", ["python", "python3"])
+def test_check_guard_doctor_accepts_either_path_name(monkeypatch, capsys, interpreter):
+    from chef.cli import check_guard
+
+    resolved = str(Path(sys.executable).with_name(interpreter))
+    monkeypatch.setattr(check_guard.shutil, "which", lambda name: resolved if name == interpreter else None)
+    monkeypatch.setattr(check_guard.subprocess, "run", lambda argv, **_: subprocess.CompletedProcess(
+        argv, 0, b"Python 3.12.0\n", b"",
+    ))
+    assert check_guard.doctor() == 0
+    assert f"python={resolved}" in capsys.readouterr().out
+
+
 def test_codex_mission_state_entrypoint_resolves_shared_code_from_another_cwd(project):
     hook(project, "echo han-mission open test", transcript_path="C:/t/parent.jsonl")
     script = PLUGIN / "codex/skills/chef-mission/scripts/mission_state.py"

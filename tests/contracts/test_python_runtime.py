@@ -21,23 +21,56 @@ def test_unsupported_python_is_rejected_before_loading_a_product_module(monkeypa
         entrypoints.expose({"__name__": "fictional_module"}, "must_not_import_missing_module")
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX python3-only installation")
-def test_installed_hook_starts_with_only_python3_on_original_path(tmp_path):
-    original_bin = tmp_path / "only python3"
+@pytest.mark.skipif(os.name == "nt", reason="POSIX interpreter aliases")
+@pytest.mark.parametrize("interpreter", ["python3", "python"])
+def test_installed_hook_uses_the_only_interpreter_on_path(tmp_path, interpreter):
+    original_bin = tmp_path / f"only {interpreter}"
     original_bin.mkdir()
-    (original_bin / "python3").symlink_to(sys.executable)
+    (original_bin / interpreter).symlink_to(sys.executable)
     original = {**os.environ, "PATH": str(original_bin)}
-    assert shutil.which("python", path=original["PATH"]) is None
     env = python_environment(original, cache_root=tmp_path / "private cache")
     plugin = tmp_path / "plugin with spaces"
     shutil.copytree(PLUGIN_ROOT, plugin, ignore=shutil.ignore_patterns("__pycache__"))
     payload = {"hook_event_name": "SessionStart", "session_id": "fictional-session",
                "cwd": str(tmp_path), "transcript_path": "fictional-session.jsonl"}
-    result = subprocess.run([shutil.which("python", path=env["PATH"]), str(plugin / "codex/session_rules.py")],
-                            env=env, input=json.dumps(payload), capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert "fictional-session.jsonl" in result.stdout
+    codex_hook = json.loads((plugin / "codex/hooks.json").read_text(encoding="utf-8"))["hooks"]["SessionStart"][0]["hooks"][0]
+    shared_hook = json.loads((plugin / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]["SessionStart"][0]["hooks"][0]
+    shared_argv = [shared_hook["command"], *[arg.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin)) for arg in shared_hook["args"]]]
+    codex_command = codex_hook["command"].replace("${PLUGIN_ROOT}", str(plugin))
+    claude_env_file = tmp_path / "claude.env"
+    for command, child_env, hook_payload in (
+        (codex_command, original, payload),
+        (shared_argv, {**env, "CLAUDE_ENV_FILE": str(claude_env_file)}, payload),
+        (shared_argv, env, {**payload, "han_runtime": "grok"}),
+    ):
+        result = subprocess.run(command, shell=isinstance(command, str), env=child_env, input=json.dumps(hook_payload),
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        if "CLAUDE_ENV_FILE" in child_env:
+            assert 'export HAN_TRANSCRIPT="fictional-session.jsonl"' in claude_env_file.read_text(encoding="utf-8")
+        else:
+            assert "fictional-session.jsonl" in result.stdout
+    assert shutil.which("python3", path=env["PATH"])
+    assert shutil.which("python", path=env["PATH"])
     assert original["PATH"] == str(original_bin)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hook launcher")
+def test_posix_hook_launcher_returns_the_denial_without_retrying(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
+    fallback = bin_dir / "python"
+    fallback.write_text("#!/bin/sh\necho unexpected fallback >&2\nexit 0\n", encoding="utf-8")
+    fallback.chmod(0o700)
+    script = tmp_path / "hook with spaces.py"
+    script.write_text("import sys\nassert sys.stdin.read() == 'payload'\nsys.exit(2)\n", encoding="utf-8")
+    result = subprocess.run(
+        ["/bin/sh", str(PLUGIN_ROOT / "hooks/run-python.sh"), str(script)],
+        env={**os.environ, "PATH": str(bin_dir)}, input="payload", capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 2
+    assert result.stderr == ""
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX alias")
