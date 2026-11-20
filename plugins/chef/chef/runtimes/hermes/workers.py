@@ -21,6 +21,12 @@ from chef.locations import PLUGIN_ROOT
 WORKER_ENV = "CHEF_HERMES_WORKER"
 ROLES = ("researcher", "dev-small", "dev-medium", "verifier", "code-reviewer", "reviewer-small")
 READ_ONLY = ("researcher", "code-reviewer", "reviewer-small")
+# Session-flag hooks would need persisted hook trust that headless workers never get, so project
+# checks use workers.guardCommand inside Chef's trusted worker hook instead of `-c hooks...`.
+PINNED_SETTINGS = ("model_provider", "model_providers", "forced_login_method", "developer_instructions", "model",
+                   "model_reasoning_effort", "sandbox_mode", "profile", "profiles", "features", "approval_policy", "hooks")
+# Chef's Codex PreToolUse hook has a 10 second limit; the project check must finish first.
+GUARD_TIMEOUT = 8
 
 
 def worker_record():
@@ -109,7 +115,85 @@ def worker_denial(payload):
     return ""
 
 
-def command_for(executable, role, cwd):
+def extra_arguments(adapter):
+    """Adapter `workers.codexArguments`: project `-c key=value` overrides for every worker.
+
+    Projects use them for their own Codex hooks or sandbox settings. Settings
+    that select the account, model, instructions, sandbox mode, hook feature or
+    approval policy stay pinned by Chef and cannot be overridden here.
+    """
+    settings = adapter.get("workers", {})
+    if not isinstance(settings, dict):
+        raise ValueError("workers 는 객체여야 함")
+    values = settings.get("codexArguments", [])
+    if (not isinstance(values, list) or len(values) % 2
+            or any(not isinstance(value, str) or not value or any(c in value for c in "\x00\r\n") for value in values)):
+        raise ValueError("workers.codexArguments 는 \"-c\", \"key=value\" 쌍의 문자열 배열이어야 함")
+    for option, value in zip(values[::2], values[1::2]):
+        key = value.split("=", 1)[0].strip()
+        if option != "-c" or "=" not in value or not key:
+            raise ValueError("workers.codexArguments 는 \"-c\", \"key=value\" 쌍만 허용함")
+        if key.split(".", 1)[0] in PINNED_SETTINGS:
+            raise ValueError(f"workers.codexArguments 는 Chef 가 고정한 설정을 바꿀 수 없음: {key}")
+    return list(values)
+
+
+def guard_command(adapter):
+    """Adapter `workers.guardCommand`: project PreToolUse check run by Chef's worker hook, or None."""
+    settings = adapter.get("workers", {})
+    if not isinstance(settings, dict):
+        raise ValueError("workers 는 객체여야 함")
+    argv = settings.get("guardCommand")
+    if argv is None:
+        return None
+    if (not isinstance(argv, list) or not argv
+            or any(not isinstance(value, str) or not value or any(c in value for c in "\x00\r\n") for value in argv)):
+        raise ValueError("workers.guardCommand 는 비어 있지 않은 문자열 argv 배열이어야 함")
+    return list(argv)
+
+
+def project_denial(payload):
+    """Run the slot's workers.guardCommand for a worker tool call; any failure denies.
+
+    The command receives the normalized hook payload (owner session, worker agent id)
+    as JSON on stdin. Empty output allows; a deny/block decision, other output,
+    a nonzero exit, a missing executable or a timeout denies.
+    """
+    data = payload.get("han_hermes_worker")
+    if not data:
+        return ""
+    located = locate(data["cwd"], "hermes")
+    argv = guard_command(read_adapter(located.adapter_path, "hermes"))
+    if not argv:
+        return ""
+    request = {key: value for key, value in payload.items() if key != "han_hermes_worker"}
+    cwd = payload.get("cwd") or data["cwd"]
+    try:
+        result = subprocess.run(argv, input=json.dumps(request, ensure_ascii=False).encode("utf-8"), cwd=cwd,
+                                capture_output=True, timeout=GUARD_TIMEOUT, env=child_env(cwd))
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"프로젝트 워커 가드를 실행하지 못함: {e}"
+    if result.returncode:
+        return "프로젝트 워커 가드 실패: " + result.stderr.decode("utf-8", "replace").strip()[-500:]
+    text = result.stdout.decode("utf-8", "replace").strip()
+    if not text:
+        return ""
+    try:
+        output = json.loads(text)
+    except ValueError:
+        return "프로젝트 워커 가드 출력이 JSON 이 아님"
+    specific = output.get("hookSpecificOutput") if isinstance(output, dict) else None
+    if isinstance(specific, dict) and specific.get("permissionDecision") == "allow" and "decision" not in output:
+        return ""
+    reason = ""
+    if isinstance(specific, dict):
+        reason = str(specific.get("permissionDecisionReason") or "")
+    if isinstance(output, dict) and not reason:
+        reason = str(output.get("reason") or "")
+    return "프로젝트 워커 가드: " + (reason or "거부")
+
+
+def command_for(executable, role, cwd, extra=()):
     config = tomllib.loads((PLUGIN_ROOT / "codex/agents" / f"chef-{role}.toml").read_text(encoding="utf-8"))
     instructions = config["developer_instructions"] + (
         "\nHermes 코디네이터의 역할 워커다. 미션 open/resume/close, 상태·승인 변경, "
@@ -126,7 +210,7 @@ def command_for(executable, role, cwd):
         command += ["--model", config["model"]]
     if config.get("model_reasoning_effort"):
         command += ["-c", "model_reasoning_effort=" + json.dumps(config["model_reasoning_effort"])]
-    return command + ["-"]
+    return command + list(extra) + ["-"]
 
 
 def run_codex(command, prompt, env, timeout):
@@ -201,6 +285,10 @@ def delegate(args, *, session_id, task_id="", cwd):
     patterns, problem = subagents.allow_patterns(adapter)
     if problem or patterns is not None and not subagents.allows(patterns, "chef:" + role):
         raise ValueError(problem or "role is not permitted by agents.allow")
+    extra = extra_arguments(adapter)
+    checker = guard_command(adapter)
+    if checker and not (shutil.which(checker[0]) or os.path.isfile(checker[0])):
+        raise ValueError(f"workers.guardCommand 실행 파일을 찾지 못함: {checker[0]}")
     executable = shutil.which("codex")
     if not executable:
         raise ValueError("Codex CLI is required; run codex login with your subscription")
@@ -227,7 +315,8 @@ def delegate(args, *, session_id, task_id="", cwd):
             protected = protected_state(state, active.id)
             # A read-only probe proves that the installed, trusted Chef hook
             # matches this deployment before any write-capable worker starts.
-            probe = command_for(executable, "researcher", cwd)
+            # Project settings from workers.codexArguments also apply to the probe.
+            probe = command_for(executable, "researcher", cwd, extra)
             checked = run_codex(probe, "Call the shell tool once with exactly: echo han-mission open chef-worker-probe\nThe Chef worker hook must deny it. Do not attempt another command. Then return READY.", env, min(timeout, 120))
             if checked.returncode or not ready.is_file() or ready.read_text() != data["digest"] or not guard_ready.is_file() or guard_ready.read_text() != data["digest"]:
                 raise ValueError("Codex Chef hooks are missing, untrusted or outdated; update and trust /hooks first")
@@ -235,7 +324,7 @@ def delegate(args, *, session_id, task_id="", cwd):
             if current != active or protected_state(state, active.id) != protected:
                 raise ValueError("Hermes mission changed during worker preflight")
             ready.unlink()
-            result = run_codex(command_for(executable, role, cwd), prompt, env, timeout)
+            result = run_codex(command_for(executable, role, cwd, extra), prompt, env, timeout)
             if protected_state(state, active.id) != protected:
                 raise ValueError("protected mission state changed during worker; inspect it before accepting results (no automatic rollback)")
             if not ready.is_file() or ready.read_text() != data["digest"]:

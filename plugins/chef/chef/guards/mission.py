@@ -657,8 +657,8 @@ def decide_write(payload):
 def decide(payload):
     payload = normalize_payload(payload)
     if payload.get("han_hermes_worker"):
-        from chef.runtimes.hermes.workers import worker_denial
-        denied = worker_denial(payload)
+        from chef.runtimes.hermes.workers import project_denial, worker_denial
+        denied = worker_denial(payload) or project_denial(payload)
         if denied:
             return Outcome(deny=denied)
     payload = question_write_guard.resolved_payload(payload)

@@ -208,6 +208,55 @@ def test_disallowed_role_does_not_authenticate_or_launch(project, codex):
     assert not codex.auth_calls and not codex.calls
 
 
+PROJECT_HOOK = 'hooks.PreToolUse=[{matcher=".*",hooks=[{type="command",command="fictional-guard hook"}]}]'
+
+
+def test_adapter_worker_arguments_reach_probe_and_worker_in_order(project, codex):
+    adapter = json.loads(project.adapter.read_text(encoding="utf-8"))
+    extra = ["-c", "sandbox_workspace_write.network_access=true", "-c", 'shell_environment_policy.set.ORCHARD="1"']
+    adapter["runtimes"] = {"hermes": {"workers": {"codexArguments": extra}}}
+    write_json(project.adapter, adapter)
+    assert delegate(project)["ok"]
+    assert len(codex.calls) == 2
+    for command, *_ in codex.calls:
+        assert command[-len(extra) - 1:] == extra + ["-"]
+        assert command[command.index("-C") + 1] == str(project.root)
+
+
+def test_worker_arguments_default_to_none(project):
+    assert workers.extra_arguments({}) == []
+    assert workers.command_for("/fictional/codex", "dev-small", str(project.root))[-1] == "-"
+
+
+@pytest.mark.parametrize("workers_value", [
+    [],
+    {"codexArguments": "-c a=b"},
+    {"codexArguments": ["-c"]},
+    {"codexArguments": ["--sandbox", "danger-full-access"]},
+    {"codexArguments": ["-c", "no-assignment"]},
+    {"codexArguments": ["-c", "=value"]},
+    {"codexArguments": ["-c", "a=b\nc=d"]},
+    {"codexArguments": ["-c", 'model="other"']},
+    {"codexArguments": ["-c", 'model_providers.other.base_url="https://example.invalid"']},
+    {"codexArguments": ["-c", "features.hooks=false"]},
+    {"codexArguments": ["-c", 'sandbox_mode="danger-full-access"']},
+    {"codexArguments": ["-c", 'approval_policy="never"']},
+    {"codexArguments": ["-c", 'developer_instructions="replace"']},
+    {"codexArguments": ["-c", PROJECT_HOOK]},
+    {"guardCommand": "fictional-guard"},
+    {"guardCommand": []},
+    {"guardCommand": ["fictional-guard", ""]},
+    {"guardCommand": [str(Path("/fictional/missing-guard"))]},
+])
+def test_invalid_or_pinned_worker_arguments_stop_before_auth(project, codex, workers_value):
+    adapter = json.loads(project.adapter.read_text(encoding="utf-8"))
+    adapter["workers"] = workers_value
+    write_json(project.adapter, adapter)
+    with pytest.raises(ValueError, match="workers"):
+        delegate(project)
+    assert not codex.auth_calls and not codex.calls
+
+
 @pytest.mark.parametrize("acknowledgement,returncode", [(None, 0), ("outdated-digest", 0), ("matching", 1)])
 def test_missing_or_failed_probe_prevents_write_worker(project, codex, monkeypatch, acknowledgement, returncode):
     calls = []
@@ -461,3 +510,68 @@ def test_timed_out_or_cancelled_worker_stops_its_term_ignoring_descendant(tmp_pa
     status = subprocess.run(["ps", "-o", "stat=", "-p", str(child_pid)], capture_output=True,
                             text=True, timeout=5).stdout.strip()
     assert not status or status.startswith("Z"), status
+
+
+GUARD_SCRIPT = """
+import json, pathlib, sys, time
+payload = json.load(sys.stdin)
+pathlib.Path(sys.argv[1]).write_text(json.dumps(payload), encoding="utf-8")
+command = (payload.get("tool_input") or {}).get("command", "")
+if "sleep" in command:
+    time.sleep(5)
+if "crash" in command:
+    sys.exit(3)
+if "noise" in command:
+    print("not json")
+if "deny" in command:
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                             "permissionDecisionReason": "fictional project rule"}}))
+"""
+
+
+def guarded_project(project, tmp_path):
+    script = tmp_path / "project_guard.py"
+    script.write_text(GUARD_SCRIPT, encoding="utf-8")
+    seen = tmp_path / "seen.json"
+    adapter = json.loads(project.adapter.read_text(encoding="utf-8"))
+    adapter["runtimes"] = {"hermes": {"workers": {"guardCommand": [sys.executable, str(script), str(seen)]}}}
+    write_json(project.adapter, adapter)
+    return seen
+
+
+def worker_call(project, command):
+    return mission.decide({
+        "han_runtime": "codex", "hook_event_name": "PreToolUse", "session_id": "codex-child",
+        "cwd": str(project.root), "tool_name": "Bash", "tool_input": {"command": command},
+    })
+
+
+def test_project_guard_command_sees_owner_identity_and_can_deny(project, monkeypatch, tmp_path):
+    seen = guarded_project(project, tmp_path)
+    context(project, monkeypatch)
+    assert not worker_call(project, "echo allowed").deny
+    payload = json.loads(seen.read_text(encoding="utf-8"))
+    assert (payload["session_id"], payload["agent_id"], payload["han_runtime"]) == ("garden-owner", "chef-codex-worker", "hermes")
+    assert payload["tool_input"] == {"command": "echo allowed"}
+    assert "han_hermes_worker" not in payload
+    assert worker_call(project, "echo deny").deny == "프로젝트 워커 가드: fictional project rule"
+
+
+@pytest.mark.parametrize("command,reason", [("echo crash", "실패"), ("echo noise", "JSON"), ("echo sleep", "실행하지 못함")])
+def test_project_guard_failures_deny_the_worker_call(project, monkeypatch, tmp_path, command, reason):
+    guarded_project(project, tmp_path)
+    context(project, monkeypatch)
+    monkeypatch.setattr(workers, "GUARD_TIMEOUT", 1)
+    assert reason in worker_call(project, command).deny
+
+
+def test_project_guard_is_not_run_outside_hermes_workers(project, monkeypatch, tmp_path):
+    seen = guarded_project(project, tmp_path)
+    assert not worker_call(project, "echo deny").deny
+    assert not seen.exists()
+
+
+def test_worker_with_project_guard_still_reaches_the_role_worker(project, codex, tmp_path):
+    guarded_project(project, tmp_path)
+    assert delegate(project)["ok"]
+    assert len(codex.calls) == 2
