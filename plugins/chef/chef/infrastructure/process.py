@@ -6,11 +6,25 @@ import shutil
 from chef.infrastructure.errors import UsageError
 
 
-P4_INSTALLATIONS = (
-    (r"C:\Program Files\Perforce\p4.exe", r"C:\Program Files (x86)\Perforce\p4.exe")
-    if os.name == "nt"
-    else ("/opt/homebrew/bin/p4", "/usr/local/bin/p4", "/opt/perforce/bin/p4", "/usr/bin/p4")
-)
+def default_p4_installations():
+    """Known install locations, including user-local bins used by launchd/gateway PATHs."""
+    if os.name == "nt":
+        return (
+            r"C:\Program Files\Perforce\p4.exe",
+            r"C:\Program Files (x86)\Perforce\p4.exe",
+        )
+    home = os.path.expanduser("~")
+    return (
+        "/opt/homebrew/bin/p4",
+        "/usr/local/bin/p4",
+        "/opt/perforce/bin/p4",
+        "/usr/bin/p4",
+        os.path.join(home, ".local", "bin", "p4"),
+        os.path.join(home, "bin", "p4"),
+    )
+
+
+P4_INSTALLATIONS = default_p4_installations()
 
 PARENT_SESSION_ENV = (
     "CLAUDECODE",

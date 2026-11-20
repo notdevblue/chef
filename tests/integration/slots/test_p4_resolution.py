@@ -130,3 +130,27 @@ def test_windows_initial_command_uses_child_search_path(tools, monkeypatch, comm
     path = process.tool_search_path()
     assert windows_executable(command, path) == str(tools["standard"])
     which.assert_called_once_with("p4", path=path)
+
+
+def test_posix_user_bin_paths_are_in_default_installations():
+    if os.name == "nt":
+        pytest.skip("user-local p4 fallbacks are POSIX launchd/gateway paths")
+    paths = process.default_p4_installations()
+    assert os.path.join(os.path.expanduser("~"), ".local", "bin", "p4") in paths
+    assert os.path.join(os.path.expanduser("~"), "bin", "p4") in paths
+
+
+def test_posix_user_bin_fallbacks_are_searched(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("user-local p4 fallbacks are POSIX launchd/gateway paths")
+    home = tmp_path / "home"
+    local = home / ".local" / "bin" / "p4"
+    local.parent.mkdir(parents=True)
+    local.touch(mode=0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("P4_BIN", raising=False)
+    monkeypatch.delenv("CHEF_P4", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    monkeypatch.setattr(process, "P4_INSTALLATIONS", process.default_p4_installations())
+    monkeypatch.setattr(process.shutil, "which", lambda *args, **kwargs: None)
+    assert process.resolve_p4() == str(local)

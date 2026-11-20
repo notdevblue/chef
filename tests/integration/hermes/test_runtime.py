@@ -147,3 +147,9 @@ def test_runtime_choices_and_hermes_distill_home(tmp_path):
     selected = adapter(tmp_path, {"runtimes": {"hermes": {"rolePolicy": {"model": "definition", "subagents": True}}}})
     doctor.check_role_policy(report, "garden", str(selected))
     assert not report.failed
+
+
+def test_hermes_registry_uses_home_even_when_folder_is_missing(tmp_path):
+    expected = tmp_path / "hermes-home" / "chef" / "adapters"
+    assert not expected.exists()
+    assert adapters.resolve_registry("hermes") == adapters.Registry(str(expected), "hermesHome")

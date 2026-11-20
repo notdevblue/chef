@@ -22,14 +22,14 @@ def locate(project_arg, runtime="claude"):
     if project_arg:
         os.environ.pop("CLAUDE_PROJECT_DIR", None)
     try:
-        located = mission_guard.locate_adapter(
+        located = mission_guard.find_adapter(
             {"cwd": os.path.abspath(project_arg or os.getcwd()), "han_runtime": runtime}
         )
     except mission_guard.GuardOff as e:
         raise UsageError(str(e))
+    except mission_guard.AdapterNotFound as e:
+        raise UsageError(str(e)) from e
     finally:
         if saved is not None:
             os.environ["CLAUDE_PROJECT_DIR"] = saved
-    if not located:
-        raise UsageError("어댑터를 찾지 못함 (--project <경로>, HAN_ADAPTERS_DIR, 레지스트리 roots 확인)")
     return located

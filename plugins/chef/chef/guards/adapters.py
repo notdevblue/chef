@@ -148,9 +148,12 @@ def resolve_registry(runtime="claude"):
             return Registry(configured, "hanRepo")
     if runtime == "hermes":
         home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        # Always the Hermes default, even if the folder has not been created yet.
+        # Falling through to the plugin's in-place adapters/ (example tree) hides
+        # a missing $HERMES_HOME/chef/adapters and can make chef_slot miss a
+        # registry that chef-studio wrote elsewhere.
         configured = os.path.join(home, "chef", "adapters")
-        if os.path.isdir(configured):
-            return Registry(os.path.abspath(configured), "hermesHome")
+        return Registry(os.path.abspath(configured), "hermesHome")
     fallback = in_place_adapters_dir()
     if os.path.isdir(fallback):
         return Registry(fallback, "in-place")

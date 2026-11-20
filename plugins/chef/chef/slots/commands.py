@@ -943,7 +943,11 @@ def current_session_context(project, name, session_id, resume=False, dry_run=Fal
             slot_location = locate(config.slot_path(name), "hermes")
             slot_adapter = read_adapter(slot_location.adapter_path, "hermes")
         except UsageError as exc:
-            raise UsageError("Hermes 슬롯 어댑터를 찾지 못함: 슬롯 로컬 어댑터 또는 레지스트리 roots를 설정할 것") from exc
+            slot = config.slot_path(name)
+            raise UsageError(
+                "Hermes 슬롯 어댑터를 찾지 못함: 슬롯 로컬 어댑터 또는 레지스트리 roots를 설정할 것"
+                f" (slot={slot}; {exc})"
+            ) from exc
         if not same_path(slot_location.project, config.slot_path(name)) or not same_path(
             mission_guard.state_dir_of(slot_location.project, slot_adapter), config.slot_state_dir(name)
         ):
