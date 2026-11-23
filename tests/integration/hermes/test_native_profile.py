@@ -12,6 +12,7 @@ from tests.paths import PLUGIN_ROOT
 NATIVE_CHECK = r'''
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -31,6 +32,7 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-profiles-") as directory:
     shutil.copytree(distribution, copied, ignore=shutil.ignore_patterns("__pycache__"))
     from gateway.session_context import clear_session_vars, set_session_vars
     from hermes_cli import plugins
+    from hermes_cli.middleware import apply_tool_request_middleware
     from hermes_cli.plugins_manifest import parse_manifest_file
     from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
     from tools.file_tools_paths import _resolve_path_for_task
@@ -45,7 +47,7 @@ action = request["action"]
 state = Path(request["data"]["reservation"])
 reservation = json.loads(state.read_text()) if state.exists() else None
 owner = [request.get("who"), request.get("key")]
-assert request["clean"]
+assert action == "status" or request["clean"]
 with Path(request["data"]["log"]).open("a") as log:
     print(json.dumps([action, *owner]), file=log)
 if action == "status":
@@ -72,10 +74,23 @@ print('{"ok":true}')
         manager.mkdir()
         slot.mkdir()
         log, reservation = manager / "events.jsonl", manager / "reservation.json"
+        inspect = manager / "inspect.py"
+        inspect.write_text("""
+import json, sys
+from pathlib import Path
+if sys.argv[1] == "status":
+    state = Path(sys.argv[2])
+    print("LOCKED" if state.exists() and json.loads(state.read_text()) else "UNLOCKED")
+elif sys.argv[1] == "list":
+    print("WORKSPACES " + Path.cwd().name)
+""", encoding="utf-8")
+        status_argv = [sys.executable, str(inspect), "status", str(reservation)]
+        list_argv = [sys.executable, str(inspect), "list"]
         adapter_dir = home / "chef" / "adapters"
         adapter_path = adapter_dir / "orchard" / "adapter.json"
         write_json(adapter_path, {"schema": 1, "paths": {"stateDir": "state"}, "externalSlots": {
             "root": str(root), "provider": [sys.executable, str(provider)],
+            "readOnlyCommands": [status_argv, list_argv],
             "workspaces": {"fern": {"path": str(slot), "data": {
                 "log": str(log), "reservation": str(reservation),
             }}},
@@ -87,6 +102,17 @@ print('{"ok":true}')
         try:
             manifest = parse_manifest_file(copied / "hermes/plugin.yaml", copied / "hermes", "user", "")
             plugins.get_plugin_manager()._load_plugin(manifest)
+
+            def terminal(command, cwd=None):
+                incoming = {"command": command}
+                if cwd is not None:
+                    incoming["workdir"] = str(cwd)
+                rewritten = apply_tool_request_middleware("terminal", incoming, **request).payload
+                deny = plugins.resolve_pre_tool_block("terminal", rewritten, **request)
+                if deny:
+                    return {"blocked": deny}
+                return json.loads(registry.dispatch("terminal", rewritten, **request))
+
             args = {"project": str(manager), "name": "fern"}
             dry_run = json.loads(registry.dispatch("chef_slot", {**args, "dry_run": True}, **request))
             print(json.dumps({"case": label, "process_home": os.environ["HERMES_HOME"],
@@ -114,8 +140,8 @@ print('{"ok":true}')
                 assert Path(receipt["receipt"]).is_relative_to(adapter_dir)
                 print(json.dumps({"case": label, "missing_receipt_blocked": True,
                                   "acquired_before_receipt": reservation.exists()}), flush=True)
-            opened = plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission open seed"}, **request)
-            assert opened is None, opened
+            opened = terminal("echo han-mission open seed")
+            assert opened.get("exit_code") == 0, opened
             assert json.loads(active.read_text())["session"] == request["session_id"]
             scope = home / "chef" / "external-slots"
             journals = [p for p in (gateway / "chef" / "external-slots").glob("*.json")]
@@ -132,11 +158,12 @@ print('{"ok":true}')
                 print(json.dumps({"case": label, "resume_requires_separate_receipt": True}), flush=True)
             clear_session_vars(session)
             session = set_session_vars(session_id=request["session_id"], message_id=label + "-close", profile=home.name)
-            closed = plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission close seed"}, **request)
-            assert closed is None, closed
+            closed = terminal("echo han-mission close seed")
+            assert closed.get("exit_code") == 0, closed
             events = [json.loads(line) for line in log.read_text().splitlines()]
             transitions = [event for event in events if event[0] in ("acquire", "release")]
             print(json.dumps({"case": label, "journal": str(journal), "acquire_release": transitions,
+                              "open_exit": opened["exit_code"], "close_exit": closed["exit_code"],
                               "active_after_close": active.exists(), "journal_after_close": journal.exists(),
                               "lock_gate": str(journal.with_suffix(".lock.gate")),
                               "reservation_after_close": json.loads(reservation.read_text())}), flush=True)
@@ -145,6 +172,17 @@ print('{"ok":true}')
             assert journal.parent == scope, journal
             assert journal.with_suffix(".lock.gate").is_file()
             assert os.environ["HERMES_HOME"] == str(gateway)
+            if home != gateway:
+                status = terminal(shlex.join(status_argv), slot)
+                listing = terminal(shlex.join(list_argv), manager)
+                restored = str(_resolve_path_for_task(".", request["task_id"]))
+                print(json.dumps({"case": label, "post_close": {"slot_status": status, "manager_list": listing,
+                                                               "native_cwd": restored}}), flush=True)
+                assert status.get("exit_code") == 0 and status["output"].strip() == "UNLOCKED", status
+                assert listing.get("exit_code") == 0 and listing["output"].strip() == "WORKSPACES " + manager.name, listing
+                assert restored == str(root), restored
+                status = json.loads(registry.dispatch("chef_slot", {**args, "dry_run": True}, **request))
+                assert status.get("reservation") == "UNLOCKED", status
         finally:
             clear_session_vars(session)
             if token is not None:

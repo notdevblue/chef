@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import threading
+from contextlib import nullcontext
 
 from chef.cli import mission_entry
 from chef.guards import integrity, mission, questions, subagents
@@ -143,6 +144,7 @@ def originating_request(session):
 class Bridge:
     def __init__(self):
         self.bindings = {}
+        self.released_slots = {}
         self.lock = threading.RLock()
 
     def cwd(self, session_id, task_id):
@@ -198,7 +200,7 @@ class Bridge:
                 role = payload["tool_input"].get("subagent_type")
                 if tool_name == "chef_delegate" and isinstance(role, str) and role and ":" not in role:
                     payload["tool_input"]["subagent_type"] = "chef:" + role
-                directive = self.external_tool(context, tool_name, payload, session_id)
+                directive = self.external_tool(context, tool_name, payload, located)
                 if directive or (tool_name == "terminal" and mission.MARKER.fullmatch(
                         payload["tool_input"]["command"].strip())):
                     return directive
@@ -222,13 +224,23 @@ class Bridge:
         except Exception:
             return block("guard evaluation failed; execution was blocked")
 
-    @staticmethod
-    def external_tool(context, tool, payload, session):
+    def external_tool(self, context, tool, payload, located):
         if tool not in ("terminal", "write_file", "patch", "chef_delegate", "delegate_task", "execute_code"):
             return None
-        if not context.get("external"):
-            return block("select the external slot in this task before running commands or writing")
         try:
+            session = payload["session_id"]
+            if not context.get("external"):
+                inputs = payload["tool_input"]
+                cwd = payload["cwd"]
+                with self.lock:
+                    released = self.released_slots.get(session)
+                # Pass Hermes the same absolute workdir we inspect. Its shell
+                # can expand relative paths and ~ in a different environment.
+                if (tool == "terminal" and not inputs.get("background")
+                        and inputs.get("workdir") == cwd and os.path.isabs(cwd)
+                        and external_slots.detached_read_allowed(released, located, cwd, inputs["command"])):
+                    return None
+                return block("select the external slot in this task before running commands or writing")
             slot = external_slots.from_context(context)
             cwd = payload["cwd"]
             if not same_path(cwd, slot.cwd) and not inside_real_root(slot.cwd, cwd):
@@ -242,6 +254,9 @@ class Bridge:
                     action, mission_id = marker.group(1).lower(), marker.group(2)
                     request = originating_request(session) if action == "open" else None
                     with external_slots.workspace_transition(slot.cwd), mission_entry.active_lock(slot.state):
+                        with self.lock:
+                            if self.bindings.get((session, payload["task_id"])) is not context:
+                                raise UsageError("the external slot binding changed before the mission marker")
                         slot = external_slots.from_context(context)
                         if action in ("open", "resume"):
                             mode = "new" if action == "open" else "resume"
@@ -252,6 +267,8 @@ class Bridge:
                                     or not same_path(mission.state_dir_of(slot.cwd, checked["adapter"]), slot.state)):
                                 raise UsageError("mission entry receipt does not match the selected external slot")
                         slot.transition(marker, session, request)
+                        if action == "close":
+                            self.restore_slot_bindings(session, context)
                     return None
                 if mission.contains_marker(command, "Bash"):
                     return block("run the mission marker alone")
@@ -263,6 +280,22 @@ class Bridge:
         except (OSError, RuntimeError, ValueError, UsageError, mission.GuardOff, mission_entry.EntryError) as exc:
             return block(str(exc))
         return None
+
+    def restore_slot_bindings(self, session_id, released):
+        failed = False
+        with self.lock:
+            self.released_slots[session_id] = released
+            for key, binding in list(self.bindings.items()):
+                if (key[0] == session_id and binding.get("external")
+                        and same_path(binding["cwd"], released["cwd"])):
+                    try:
+                        bind_native_cwd(key[1], binding["return_cwd"])
+                    except Exception:
+                        failed = True
+                    finally:
+                        del self.bindings[key]
+        if failed:
+            raise UsageError("external slot was released, but a Hermes task working directory could not be restored")
 
     def slot(self, args, session_id="", task_id="", **_):
         try:
@@ -277,16 +310,24 @@ class Bridge:
                 resume=bool(args.get("resume", False)), dry_run=True,
             )
             if not args.get("dry_run", False):
-                with self.lock:
+                preview = context
+                transition = external_slots.workspace_transition(preview["cwd"]) if preview.get("external") else nullcontext()
+                with transition, self.lock:
                     previous = self.bindings.get((session_id, task_id))
                     if previous and previous["cwd"] != context["cwd"]:
                         raise ValueError("this task is already bound to another slot; use a separate Hermes task")
+                    return_cwd = (previous or {}).get("return_cwd") or native_cwd(task_id)
                     context = current_session_context(
                         args.get("project"), args.get("name"), session_id,
                         resume=bool(args.get("resume", False)), dry_run=False,
                     )
+                    if (bool(context.get("external")) != bool(preview.get("external"))
+                            or (preview.get("external") and not same_path(context["cwd"], preview["cwd"]))):
+                        raise UsageError("the slot configuration changed during selection")
                     bind_native_cwd(task_id, context["cwd"])
-                    self.bindings[(session_id, task_id)] = context
+                    self.bindings[(session_id, task_id)] = {**context, "return_cwd": return_cwd}
+                    if context.get("external"):
+                        self.released_slots.pop(session_id, None)
             return json.dumps(context, ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)

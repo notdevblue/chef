@@ -2,9 +2,10 @@
 
 import json
 from pathlib import Path
+import shlex
 import sys
 from contextvars import ContextVar
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +77,190 @@ def test_select_is_read_only_and_close_uses_original_request(world, monkeypatch)
     assert terminal(bridge, "echo han-mission close garden") is None
     assert calls[-1] == ("release", "original-request")
     assert not slot.journal.exists() and not mission.read_active(slot.state).id
+
+
+def test_close_restores_each_task_and_allows_only_declared_idle_reads(world, tmp_path, monkeypatch):
+    manager, workspace, calls = world
+    original = tmp_path / "original"
+    original.mkdir()
+    cwds = {"owner": str(manager), "second-task": str(original)}
+    monkeypatch.setattr(plugin, "native_cwd", lambda task: cwds.get(task, str(manager)))
+    monkeypatch.setattr(plugin, "bind_native_cwd", cwds.__setitem__)
+    status = [sys.executable, str(manager / "inspect.py"), "status"]
+    listing = [sys.executable, str(manager / "inspect.py"), "list"]
+    adapter_path = tmp_path / "adapters" / "orchard" / "adapter.json"
+    adapter = json.loads(adapter_path.read_text())
+    adapter["runtimes"]["hermes"]["externalSlots"]["readOnlyCommands"] = [status, listing]
+    adapter_path.write_text(json.dumps(adapter))
+    bridge = plugin.Bridge()
+    assert select(bridge, manager)["reservation"] == "UNLOCKED"
+    assert terminal(bridge, "echo han-mission open garden") is None
+    assert json.loads(bridge.slot({"project": str(manager), "name": "one", "resume": True},
+                                  session_id="owner", task_id="second-task"))["reservation"] == "LOCKED"
+    assert cwds == {"owner": str(workspace), "second-task": str(workspace)}
+    assert terminal(bridge, "echo han-mission close garden") is None
+    assert cwds == {"owner": str(manager), "second-task": str(original)}
+    assert not bridge.bindings and bridge.request("terminal", {"command": "pwd"}, "owner", "owner") is None
+    assert terminal(bridge, shlex.join(status), workdir=str(workspace)) is None
+    assert terminal(bridge, shlex.join(listing), workdir=str(manager)) is None
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    for workdir in (None, ".", "~/orchard"):
+        assert terminal(bridge, shlex.join(listing), workdir=workdir)["action"] == "block"
+    assert terminal(bridge, shlex.join(listing), workdir=str(manager), background=True)["action"] == "block"
+    for suffix in ("; echo changed", " > note", " $(echo changed)", "\n echo changed"):
+        assert terminal(bridge, shlex.join(status) + suffix, workdir=str(workspace))["action"] == "block"
+    assert bridge.before_tool("write_file", {"path": str(workspace / "note"), "content": "x"}, "owner", "owner")["action"] == "block"
+
+    # Another session can acquire the released slot and its guards still apply.
+    assert select(bridge, manager, session="other")["external"]
+    assert terminal(bridge, "echo han-mission open second", session="other") is None
+    denied = terminal(bridge, shlex.join(status), workdir=str(workspace))
+    assert "another active mission" in denied["message"]
+    assert terminal(bridge, "echo han-mission close second", workdir=str(workspace))["action"] == "block"
+    assert mission.read_active(str(workspace / "state")).session == "other"
+    assert [action for action, _ in calls].count("release") == 1
+
+
+def test_detached_reads_cannot_override_guard_rules_or_an_unresolved_journal(world, tmp_path):
+    manager, workspace, _ = world
+    argv = [sys.executable, str(manager / "inspect.py"), "status"]
+    command = shlex.join(argv)
+    adapter_path = tmp_path / "adapters" / "orchard" / "adapter.json"
+    adapter = json.loads(adapter_path.read_text())
+    settings = adapter["runtimes"]["hermes"]["externalSlots"]
+    settings["readOnlyCommands"] = [argv]
+    settings["protectedCommands"] = ["status"]
+    adapter_path.write_text(json.dumps(adapter))
+    bridge = plugin.Bridge()
+    assert select(bridge, manager)["external"]
+    assert terminal(bridge, "echo han-mission open seed") is None
+    assert terminal(bridge, "echo han-mission close seed") is None
+    assert "belong to the mission guard" in terminal(bridge, command, workdir=str(workspace))["message"]
+    settings["protectedCommands"] = []
+    adapter["guard"] = {"deny": [{"pattern": "status", "reason": "fictional deny rule"}]}
+    adapter_path.write_text(json.dumps(adapter))
+    assert "fictional deny rule" in terminal(bridge, command, workdir=str(workspace))["message"]
+    adapter["guard"] = {}
+    adapter_path.write_text(json.dumps(adapter))
+    journal, _ = external_slots.reservation_paths(str(workspace.resolve()))
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_text("{}")
+    assert "unresolved reservation" in terminal(bridge, command, workdir=str(workspace))["message"]
+
+
+def test_detached_slot_read_checks_provider_when_another_profile_has_a_different_state_dir(world, tmp_path, monkeypatch):
+    manager, workspace, _ = world
+    argv = [sys.executable, str(manager / "inspect.py"), "status"]
+    default_registry = tmp_path / "adapters"
+    originally = json.loads((default_registry / "orchard" / "adapter.json").read_text())
+    originally["runtimes"]["hermes"]["externalSlots"]["readOnlyCommands"] = [argv]
+    homes = [tmp_path / "home" / "profiles" / name for name in ("fern", "spruce")]
+    for home in homes:
+        registry = home / "chef" / "adapters"
+        (registry / "orchard").mkdir(parents=True)
+        (registry / "projects.json").write_bytes((default_registry / "projects.json").read_bytes())
+        (registry / "orchard" / "adapter.json").write_text(json.dumps({
+            **originally, "paths": {"stateDir": home.name + "-state"},
+        }))
+    monkeypatch.delenv("HAN_ADAPTERS_DIR")
+    current_home = ContextVar("hermes_home", default=homes[0])
+    monkeypatch.setitem(sys.modules, "hermes_constants", SimpleNamespace(get_hermes_home=current_home.get))
+    owner = []
+
+    def provider(slot, action, record=None, clean=False):
+        if action == "status" and owner:
+            raise UsageError("provider reports the workspace is occupied")
+        if action == "acquire":
+            assert not owner
+            owner.append(record["who"])
+        if action in ("check", "release"):
+            assert owner == [record["who"]]
+        if action == "release":
+            owner.clear()
+
+    monkeypatch.setattr(external_slots.Slot, "call", provider)
+    first, second = plugin.Bridge(), plugin.Bridge()
+    assert select(first, manager)["external"]
+    assert terminal(first, "echo han-mission open seed") is None
+    assert terminal(first, "echo han-mission close seed") is None
+    assert terminal(first, shlex.join(argv), workdir=str(workspace)) is None
+    token = current_home.set(homes[1])
+    try:
+        assert select(second, manager, session="other")["external"]
+        assert terminal(second, "echo han-mission open tree", session="other") is None
+    finally:
+        current_home.reset(token)
+    assert not (workspace / "fern-state" / "ACTIVE").exists()
+    assert "provider reports the workspace is occupied" in terminal(
+        first, shlex.join(argv), workdir=str(workspace)
+    )["message"]
+    assert owner == ["other"]
+
+
+def test_close_blocks_concurrent_resume_binding(world, monkeypatch):
+    manager, _, _ = world
+    bridge = plugin.Bridge()
+    assert select(bridge, manager)["external"]
+    assert terminal(bridge, "echo han-mission open garden") is None
+    checking, proceed = Event(), Event()
+    outcomes = []
+    closing = Thread(target=lambda: outcomes.append(terminal(bridge, "echo han-mission close garden")))
+
+    def provider(slot, action, record=None, clean=False):
+        if action == "check" and current_thread() is closing:
+            checking.set()
+            assert proceed.wait(10)
+
+    monkeypatch.setattr(external_slots.Slot, "call", provider)
+    closing.start()
+    try:
+        assert checking.wait(10)
+        for task in ("owner", "other-task"):
+            result = json.loads(bridge.slot({"project": str(manager), "name": "one", "resume": True},
+                                            session_id="owner", task_id=task))
+            assert "transition is in progress" in result.get("error", ""), result
+    finally:
+        proceed.set()
+        closing.join(10)
+    assert outcomes == [None]
+    assert not bridge.bindings
+
+
+def test_selection_records_the_native_cwd_observed_under_the_binding_lock(world, monkeypatch):
+    manager, workspace, _ = world
+    # A previous close can restore the cwd between the backend probe and the bind.
+    observed = iter((str(workspace), str(manager)))
+    monkeypatch.setattr(plugin, "native_cwd", lambda _: next(observed, str(manager)))
+    changes = []
+    monkeypatch.setattr(plugin, "bind_native_cwd", lambda task, cwd: changes.append(cwd))
+    bridge = plugin.Bridge()
+    assert select(bridge, manager)["external"]
+    assert terminal(bridge, "echo han-mission open garden") is None
+    assert terminal(bridge, "echo han-mission close garden") is None
+    assert changes == [str(workspace), str(manager)]
+
+
+def test_native_restore_error_after_release_still_detaches_other_tasks(world, monkeypatch):
+    manager, workspace, calls = world
+    cwds = {}
+    monkeypatch.setattr(plugin, "native_cwd", lambda task: cwds.get(task, str(manager)))
+
+    def bind(task, cwd):
+        if task == "owner" and cwd == str(manager):
+            raise ValueError("fictional native failure")
+        cwds[task] = cwd
+
+    monkeypatch.setattr(plugin, "bind_native_cwd", bind)
+    bridge = plugin.Bridge()
+    assert select(bridge, manager)["external"]
+    assert terminal(bridge, "echo han-mission open garden") is None
+    assert json.loads(bridge.slot({"project": str(manager), "name": "one", "resume": True},
+                                  session_id="owner", task_id="second-task"))["external"]
+    assert "was released" in terminal(bridge, "echo han-mission close garden")["message"]
+    assert cwds["second-task"] == str(manager) and not bridge.bindings
+    assert not mission.read_active(str(workspace / "state")).id
+    assert calls[-1] == ("release", "original-request")
 
 
 def test_existing_gateway_journal_keeps_its_lock_until_release(world, tmp_path, monkeypatch):

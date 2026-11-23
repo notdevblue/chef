@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 from contextlib import contextmanager
 
@@ -61,6 +62,61 @@ def state_path(root, adapter):
     return os.path.normpath(target)
 
 
+def reservation_paths(cwd, gateway_home=None):
+    digest = hashlib.sha256(os.fsencode(os.path.normcase(cwd))).hexdigest()
+    relative = Path("chef", "external-slots", digest + ".json")
+    profile = active_home().resolve()
+    gateway = (Path(gateway_home) if gateway_home else process_home()).resolve()
+    return profile / relative, gateway / relative
+
+
+def protected_patterns(settings):
+    values = settings.get("protectedCommands", [])
+    if not isinstance(values, list) or not all(token(value) for value in values):
+        raise UsageError("external slot protectedCommands must be a list of regular expressions")
+    return [re.compile(pattern, re.IGNORECASE) for pattern in values]
+
+
+def detached_read_allowed(released, located, cwd, command):
+    if not released or not located:
+        return False
+    in_slot = same_path(released["cwd"], cwd)
+    if ((not in_slot and not same_path(released["project"], cwd))
+            or not same_path(located.project, cwd)
+            or not same_path(located.adapter_path, released["adapter"])):
+        return False
+    adapter = read_adapter(located.adapter_path, "hermes")
+    settings = adapter.get("externalSlots")
+    if not isinstance(settings, dict):
+        return False
+    commands = settings.get("readOnlyCommands", [])
+    if not isinstance(commands, list) or any(
+            not isinstance(argv, list) or not argv or not all(token(item) for item in argv)
+            or not os.path.isabs(argv[0]) for argv in commands):
+        raise UsageError("external slot readOnlyCommands must contain absolute executable argv lists")
+    for argv in commands:
+        # Match a complete, literal POSIX command. Prefixes, shell expansion,
+        # redirects and chained commands must not inherit read permission.
+        if command.strip(" \t") != shlex.join(argv):
+            continue
+        root = absolute_directory(located.project)
+        active = mission.read_active(state_path(root, adapter))
+        if active.corrupt or active.id or any(os.path.lexists(path) for path in reservation_paths(root)):
+            raise UsageError("external workspace has an ACTIVE mission or unresolved reservation")
+        if any(pattern.search(command) for pattern in protected_patterns(settings)):
+            raise UsageError("external reservation commands belong to the mission guard")
+        problems = []
+        verdict = mission.judge_argv(adapter, argv, problems, project=root, cwd=root)
+        if verdict.kind != "allow" or problems:
+            raise UsageError(verdict.reason or "external read command did not pass the mission guard")
+        if in_slot:
+            # Another profile may hold the provider reservation in a
+            # different stateDir and journal. Ask the provider for availability.
+            from_context(released).available(clean=False)
+        return True
+    return False
+
+
 class Slot:
     def __init__(self, located, adapter, name, *, gateway_home=None):
         settings = adapter.get("externalSlots")
@@ -90,9 +146,7 @@ class Slot:
                 self.data = workspace.get("data", {})
         self.argv = settings.get("provider")
         protected = settings.get("protectedCommands", [])
-        if not isinstance(protected, list) or not all(token(value) for value in protected):
-            raise UsageError("external slot protectedCommands must be a list of regular expressions")
-        self.protected = [re.compile(pattern, re.IGNORECASE) for pattern in protected]
+        self.protected = protected_patterns(settings)
         if (not isinstance(self.data, dict) or not isinstance(self.argv, list) or not self.argv
                 or not all(token(value) for value in self.argv) or not os.path.isabs(self.argv[0])):
             raise UsageError("external slot requires an absolute provider command and object data")
@@ -100,11 +154,8 @@ class Slot:
         material = [self.main, self.cwd, self.name, self.state, self.argv, self.data, protected]
         self.fingerprint = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
         self.validate_adapter()
-        digest = hashlib.sha256(os.fsencode(os.path.normcase(self.cwd))).hexdigest()
-        journal_path = Path("chef", "external-slots", digest + ".json")
-        self.profile_journal = active_home().resolve() / journal_path
+        self.profile_journal, legacy = reservation_paths(self.cwd, gateway_home)
         self.journal = self.profile_journal
-        legacy = (Path(gateway_home) if gateway_home else process_home()).resolve() / journal_path
         if legacy != self.journal and os.path.lexists(legacy):
             if os.path.lexists(self.journal):
                 raise UsageError("external slot has reservations in both Hermes homes; inspect both before continuing")
@@ -170,11 +221,11 @@ class Slot:
         self.call("check", record, clean)
         return record
 
-    def available(self):
+    def available(self, clean=True):
         active = mission.read_active(self.state)
         if active.corrupt or active.id or self.record():
             raise UsageError("external slot has an ACTIVE mission or unresolved reservation")
-        self.call("status", clean=True)
+        self.call("status", clean=clean)
 
     def transition(self, marker, session, request_id=None):
         action, mission_id = marker.group(1).lower(), marker.group(2)
@@ -239,4 +290,5 @@ def selection(located, adapter, name, session, resume, dry_run):
     return {"runtime": "hermes", "cwd": slot.cwd, "project": slot.main, "slot": name, "state": slot.state,
             "session_id": session, "mission": active.id, "mode": "resume" if resume else "new",
             "beforeRun": [], "dry_run": dry_run, "external": True, "adapter": slot.adapter,
+            "reservation": "LOCKED" if resume else "UNLOCKED",
             "fingerprint": slot.fingerprint}

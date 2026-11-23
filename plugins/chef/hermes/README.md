@@ -78,18 +78,28 @@ workspace's absolute directory. Optional `data` is an object passed to the provi
 must be inside `root`. Names follow the standard Chef slot rules and apply independently of the directory name.
 Optional `protectedCommands` are case-insensitive regular expressions for provider operations that
 the Hermes coordinator and its workers cannot run as shell commands, including through one-time overrides.
+Optional `readOnlyCommands` in the local external-slot settings lists exact argv for trusted, read-only
+terminal commands after a successful close, such as `[["/opt/example/bin/workspaces", "status"]]`.
+Use an absolute executable and explicitly list the arguments. Supply a single foreground command
+and the absolute path of the released slot or its manager in `terminal`'s `workdir`. Use literal POSIX
+shell quoting as emitted by Python's `shlex.join`. Chef checks ACTIVE, reservation journals, protected
+commands and adapter deny rules. A read in the released slot also checks availability with the provider.
 
 The provider runs from the manager with a schema-1 JSON request on stdin. Common fields are `action`,
 `project`, `workspace`, `name`, `stateDir`, `data` and `clean`. Actions are `status` (inventory and
 availability), `acquire` (new reservation), `check` (current reservation) and `release` (release the
 same reservation). `acquire`, `check` and `release` also receive `who` and `key`. The provider must
 verify its workspace identity and enforce the requested clean state. It returns only `{"ok":true}`
-with exit 0 for success. Acquisition must be exclusive, and any release must be atomic with the
+with exit 0 for success. The `status` action confirms that the slot is unreserved even when
+`clean=false`. Acquisition must be exclusive, and any release must be atomic with the
 ownership check. Providers should avoid logging identities or returning them in responses.
 
 `chef_slot` checks availability and binds the task cwd. The native mission guard acquires the
 reservation on the standalone `open` marker, using the gateway's originating message ID and Hermes
-session. The `close` marker returns the original reservation after worker completion. Guard state is
+session. The `close` marker returns the original reservation after worker completion, detaches that
+session's tasks from the released slot and restores their prior working directories.
+`chef_slot(..., dry_run=true)` reports `reservation: "UNLOCKED"` when the provider confirms availability.
+Guard state is
 kept outside the workspace in the Hermes profile. Existing reservations in the gateway home keep
 their journal and lock until release. If both homes have a journal for the workspace, inspect both
 before continuing. Unconfirmed transitions require operator recovery.
