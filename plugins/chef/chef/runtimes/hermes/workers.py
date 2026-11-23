@@ -18,6 +18,7 @@ from chef.infrastructure.paths import inside_real_root, same_path
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment
 from chef.locations import PLUGIN_ROOT
+from chef.runtimes.hermes.home import active_home, process_home
 
 WORKER_ENV = "CHEF_HERMES_WORKER"
 ROLES = ("researcher", "dev-small", "dev-medium", "verifier", "code-reviewer", "reviewer-small")
@@ -110,7 +111,7 @@ def worker_denial(payload):
         from chef.runtimes.hermes.external_slots import from_context
 
         try:
-            slot = from_context(data["external"])
+            slot = from_context(data["external"], gateway_home=data.get("gatewayHome"))
             slot.check_command(command)
             slot.check(data["session"], data["mission"])
         except (OSError, RuntimeError, ValueError, UsageError) as exc:
@@ -315,7 +316,8 @@ def delegate(args, *, session_id, task_id="", cwd, external=None):
     auth = subprocess.run([executable, "login", "status"], capture_output=True, text=True, timeout=15)
     if auth.returncode or "chatgpt" not in (auth.stdout + auth.stderr).lower():
         raise ValueError("Codex ChatGPT subscription login is required; API-key fallback is disabled")
-    home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "chef/workers"
+    gateway_home = process_home().resolve()
+    home = gateway_home / "chef/workers"
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     identity = os.stat(cwd)
     workspace_key = hashlib.sha256(f"{identity.st_dev}:{identity.st_ino}".encode()).hexdigest()
@@ -329,9 +331,13 @@ def delegate(args, *, session_id, task_id="", cwd, external=None):
                     "digest": implementation_digest()}
             if external is not None:
                 data["external"] = external
+                data["gatewayHome"] = str(gateway_home)
             context.write_text(json.dumps(data), encoding="utf-8")
             context.chmod(0o600)
-            env = python_environment({**child_env(cwd), WORKER_ENV: str(context)}, cache_root=home / "interpreters")
+            env = python_environment(
+                {**child_env(cwd), "HERMES_HOME": str(active_home().resolve()), WORKER_ENV: str(context)},
+                cache_root=home / "interpreters",
+            )
             for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
                 env.pop(name, None)
             protected = protected_state(state, active.id)

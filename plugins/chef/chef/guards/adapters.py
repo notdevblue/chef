@@ -21,6 +21,7 @@ from chef.guards.contracts import (
 from chef.guards.logging import append_log
 from chef.infrastructure.paths import inside_real_root, normalize_path, same_path
 from chef.locations import PLUGIN_ROOT
+from chef.runtimes.hermes.home import active_home
 
 
 class GuardOff(Exception):
@@ -87,17 +88,7 @@ def adapter_relatives(runtime):
 
 
 def hermes_registry_dir():
-    # The shared gateway sets the active profile in a request-local context.
-    # Standalone Chef CLI commands may run without Hermes on their import path.
-    try:
-        from hermes_constants import get_hermes_home
-    except ModuleNotFoundError as exc:
-        if exc.name != "hermes_constants":
-            raise
-        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
-    else:
-        home = get_hermes_home()
-    return os.path.abspath(os.path.join(home, "chef", "adapters"))
+    return os.path.abspath(active_home() / "chef" / "adapters")
 
 
 def registry_missing_message(runtime, *, project=None, tried=()):

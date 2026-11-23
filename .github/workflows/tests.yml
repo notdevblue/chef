@@ -37,7 +37,7 @@ jobs:
           python -m pip install 'ruamel.yaml>=0.18,<0.19' 'rich>=14,<15' 'python-dotenv>=1,<2' 'PyYAML>=6,<7' 'requests>=2,<3' 'jinja2>=3,<4' 'typing-extensions>=4,<5' 'pydantic>=2,<3' 'psutil>=7,<8'
       - name: Verify real native plugin and task context without providers
         shell: bash
-        run: HERMES_AGENT_SOURCE="$RUNNER_TEMP/hermes-agent" python -m pytest -q -p no:cacheprovider tests/integration/hermes/test_native_host.py
+        run: HERMES_AGENT_SOURCE="$RUNNER_TEMP/hermes-agent" python -m pytest -q -p no:cacheprovider tests/integration/hermes/test_native_host.py tests/integration/hermes/test_native_profile.py
   tests:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}

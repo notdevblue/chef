@@ -118,6 +118,26 @@ def test_worker_requires_subscription_and_matching_hook_probe(project, codex, mo
     assert mission.read_active(str(project.root / "state")).session == "garden-owner"
 
 
+def test_worker_hook_process_inherits_request_profile(project, codex, monkeypatch):
+    gateway = Path(os.environ["HERMES_HOME"])
+    profile = gateway / "profiles" / "garden"
+    registry = profile / "chef" / "adapters"
+    selected = registry / "garden" / "adapter.json"
+    selected.parent.mkdir(parents=True)
+    project.adapter.rename(selected)
+    write_json(registry / "projects.json", [{"adapter": "garden", "roots": [str(project.root)]}])
+    monkeypatch.setitem(sys.modules, "hermes_constants", SimpleNamespace(get_hermes_home=lambda: profile))
+    assert delegate(project)["ok"]
+    for _, _, env, _, _ in codex.calls:
+        assert env["HERMES_HOME"] == str(profile)
+        with monkeypatch.context() as child:
+            child.delitem(sys.modules, "hermes_constants")
+            child.setenv("HERMES_HOME", env["HERMES_HOME"])
+            located = adapters.find_adapter({"cwd": str(project.root), "han_runtime": "hermes"})
+            assert Path(located.adapter_path) == selected
+    assert os.environ["HERMES_HOME"] == str(gateway)
+
+
 def test_uninitialized_mission_is_rejected_before_any_model_or_auth_call(project, codex):
     (project.root / "state/garden-mission/mission.md").unlink()
     with pytest.raises(ValueError, match="initialize"):

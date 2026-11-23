@@ -6,18 +6,33 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from contextlib import contextmanager
 
 from chef.guards import mission
 from chef.infrastructure.configuration import locate, read_adapter
 from chef.infrastructure.errors import UsageError
-from chef.infrastructure.locking import FileLock
+from chef.infrastructure.locking import FileLock, LockBusy, thread_lock_of
 from chef.infrastructure.paths import inside_real_root, same_path
 from chef.infrastructure.storage import atomic_write_json
+from chef.runtimes.hermes.home import active_home, process_home
 from chef.slots.contracts import NAME_PATTERN
 
 
 def configured(adapter):
     return "externalSlots" in adapter or "externalSlots" in ((adapter.get("runtimes") or {}).get("hermes") or {})
+
+
+@contextmanager
+def workspace_transition(cwd):
+    """Serialize admission in a shared gateway independently of profile state paths."""
+    identity = os.stat(cwd)
+    lock = thread_lock_of(f"hermes-external-{identity.st_dev}-{identity.st_ino}")
+    if not lock.acquire(blocking=False):
+        raise LockBusy("external workspace mission transition is in progress")
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def token(value):
@@ -47,7 +62,7 @@ def state_path(root, adapter):
 
 
 class Slot:
-    def __init__(self, located, adapter, name):
+    def __init__(self, located, adapter, name, *, gateway_home=None):
         settings = adapter.get("externalSlots")
         if not isinstance(settings, dict):
             raise UsageError("externalSlots must be an object")
@@ -85,12 +100,19 @@ class Slot:
         material = [self.main, self.cwd, self.name, self.state, self.argv, self.data, protected]
         self.fingerprint = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
         self.validate_adapter()
-        home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes").resolve()
-        root = home / "chef" / "external-slots"
+        digest = hashlib.sha256(os.fsencode(os.path.normcase(self.cwd))).hexdigest()
+        journal_path = Path("chef", "external-slots", digest + ".json")
+        self.profile_journal = active_home().resolve() / journal_path
+        self.journal = self.profile_journal
+        legacy = (Path(gateway_home) if gateway_home else process_home()).resolve() / journal_path
+        if legacy != self.journal and os.path.lexists(legacy):
+            if os.path.lexists(self.journal):
+                raise UsageError("external slot has reservations in both Hermes homes; inspect both before continuing")
+            # Existing reservations keep their original journal and lock until released.
+            self.journal = legacy
+        root = self.journal.parent
         if inside_real_root(self.cwd, root) or same_path(self.cwd, root):
             raise UsageError("external reservation state must be outside the worktree")
-        digest = hashlib.sha256(os.fsencode(os.path.normcase(self.cwd))).hexdigest()
-        self.journal = root / (digest + ".json")
 
     def validate_adapter(self):
         located = locate(self.cwd, "hermes")
@@ -161,6 +183,8 @@ class Slot:
         outcome = mission.Outcome()
         with self.lock():
             if action == "open":
+                if self.journal != self.profile_journal:
+                    raise UsageError("an existing gateway reservation must be resolved before opening a new mission")
                 self.available()
                 if not token(request_id):
                     raise UsageError("external slot requires the trusted originating request ID")
@@ -196,9 +220,9 @@ class Slot:
                 self.write(record, "active")
 
 
-def from_context(context):
+def from_context(context, *, gateway_home=None):
     located = locate(context["project"], "hermes")
-    slot = Slot(located, read_adapter(located.adapter_path, "hermes"), context["slot"])
+    slot = Slot(located, read_adapter(located.adapter_path, "hermes"), context["slot"], gateway_home=gateway_home)
     if (not same_path(slot.cwd, context["cwd"]) or not same_path(slot.adapter, context["adapter"])
             or slot.fingerprint != context["fingerprint"]):
         raise UsageError("external slot configuration changed after selection")

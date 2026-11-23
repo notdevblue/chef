@@ -90,7 +90,9 @@ ownership check. Providers should avoid logging identities or returning them in 
 `chef_slot` checks availability and binds the task cwd. The native mission guard acquires the
 reservation on the standalone `open` marker, using the gateway's originating message ID and Hermes
 session. The `close` marker returns the original reservation after worker completion. Guard state is
-kept outside the workspace in the Hermes profile. Unconfirmed transitions require operator recovery.
+kept outside the workspace in the Hermes profile. Existing reservations in the gateway home keep
+their journal and lock until release. If both homes have a journal for the workspace, inspect both
+before continuing. Unconfirmed transitions require operator recovery.
 The coordinator and delegated workers check reservation ownership before tool use. This is a
 cooperative reservation. The provider's own workspace rules still apply to tools used outside Chef.
 Managed create, refresh and remove are unavailable for external workspaces.

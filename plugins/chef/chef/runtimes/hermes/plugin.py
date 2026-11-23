@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 
+from chef.cli import mission_entry
 from chef.guards import integrity, mission, questions, subagents
 from chef.infrastructure.errors import UsageError
 from chef.infrastructure.paths import inside_real_root, same_path
@@ -238,8 +239,19 @@ class Bridge:
                 if marker:
                     if not same_path(cwd, slot.cwd):
                         return block("use the selected workspace root for mission markers")
-                    request = originating_request(session) if marker.group(1).lower() == "open" else None
-                    slot.transition(marker, session, request)
+                    action, mission_id = marker.group(1).lower(), marker.group(2)
+                    request = originating_request(session) if action == "open" else None
+                    with external_slots.workspace_transition(slot.cwd), mission_entry.active_lock(slot.state):
+                        slot = external_slots.from_context(context)
+                        if action in ("open", "resume"):
+                            mode = "new" if action == "open" else "resume"
+                            checked = mission_entry.guard_location(payload, mode, mission_id)
+                            if checked and (
+                                    not same_path(checked["located"].project, slot.cwd)
+                                    or not same_path(checked["located"].adapter_path, slot.adapter)
+                                    or not same_path(mission.state_dir_of(slot.cwd, checked["adapter"]), slot.state)):
+                                raise UsageError("mission entry receipt does not match the selected external slot")
+                        slot.transition(marker, session, request)
                     return None
                 if mission.contains_marker(command, "Bash"):
                     return block("run the mission marker alone")
@@ -248,7 +260,7 @@ class Bridge:
             if tool in ("write_file", "patch") and any(
                     not inside_real_root(slot.state, target) for target in questions.tool_targets(payload)):
                 return block("external slot source writes belong to a delegated worker")
-        except (OSError, RuntimeError, ValueError, UsageError) as exc:
+        except (OSError, RuntimeError, ValueError, UsageError, mission.GuardOff, mission_entry.EntryError) as exc:
             return block(str(exc))
         return None
 
