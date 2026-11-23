@@ -14,7 +14,7 @@
 | Codex 진입점·역할 | `plugins/chef/codex/` |
 | Grok 진입점·역할 | `plugins/chef/grok/` |
 | Hermes native 등록·스킬 | `plugins/chef/hermes/` |
-| Hermes 도구 연결·Codex 역할 워커 | `plugins/chef/chef/runtimes/hermes/` |
+| Hermes 도구 연결·역할 워커 | `plugins/chef/chef/runtimes/hermes/` |
 | 가드·훅 구현 | `plugins/chef/chef/guards/`, `chef/runtimes/` |
 | 미션·검증·실행 관리 구현 | `plugins/chef/chef/mission/`, `chef/verification/` |
 | 슬롯·읽기 전용 대시보드 | `plugins/chef/chef/slots/`, `chef/dashboard/` |

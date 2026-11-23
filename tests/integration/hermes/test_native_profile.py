@@ -14,9 +14,12 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 source, distribution = map(Path, sys.argv[1:])
 sys.path.insert(0, str(source))
@@ -47,7 +50,7 @@ action = request["action"]
 state = Path(request["data"]["reservation"])
 reservation = json.loads(state.read_text()) if state.exists() else None
 owner = [request.get("who"), request.get("key")]
-assert action == "status" or request["clean"]
+assert action not in ("acquire", "release") or request["clean"]
 with Path(request["data"]["log"]).open("a") as log:
     print(json.dumps([action, *owner]), file=log)
 if action == "status":
@@ -68,6 +71,49 @@ print('{"ok":true}')
     def write_json(path, data):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data), encoding="utf-8")
+
+    def run_research(slot, request):
+        from agent.subagent_lifecycle import bind_subagent_parent
+        from tools import delegate_tool, delegate_tool_config
+        from tools.delegate_tool_toolsets import _resolve_child_toolsets
+
+        subprocess.run(["git", "init", "-q", str(slot)], check=True)
+        subprocess.run(["git", "-c", "user.name=Fictional", "-c", "user.email=fictional@example.test",
+                        "commit", "--allow-empty", "-qm", "Seed fictional workspace"], cwd=slot, check=True)
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=slot, text=True).strip()
+        (slot / "state/seed/mission.md").write_text("# Fictional mission\n", encoding="utf-8")
+        child = SimpleNamespace(session_id="fern-research-session", _subagent_id="sa-test", _delegate_role="leaf",
+                                _delegate_depth=1, model="fictional-model", provider="fictional-provider")
+        parent = SimpleNamespace(session_id=request["session_id"], enabled_toolsets=["chef", "chef-research", "file", "terminal"])
+
+        def build(*, goal, toolsets, role, parent_agent, **_):
+            assert _resolve_child_toolsets(parent_agent, toolsets, role)[0] == ["chef-research"]
+            plugins.invoke_hook("subagent_start", parent_session_id=parent_agent.session_id,
+                                child_session_id=child.session_id, child_subagent_id=child._subagent_id, child_goal=goal)
+            return child
+
+        def run_child(*_):
+            child_request = {"session_id": child.session_id, "task_id": "fern-research-task"}
+            assert get_hermes_home() == profile
+            assert plugins.resolve_pre_tool_block("terminal", {"command": "echo blocked"}, **child_request)
+            args = {"operation": "head"}
+            assert plugins.resolve_pre_tool_block("chef_research_read", args, **request)
+            assert plugins.resolve_pre_tool_block("chef_research_read", args, **child_request) is None
+            observed = json.loads(registry.dispatch("chef_research_read", args, **child_request))
+            assert observed == {"head": head}, observed
+            plugins.invoke_hook("subagent_stop", parent_session_id=parent.session_id, child_session_id=child.session_id)
+            return {"status": "completed", "summary": observed["head"]}
+
+        # Exercise the real lifecycle service and native registry; use a fake
+        # child/model call so this test needs no provider or credentials.
+        with (bind_subagent_parent(parent),
+              patch.object(delegate_tool_config, "_resolve_delegation_credentials", return_value={"model": child.model}),
+              patch.object(delegate_tool, "_credential_overrides", return_value={}),
+              patch.object(delegate_tool, "_build_child_preserving_parent_tools", side_effect=build),
+              patch.object(delegate_tool, "_run_child_lifecycle", side_effect=run_child),
+              patch("chef.runtimes.hermes.workers.codex_executable", side_effect=AssertionError("Codex was used"))):
+            result = json.loads(registry.dispatch("chef_delegate", {"role": "chef:researcher", "prompt": "Find HEAD"}, **request))
+        assert result["ok"] and result["result"] == head and result["runtime"] == "hermes", result
 
     def run(label, home):
         manager, slot = root / (label + "-manager"), root / (label + "-slot")
@@ -96,6 +142,9 @@ elif sys.argv[1] == "list":
             }}},
         }})
         write_json(adapter_dir / "projects.json", [{"adapter": "orchard", "roots": [str(manager), str(slot)]}])
+        if home != gateway:
+            write_json(adapter_dir / "orchard" / "local.json", {"runtimes": {"hermes": {"workers": {"backend": "hermes"}}}})
+            (home / "config.yaml").write_text("delegation:\n  inherit_mcp_toolsets: false\n", encoding="utf-8")
         request = {"task_id": label + "-task", "session_id": label + "-session"}
         token = set_hermes_home_override(str(home)) if home != gateway else None
         session = set_session_vars(session_id=request["session_id"], message_id=label + "-open", profile=home.name)
@@ -127,6 +176,8 @@ elif sys.argv[1] == "list":
             if home != gateway:
                 from chef.cli import mission_entry
 
+                worker_status = json.loads(registry.dispatch("chef_worker_status", {}, **request))
+                assert worker_status == {"available": True, "backend": "hermes", "roles": ["chef:researcher"]}, worker_status
                 entry = root / "entry.py"
                 entry.write_text(f"print({json.dumps({'schema': 1, 'action': 'continue'})!r})", encoding="utf-8")
                 write_json(adapter_dir / "mission-entry.json", {"schema": 1, "events": [{
@@ -156,6 +207,7 @@ elif sys.argv[1] == "list":
                 resumed = plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission resume seed"}, **request)
                 assert resumed is None, resumed
                 print(json.dumps({"case": label, "resume_requires_separate_receipt": True}), flush=True)
+                run_research(slot, request)
             clear_session_vars(session)
             session = set_session_vars(session_id=request["session_id"], message_id=label + "-close", profile=home.name)
             closed = terminal("echo han-mission close seed")
@@ -199,7 +251,7 @@ def test_native_external_slot_uses_profile_from_lookup_through_release(tmp_path)
     result = subprocess.run(
         [os.environ.get("HERMES_AGENT_PYTHON", sys.executable), "-c", NATIVE_CHECK,
          os.environ["HERMES_AGENT_SOURCE"], str(PLUGIN_ROOT)],
-        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        cwd=tmp_path, capture_output=True, text=True, timeout=90,
     )
     print(result.stdout, end="")
     assert result.returncode == 0, result.stdout + result.stderr

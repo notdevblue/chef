@@ -23,9 +23,10 @@ If the CLI or gateway uses a restricted toolset list, include the `chef` toolset
 for the intended surface. Registration does not override a disabled toolset.
 Plugin-disabled/safe-mode sessions are not guarded Chef sessions.
 
-The native plugin registers tools `chef_slot` and `chef_delegate`, hooks
-`pre_tool_call`, `pre_llm_call`, `pre_verify`, request middleware, and five
-explicit skills: `chef:mission`, `chef:slots`, `chef:adapter-init`, `chef:doctor`,
+The native plugin registers `chef_slot`, `chef_worker_status`, `chef_delegate`,
+request middleware and mission hooks. Hermes builds with the public subagent
+lifecycle API also get `chef_research_read` and the child lifecycle hooks. Its five
+skills are `chef:mission`, `chef:slots`, `chef:adapter-init`, `chef:doctor`,
 `chef:distill`. Namespaced skills are loaded with `skill_view`, not a flat skill
 directory. Keep the checkout available for the lifetime of the running process.
 
@@ -55,9 +56,10 @@ older system Python even when Hermes itself uses a supported virtual environment
    The selected slot must also resolve its own adapter through a local file or
    registry roots, with the same stateDir. Entry is rejected if its guards would
    have no project context.
-4. Use the normal guarded mission-entry and marker procedure, then initialize
-   and perform the mission. External entry registrations still apply. Every tool
-   invocation uses explicit task context rather than relying on a previous `cd`.
+4. Call `chef_worker_status` before opening the mission. Follow the configured
+   mission-entry checks and run the standalone `open` marker. For external slots,
+   that marker acquires the reservation before initialization or workspace commands.
+   Every tool invocation uses explicit task context.
 5. For the same persisted Hermes session, call `chef_slot(..., resume=true)`
    after restart. Another live session cannot take over ACTIVE through this tool.
    Follow the existing inspected recovery procedure for an actual ownership change.
@@ -107,10 +109,40 @@ The coordinator and delegated workers check reservation ownership before tool us
 cooperative reservation. The provider's own workspace rules still apply to tools used outside Chef.
 Managed create, refresh and remove are unavailable for external workspaces.
 
-## Codex subscription workers
+## Role workers
 
-Role work uses `chef_delegate(role="chef:dev-small", prompt="...")`, not Hermes
-`delegate_task`. Available roles are researcher, dev-small, dev-medium, verifier,
+Call `chef_delegate` to dispatch a role worker after the owned mission is initialized.
+`chef_worker_status` reports the backend configured for the current workspace and the
+roles it can dispatch under `agents.allow`. It checks executable and login status for
+Codex, and the public lifecycle API for Hermes. Model execution and hook/tool access
+are confirmed on dispatch.
+
+### Hermes researcher
+
+To use the current Hermes profile's model routing and credentials, opt in through
+the adapter or its `local.json` overlay:
+
+```json
+{"runtimes": {"hermes": {"workers": {"backend": "hermes"}}}}
+```
+
+This backend supports `chef:researcher`. Enable the `chef-research` toolset for
+the profile/surface if you manage an explicit toolset list. Set
+`delegation.inherit_mcp_toolsets: false` in the Hermes profile to keep parent MCP
+tools out of research children. Use the default `delegation.max_spawn_depth: 1`
+or set `delegation.orchestrator_enabled: false` to keep research children as leaves.
+The child runs in a fresh Hermes session with a tool for listing directories, reading text
+files and querying Git HEAD in the assigned workspace. Listings and reads have
+size limits. The tool excludes symbolic links, Git administrative files and the
+Chef mission state. The child has no shell or write tools. A configured
+`workers.guardCommand` checks each research read. A timeout revokes workspace
+access before requesting child cancellation. Result routing metadata identifies
+the provider and model selected at child launch.
+
+### Codex subscription workers
+
+The default `codex` backend dispatches through Codex CLI. Available roles are
+researcher, dev-small, dev-medium, verifier,
 code-reviewer and reviewer-small. They use the committed `codex/agents/chef-*.toml`
 instructions and model/effort settings. Roles without a model override use the
 user's existing Codex default; no Hermes model or paid API fallback is selected.

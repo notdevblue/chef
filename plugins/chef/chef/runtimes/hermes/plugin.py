@@ -18,6 +18,7 @@ from chef.infrastructure.errors import UsageError
 from chef.infrastructure.paths import inside_real_root, same_path
 from chef.locations import PLUGIN_ROOT
 from chef.runtimes.hermes import external_slots
+from chef.runtimes.hermes import research as research_worker
 
 SKILLS = ("mission", "slots", "adapter-init", "doctor", "distill")
 PATCH_HEADER = re.compile(r"^(\*\*\* (?:Add File|Update File|Delete File|Move to): )(.+)$", re.MULTILINE)
@@ -142,10 +143,11 @@ def originating_request(session):
 
 
 class Bridge:
-    def __init__(self):
+    def __init__(self, lifecycle=None):
         self.bindings = {}
         self.released_slots = {}
         self.lock = threading.RLock()
+        self.research = research_worker.ResearchWorkers(lifecycle)
 
     def cwd(self, session_id, task_id):
         key = identity(session_id, task_id)
@@ -156,6 +158,8 @@ class Bridge:
     def request(self, tool_name, args, session_id="", task_id="", **_):
         """Pin local file and terminal operations to this task's selected slot."""
         try:
+            if tool_name == research_worker.TOOL or self.research.owns(session_id):
+                return None
             cwd = self.cwd(session_id, task_id)
             if not isinstance(args, dict):
                 raise ValueError("tool arguments must be an object")
@@ -182,6 +186,10 @@ class Bridge:
 
     def before_tool(self, tool_name, args, session_id="", task_id="", **_):
         try:
+            if self.research.owns(session_id):
+                return None if tool_name == research_worker.TOOL else block("the research worker can only use its workspace read tool")
+            if tool_name == research_worker.TOOL:
+                return block("only the assigned Hermes research worker can use this tool")
             if not isinstance(args, dict) or args.get(ERROR_ARGUMENT):
                 return block("cannot resolve tool context; execution was blocked")
             origin = cwd = self.cwd(session_id, task_id)
@@ -342,18 +350,36 @@ class Bridge:
 
             with self.lock:
                 context = self.bindings.get((session_id, task_id), {})
+            request = {"session_id": session_id, "task_id": task_id, "cwd": cwd, "research": self.research}
             if context.get("external"):
                 slot = external_slots.from_context(context)
                 with slot.lock():
                     slot.check(session_id)
-                    result = delegate(args, session_id=session_id, task_id=task_id, cwd=cwd, external=context)
+                    result = delegate(args, **request, external=context)
             else:
-                result = delegate(args, session_id=session_id, task_id=task_id, cwd=cwd)
+                result = delegate(args, **request)
             return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
+    def worker_status(self, args, session_id="", task_id="", **_):
+        try:
+            if args or self.research.owns(session_id):
+                raise ValueError("worker status is for the parent session and takes no arguments")
+            from chef.infrastructure.configuration import read_adapter
+            from chef.runtimes.hermes.workers import status
+
+            cwd = self.cwd(session_id, task_id)
+            located = mission.locate_adapter({"cwd": cwd, "han_runtime": "hermes"})
+            if located is None:
+                raise ValueError("no Chef adapter for this Hermes task; select the slot first")
+            return json.dumps(status(read_adapter(located.adapter_path, "hermes"), self.research), ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"available": False, "error": str(exc)}, ensure_ascii=False)
+
     def context(self, session_id="", task_id="", **_):
+        if self.research.owns(session_id):
+            return None
         python_context = (
             "Chef CLI Python executable: " + json.dumps(sys.executable) + ". "
             "Invoke Chef CLI scripts with this absolute interpreter path (Python 3.11+), "
@@ -367,7 +393,7 @@ class Bridge:
             return {"context": (
                 python_context + "Chef Hermes: load skill_view(name='chef:mission') for mission work. "
                 "Use chef_slot to select a ready slot in this existing session. "
-                "Use chef_delegate for role workers; native delegate_task is unavailable. "
+                "Check chef_worker_status before opening the mission; use chef_delegate for role workers. "
                 "Preserve question/approval records and actual verification evidence. "
                 "Current task working directory: " + cwd
             )}
@@ -375,6 +401,8 @@ class Bridge:
             return {"context": python_context + "Chef context unavailable. Tool guards will block unresolved operations; inspect the runtime setup."}
 
     def verify(self, session_id="", **kwargs):
+        if self.research.owns(session_id):
+            return None
         try:
             task_id = kwargs.get("task_id") or session_id
             cwd = self.cwd(session_id, task_id)
@@ -406,11 +434,17 @@ SLOT_SCHEMA = {
 }
 
 DELEGATE_SCHEMA = {
-    "name": "chef_delegate", "description": "Run a configured Chef role worker through Codex CLI, preserving Chef guards and session authority.",
+    "name": "chef_delegate", "description": "Run a configured Chef role worker with the adapter's backend and Chef mission authority.",
     "parameters": {"type": "object", "properties": {
         "role": {"type": "string", "description": "Configured Chef role name"},
         "prompt": {"type": "string", "description": "Self-contained worker task"},
+        "timeout": {"type": "integer", "minimum": 10, "maximum": 3600, "default": 600},
     }, "required": ["role", "prompt"], "additionalProperties": False},
+}
+
+WORKER_STATUS_SCHEMA = {
+    "name": "chef_worker_status", "description": "Check the configured Chef worker backend and supported roles before opening a mission.",
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 
 
@@ -419,12 +453,18 @@ def register(ctx):
         raise RuntimeError("Chef Hermes supports native macOS and Linux")
     if not callable(getattr(ctx, "register_middleware", None)):
         raise RuntimeError("Chef requires Hermes native tool-request middleware")
-    bridge = Bridge()
+    lifecycle = getattr(ctx, "subagent_lifecycle", None)
+    bridge = Bridge(lifecycle)
     ctx.register_middleware("tool_request", bridge.request)
     ctx.register_hook("pre_tool_call", bridge.before_tool)
     ctx.register_hook("pre_llm_call", bridge.context)
     ctx.register_hook("pre_verify", bridge.verify)
     ctx.register_tool("chef_slot", "chef", SLOT_SCHEMA, bridge.slot)
     ctx.register_tool("chef_delegate", "chef", DELEGATE_SCHEMA, bridge.delegate)
+    ctx.register_tool("chef_worker_status", "chef", WORKER_STATUS_SCHEMA, bridge.worker_status)
+    if lifecycle is not None:
+        ctx.register_tool(research_worker.TOOL, research_worker.TOOLSET, research_worker.SCHEMA, bridge.research.read)
+        ctx.register_hook("subagent_start", bridge.research.started)
+        ctx.register_hook("subagent_stop", bridge.research.stopped)
     for name in SKILLS:
         ctx.register_skill(name, PLUGIN_ROOT / "hermes" / "skills" / name / "SKILL.md", "Chef " + name)

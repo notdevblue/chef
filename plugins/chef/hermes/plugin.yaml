@@ -1,11 +1,15 @@
 name: chef
-version: 0.6.9
+version: 0.6.10
 description: Chef missions and guarded current-session execution for Hermes on macOS and Linux
 kind: standalone
 provides_tools:
   - chef_slot
   - chef_delegate
+  - chef_worker_status
+  - chef_research_read
 provides_hooks:
   - pre_tool_call
   - pre_llm_call
   - pre_verify
+  - subagent_start
+  - subagent_stop

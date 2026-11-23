@@ -1,4 +1,4 @@
-"""Codex CLI workers for Hermes; authentication stays in the user's Codex home."""
+"""Chef role admission and Codex CLI execution for Hermes."""
 
 import json
 import hashlib
@@ -168,6 +168,61 @@ def guard_command(adapter):
     return list(argv)
 
 
+def backend_for(adapter):
+    settings = adapter.get("workers", {})
+    if not isinstance(settings, dict):
+        raise ValueError("workers must be an object")
+    backend = settings.get("backend", "codex")
+    if backend not in ("codex", "hermes"):
+        raise ValueError("workers.backend must be codex or hermes")
+    return backend
+
+
+def permitted_roles(adapter, backend):
+    from chef.guards import subagents
+
+    patterns, problem = subagents.allow_patterns(adapter)
+    if problem:
+        raise ValueError(problem)
+    roles = ("researcher",) if backend == "hermes" else ROLES
+    return [role for role in roles if patterns is None or subagents.allows(patterns, "chef:" + role)]
+
+
+def codex_executable():
+    executable = shutil.which("codex")
+    if not executable:
+        raise ValueError("Codex CLI was not found on the Hermes gateway PATH")
+    auth = subprocess.run([executable, "login", "status"], capture_output=True, text=True, timeout=15)
+    if auth.returncode or "chatgpt" not in (auth.stdout + auth.stderr).lower():
+        raise ValueError("Codex ChatGPT subscription login is required; API-key fallback is disabled")
+    return executable
+
+
+def worker_guard(adapter):
+    checker = guard_command(adapter)
+    if checker and not (shutil.which(checker[0]) or os.path.isfile(checker[0])):
+        raise ValueError(f"workers.guardCommand 실행 파일을 찾지 못함: {checker[0]}")
+    return checker
+
+
+def status(adapter, research):
+    backend = backend_for(adapter)
+    roles = ["chef:" + role for role in permitted_roles(adapter, backend)]
+    result = {"backend": backend, "roles": roles, "available": False}
+    try:
+        if not roles:
+            raise ValueError("agents.allow permits no roles for this worker backend")
+        worker_guard(adapter)
+        if backend == "hermes":
+            research.check_available()
+        else:
+            extra_arguments(adapter)
+            codex_executable()
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return {**result, "error": str(exc)}
+    return {**result, "available": True}
+
+
 def project_denial(payload):
     """Run the slot's workers.guardCommand for a worker tool call; any failure denies.
 
@@ -280,7 +335,7 @@ def run_codex(command, prompt, env, timeout):
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def delegate(args, *, session_id, task_id="", cwd, external=None):
+def delegate(args, *, session_id, task_id="", cwd, external=None, research=None):
     """Called only by the native Hermes tool with trusted session context."""
     if not isinstance(args, dict) or set(args) - {"role", "prompt", "timeout"}:
         raise ValueError("chef_delegate requires role, prompt and optional timeout")
@@ -302,20 +357,21 @@ def delegate(args, *, session_id, task_id="", cwd, external=None):
     folder = Path(state) / active.id
     if folder.is_symlink() or not (folder / "mission.md").is_file():
         raise ValueError("initialize the owned mission with mission_state.py init before delegating")
-    from chef.guards import subagents
-    patterns, problem = subagents.allow_patterns(adapter)
-    if problem or patterns is not None and not subagents.allows(patterns, "chef:" + role):
-        raise ValueError(problem or "role is not permitted by agents.allow")
+    backend = backend_for(adapter)
+    if backend == "hermes" and role != "researcher":
+        raise ValueError("the Hermes worker backend supports only chef:researcher")
+    if role not in permitted_roles(adapter, backend):
+        raise ValueError("role is not permitted by agents.allow")
+    checker = worker_guard(adapter)
+    if backend == "hermes":
+        if research is None:
+            raise ValueError("Hermes subagent lifecycle is unavailable in this plugin host")
+        from chef.runtimes.hermes import external_slots
+
+        slot = external_slots.from_context(external) if external is not None else None
+        return research.run(prompt, timeout, cwd, state, active, checker, slot)
     extra = extra_arguments(adapter)
-    checker = guard_command(adapter)
-    if checker and not (shutil.which(checker[0]) or os.path.isfile(checker[0])):
-        raise ValueError(f"workers.guardCommand 실행 파일을 찾지 못함: {checker[0]}")
-    executable = shutil.which("codex")
-    if not executable:
-        raise ValueError("Codex CLI is required; run codex login with your subscription")
-    auth = subprocess.run([executable, "login", "status"], capture_output=True, text=True, timeout=15)
-    if auth.returncode or "chatgpt" not in (auth.stdout + auth.stderr).lower():
-        raise ValueError("Codex ChatGPT subscription login is required; API-key fallback is disabled")
+    executable = codex_executable()
     gateway_home = process_home().resolve()
     home = gateway_home / "chef/workers"
     home.mkdir(parents=True, exist_ok=True, mode=0o700)

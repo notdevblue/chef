@@ -58,8 +58,8 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     manager._load_plugin(manifest)
     loaded = manager._plugins["chef"]
     assert loaded.enabled and not loaded.error, loaded.error
-    assert set(loaded.tools_registered) == {"chef_slot", "chef_delegate"}
-    assert set(loaded.hooks_registered) == {"pre_tool_call", "pre_llm_call", "pre_verify"}
+    assert set(loaded.tools_registered) == {"chef_slot", "chef_delegate", "chef_worker_status", "chef_research_read"}
+    assert set(loaded.hooks_registered) == {"pre_tool_call", "pre_llm_call", "pre_verify", "subagent_start", "subagent_stop"}
     assert loaded.middleware_registered == ["tool_request"]
     assert set(manager._plugin_skills) == {"chef:mission", "chef:slots", "chef:adapter-init", "chef:doctor", "chef:distill"}
     from chef.slots import commands
@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     assert os.environ["HERMES_HOME"] == str(root / "hermes-home")
     result = json.loads(registry.dispatch("chef_slot", {"project": str(slot), "name": "routed", "dry_run": True}, task_id="default-task", session_id="default-session"))
     assert str(root / "hermes-home" / "chef" / "adapters") in result["error"], result
-    print(json.dumps({"native_plugin": "passed", "surfaces": ["cli", "gateway"], "guards": "passed", "task_cwd_isolation": "passed", "profile_registry": "passed", "tools": 2, "hooks": 3, "skills": 5}))
+    print(json.dumps({"native_plugin": "passed", "surfaces": ["cli", "gateway"], "guards": "passed", "task_cwd_isolation": "passed", "profile_registry": "passed", "tools": 4, "hooks": 5, "skills": 5}))
 '''
 
 

@@ -15,7 +15,7 @@ import pytest
 
 from chef.guards import adapters, mission, subagents
 from chef.runtimes import hooks
-from chef.runtimes.hermes import workers
+from chef.runtimes.hermes import plugin, research, workers
 
 
 def write_json(path, value):
@@ -202,6 +202,112 @@ def test_missing_codex_does_not_fall_back_to_an_api(project, codex, monkeypatch)
     with pytest.raises(ValueError, match="Codex CLI"):
         delegate(project)
     assert not codex.auth_calls and not codex.calls
+
+
+@pytest.fixture
+def native(project, monkeypatch):
+    class Lifecycle:
+        def launch(self, request):
+            assert request["allowed_toolsets"] == [research.TOOLSET]
+            assert request["parent_session_id"] == "garden-owner"
+            bridge.research.started(parent_session_id="other-session", child_session_id="intruder",
+                                    child_subagent_id="other-child", child_goal=request["goal"])
+            bridge.research.started(parent_session_id="garden-owner", child_session_id="research-session",
+                                    child_subagent_id="child", child_goal=request["goal"])
+            self.launches += 1
+            return {"subagent_id": "child", "provider": "fictional", "model": "orchard-model", "role": "leaf"}
+
+        def wait(self, handle, *, timeout_seconds):
+            assert timeout_seconds == 10
+            assert not bridge.research.owns("intruder")
+            assert bridge.before_tool("write_file", {}, "research-session", "child-task")["action"] == "block"
+            assert bridge.before_tool(research.TOOL, {}, "garden-owner", "task")["action"] == "block"
+            self.observe()
+            return {"completed": not self.timeout}
+
+        def result(self, handle):
+            return {"ready": True, "terminal_state": "SUCCEEDED", "summary": "observed evidence"}
+
+        def cancel(self, handle, *, reason):
+            self.cancelled = True
+            assert "no longer active" in read({"operation": "list"})["error"]
+
+    lifecycle = Lifecycle()
+    lifecycle.launches = 0
+    lifecycle.cancelled = lifecycle.timeout = False
+    lifecycle.observe = lambda: None
+    bridge = plugin.Bridge(lifecycle)
+    monkeypatch.setattr(plugin, "native_cwd", lambda _: str(project.root))
+    monkeypatch.setattr(research, "profile_config", lambda: {"delegation": {"inherit_mcp_toolsets": False}})
+    monkeypatch.setattr(workers.shutil, "which", lambda _: None)
+    data = json.loads(project.adapter.read_text())
+    data["runtimes"] = {"hermes": {"workers": {"backend": "hermes"}}}
+    write_json(project.adapter, data)
+
+    def read(args):
+        return json.loads(bridge.research.read(args, "research-session", "child-task"))
+
+    def run(role="chef:researcher"):
+        return json.loads(bridge.delegate({"role": role, "prompt": "Inspect the orchard", "timeout": 10},
+                                          "garden-owner", "task"))
+
+    return SimpleNamespace(bridge=bridge, lifecycle=lifecycle, run=run, read=read)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native Hermes filesystem access uses POSIX directory descriptors")
+def test_native_research_reads_only_its_owned_workspace(project, native, tmp_path):
+    (project.root / "notice.txt").write_text("fictional text", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside the slot", encoding="utf-8")
+    (project.root / "alias").symlink_to(outside)
+    (project.root / "alias-dir").symlink_to(tmp_path, target_is_directory=True)
+
+    def observe():
+        assert native.read({"operation": "read", "path": "notice.txt"})["text"] == "fictional text"
+        entries = native.read({"operation": "list"})["entries"]
+        assert "notice.txt" in entries and not {"alias", "alias-dir/", "state/"} & set(entries)
+        for target in ("../outside.txt", "alias", "alias-dir/outside.txt", str(outside), "state/ACTIVE", ".git/config"):
+            assert "error" in native.read({"operation": "read", "path": target})
+        assert "error" in native.read({"operation": "write", "path": "notice.txt"})
+        assert "error" in native.read({"operation": "read", "path": "notice.txt", "session_id": "garden-owner"})
+
+    native.lifecycle.observe = observe
+    assert native.run() == {"ok": True, "runtime": "hermes", "role": "chef:researcher", "result": "observed evidence",
+                            "error": "", "model": "orchard-model", "provider": "fictional"}
+    assert "error" in native.read({"operation": "list"})
+
+
+def test_native_worker_preflight_and_unsupported_role(project, native, monkeypatch):
+    status = lambda: json.loads(native.bridge.worker_status({}, "garden-owner", "task"))
+    assert status() == {"available": True, "backend": "hermes", "roles": ["chef:researcher"]}
+    assert "only chef:researcher" in native.run("chef:dev-small")["error"]
+    monkeypatch.setattr(research, "profile_config", lambda: {"delegation": {"inherit_mcp_toolsets": True}})
+    assert "inherit_mcp_toolsets" in status()["error"]
+    assert "inherit_mcp_toolsets" in native.run()["error"]
+    assert native.lifecycle.launches == 0
+
+
+def test_native_timeout_revokes_tool_access_before_cancelling(native):
+    native.lifecycle.timeout = True
+    assert "timed out" in native.run()["error"]
+    assert native.lifecycle.cancelled
+    assert native.bridge.before_tool("terminal", {}, "research-session", "child-task")["action"] == "block"
+    native.bridge.research.stopped(parent_session_id="garden-owner", child_session_id="research-session")
+    assert not native.bridge.research.owns("research-session")
+
+
+def test_native_read_rechecks_active_and_project_guard(project, native, monkeypatch):
+    calls = []
+    monkeypatch.setattr(research, "project_denial", lambda payload: (calls.append(payload) or "denied by project"))
+
+    def observe():
+        assert native.read({"operation": "list"})["error"] == "denied by project"
+        project.active.unlink()
+        assert "no longer active" in native.read({"operation": "list"})["error"]
+
+    native.lifecycle.observe = observe
+    assert "mission ownership" in native.run()["error"]
+    assert len(calls) == 1 and calls[0]["session_id"] == "garden-owner"
 
 
 @pytest.mark.parametrize("mutation", ["missing", "wrong-owner", "wrong-runtime", "corrupt"])
