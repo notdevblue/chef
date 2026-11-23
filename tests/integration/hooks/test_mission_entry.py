@@ -3,10 +3,12 @@ import os
 import socket
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from chef.cli import mission_entry as mission_entry
 from chef.guards import mission as mission_guard
+from chef.guards.slot_binding import write_slot_binding
 
 from tests.paths import PLUGIN_ROOT
 
@@ -65,6 +67,24 @@ def test_entry_receipt_all_runtime_markers(project, runtime):
     assert not marker(project, runtime=runtime).deny
     active = mission_guard.read_active(str(project["root"] / ".missions"))
     assert active.session == "session-a" and active.runtime == runtime
+
+
+def test_profile_receipt(project, tmp_path, monkeypatch):
+    gateway_home = tmp_path / "home"
+    profile_home = gateway_home / "profiles" / "elm"
+    profile_registry = profile_home / "chef" / "adapters"
+    profile_registry.mkdir(parents=True)
+    monkeypatch.delenv("HAN_ADAPTERS_DIR")
+    monkeypatch.setenv("HERMES_HOME", str(gateway_home))
+    monkeypatch.setitem(sys.modules, "hermes_constants", SimpleNamespace(get_hermes_home=lambda: profile_home))
+    write_slot_binding(str(project["root"]), {"registry": str(project["registry"])})
+    registration = register({**project, "registry": profile_registry})
+
+    assert marker(project, runtime="hermes").deny
+    assert not (project["root"] / ".missions/ACTIVE").exists()
+    result = enter(project, runtime="hermes")
+    assert Path(result["receipt"]).is_relative_to(registration.parent)
+    assert not marker(project, runtime="hermes").deny
 
 
 def test_bootstrap_adapter_before_discovery(project):

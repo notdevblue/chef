@@ -75,9 +75,18 @@ def registration(cwd, runtime):
 
     cwd = os.path.realpath(cwd)
     _, binding = discover_slot_binding(cwd)
-    directory = (binding.get("registry") if binding else "") or mission_guard.registry_dir(runtime, project=cwd)
-    if not directory:
+    bound_registry = binding.get("registry") or ""
+    if bound_registry:
+        selected = read_registration(cwd, bound_registry)
+        if selected or runtime != "hermes":
+            return selected
+    directory = mission_guard.registry_dir(runtime, project=cwd)
+    if not directory or directory == bound_registry:
         return {}
+    return read_registration(cwd, directory)
+
+
+def read_registration(cwd, directory):
     path = os.path.join(directory, CONFIG_FILE)
     if not os.path.isfile(path):
         return {}

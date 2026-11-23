@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     adapter = {
         "schema": 1, "project": "Comet", "paths": {"stateDir": "state", "vcsRoot": "."},
         "guard": {"coordinatorWrite": ["state/**"], "deny": [{"pattern": "dangerous-operation", "reason": "fictional operation denied"}]},
-        "slots": {"enabled": True, "vcs": "none", "root": str(root / "slots"), "client": "comet-{name}", "names": ["cli", "gateway"], "prepare": []},
+        "slots": {"enabled": True, "vcs": "none", "root": str(root / "slots"), "client": "comet-{name}", "names": ["cli", "gateway", "routed"], "prepare": []},
     }
     (registration / "adapter.json").write_text(json.dumps(adapter), encoding="utf-8")
     os.environ["TERMINAL_CWD"] = str(project)
@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     assert loaded.middleware_registered == ["tool_request"]
     assert set(manager._plugin_skills) == {"chef:mission", "chef:slots", "chef:adapter-init", "chef:doctor", "chef:distill"}
     from chef.slots import commands
-    assert commands.main(["--project", str(project), "--runtime", "hermes", "create", "cli", "gateway"]) == 0
+    assert commands.main(["--project", str(project), "--runtime", "hermes", "create", "cli", "gateway", "routed"]) == 0
     from chef.guards import mission
     from hermes_cli.middleware import apply_tool_request_middleware
     try:
@@ -108,7 +108,36 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
         write = plugins.resolve_pre_tool_block("write_file", {"path": "source.py", "content": "fictional"}, task_id=task, session_id=session)
         assert write and "roles.implement" in write, write
         assert any(item.get("context") for item in manager.invoke_hook("pre_llm_call", task_id=task, session_id=session))
-    print(json.dumps({"native_plugin": "passed", "surfaces": ["cli", "gateway"], "guards": "passed", "task_cwd_isolation": "passed", "tools": 2, "hooks": 3, "skills": 5}))
+
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    os.environ.pop("HAN_ADAPTERS_DIR")
+    slot = root / "slots" / "routed"
+    profile = root / "hermes-home" / "profiles" / "comet-bot"
+    profile_registry = profile / "chef" / "adapters"
+    registered_adapter = profile_registry / "comet" / "adapter.json"
+    registered_adapter.parent.mkdir(parents=True)
+    registered_adapter.write_text(json.dumps(adapter), encoding="utf-8")
+    (profile_registry / "projects.json").write_text(json.dumps([{"adapter": "comet", "roots": [str(slot)]}]), encoding="utf-8")
+    args = {"project": str(project), "name": "routed"}
+    request = {"task_id": "routed-task", "session_id": "routed-session"}
+    token = set_hermes_home_override(str(profile))
+    try:
+        plugins.get_plugin_manager()._load_plugin(manifest)
+        result = json.loads(registry.dispatch("chef_slot", {**args, "dry_run": True}, **request))
+        assert result.get("cwd") == str(slot) and result["dry_run"], result
+        assert str(_resolve_path_for_task(".", request["task_id"])) == str(project)
+        result = json.loads(registry.dispatch("chef_slot", args, **request))
+        assert result.get("cwd") == str(slot), result
+        assert plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission open routed-mission"}, **request) is None
+        assert mission.read_active(str(slot / "state")).session == request["session_id"]
+        denied = plugins.resolve_pre_tool_block("terminal", {"command": "dangerous-operation"}, **request)
+        assert denied and "fictional operation denied" in denied, denied
+    finally:
+        reset_hermes_home_override(token)
+    assert os.environ["HERMES_HOME"] == str(root / "hermes-home")
+    result = json.loads(registry.dispatch("chef_slot", {"project": str(slot), "name": "routed", "dry_run": True}, task_id="default-task", session_id="default-session"))
+    assert str(root / "hermes-home" / "chef" / "adapters") in result["error"], result
+    print(json.dumps({"native_plugin": "passed", "surfaces": ["cli", "gateway"], "guards": "passed", "task_cwd_isolation": "passed", "profile_registry": "passed", "tools": 2, "hooks": 3, "skills": 5}))
 '''
 
 
@@ -121,4 +150,4 @@ def test_real_native_plugin_host_preserves_trusted_cli_and_gateway_context(tmp_p
     )
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout.splitlines()[-1])
-    assert report["guards"] == report["task_cwd_isolation"] == "passed"
+    assert report["guards"] == report["task_cwd_isolation"] == report["profile_registry"] == "passed"

@@ -86,11 +86,24 @@ def adapter_relatives(runtime):
     return (ADAPTER_RELATIVE,)
 
 
+def hermes_registry_dir():
+    # The shared gateway sets the active profile in a request-local context.
+    # Standalone Chef CLI commands may run without Hermes on their import path.
+    try:
+        from hermes_constants import get_hermes_home
+    except ModuleNotFoundError as exc:
+        if exc.name != "hermes_constants":
+            raise
+        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+    else:
+        home = get_hermes_home()
+    return os.path.abspath(os.path.join(home, "chef", "adapters"))
+
+
 def registry_missing_message(runtime, *, project=None, tried=()):
     parts = list(tried)
     if runtime == "hermes":
-        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
-        parts.append(f"HERMES_HOME/chef/adapters={os.path.abspath(os.path.join(home, 'chef', 'adapters'))}")
+        parts.append(f"HERMES_HOME/chef/adapters={hermes_registry_dir()}")
     elif runtime == "codex":
         parts.append("Codex config.toml shell_environment_policy.set.HAN_ADAPTERS_DIR")
     elif runtime == "grok":
@@ -178,9 +191,7 @@ def resolve_registry(runtime="claude", *, project=None):
         if configured:
             return Registry(configured, "hanRepo")
     if runtime == "hermes":
-        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
-        configured = os.path.join(home, "chef", "adapters")
-        return Registry(os.path.abspath(configured), "hermesHome")
+        return Registry(hermes_registry_dir(), "hermesHome")
     if project_may_use_in_place(project):
         return Registry(os.path.abspath(in_place_adapters_dir()), "in-place")
     return Registry("", "none")

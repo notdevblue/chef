@@ -1,12 +1,17 @@
 """Current-session entry does not depend on a desktop or claim another mission."""
 
 import json
+import os
+import sys
+from contextvars import ContextVar
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from chef.guards import mission as guard
 from chef.infrastructure.errors import UsageError
+from chef.runtimes.hermes import plugin
 from chef.slots import commands as slots
 
 
@@ -101,6 +106,54 @@ def test_registry_only_slot_enters_when_registered_under_hermes_home(registry_wo
     context = slots.current_session_context(str(project), "one", "hermes-session")
     assert Path(context["cwd"]) == slot.resolve()
     assert context["mode"] == "new" and not context["mission"]
+
+
+def test_native_slot_and_mission_resolve_registry_in_request_profile(registry_world, monkeypatch):
+    project, slot, gateway_home = registry_world
+    profile_home = gateway_home / "profiles" / "orchard-bot"
+    registry = profile_home / "chef" / "adapters"
+    adapter_path = registry / "one" / "adapter.json"
+    adapter_path.parent.mkdir(parents=True)
+    adapter_path.write_text(json.dumps({
+        "schema": 1,
+        "paths": {"stateDir": "state"},
+        "guard": {"deny": [{"pattern": "garden-probe", "reason": "fictional restriction"}]},
+    }))
+    (registry / "projects.json").write_text(json.dumps([{"adapter": "one", "roots": [str(slot)]}]))
+    home = ContextVar("hermes_home", default=gateway_home)
+    monkeypatch.setitem(sys.modules, "hermes_constants", SimpleNamespace(get_hermes_home=home.get))
+    monkeypatch.setattr(plugin, "native_cwd", lambda _: str(project))
+    monkeypatch.setattr(plugin, "bind_native_cwd", lambda *_: None)
+    bridge = plugin.Bridge()
+    args = {"project": str(project), "name": "one"}
+
+    token = home.set(profile_home)
+    try:
+        result = json.loads(bridge.slot({**args, "dry_run": True}, "owner", "task"))
+        assert result.get("cwd") == str(slot.resolve()), result
+        assert result["dry_run"] and bridge.cwd("owner", "task") == str(project)
+        assert not (slot / "state" / "ACTIVE").exists()
+        result = json.loads(bridge.slot(args, "owner", "task"))
+        assert result.get("cwd") == str(slot.resolve()), result
+        assert bridge.before_tool(
+            "terminal", {"command": "echo han-mission open orchard-mission"}, "owner", "task"
+        ) is None
+        assert guard.read_active(str(slot / "state")).session == "owner"
+        directive = bridge.before_tool("terminal", {"command": "garden-probe"}, "owner", "task")
+        assert directive and "fictional restriction" in directive["message"]
+    finally:
+        home.reset(token)
+
+    assert os.environ["HERMES_HOME"] == str(gateway_home)
+    for other_home in (gateway_home, gateway_home / "profiles" / "meadow-bot"):
+        token = home.set(other_home)
+        try:
+            # A fresh session with no ACTIVE lookup must still report its own registry.
+            args = {"project": str(slot), "name": "one", "dry_run": True}
+            result = json.loads(bridge.slot(args, "other-owner", "other-task"))
+            assert str(other_home / "chef" / "adapters") in result["error"]
+        finally:
+            home.reset(token)
 
 
 def test_missing_slot_registry_error_names_slot_and_tried_registry(registry_world):

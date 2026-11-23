@@ -74,7 +74,18 @@ def adapter_contexts(payload, targets, guard):
         starts.extend((os.path.dirname(path), os.path.dirname(os.path.realpath(path))))
     found = {}
     pending = []
+    errors = []
     for start in dict.fromkeys(starts):
+        if runtime == "hermes":
+            # Match native slot entry when a recorded registry no longer has an adapter.
+            try:
+                item = guard.locate_adapter({**payload, "cwd": start})
+            except guard.GuardOff as error:
+                errors.append(error)
+                continue
+            if item:
+                found[(canonical_path(item.project), canonical_path(item.adapter_path))] = item
+            continue
         chain = guard.ancestors(start)
         located = []
         for folder in chain:
@@ -90,7 +101,6 @@ def adapter_contexts(payload, targets, guard):
             found[(canonical_path(item.project), canonical_path(item.adapter_path))] = item
         else:
             pending.append(chain)
-    errors = []
     if pending:
         try:
             from chef.guards.slot_binding import discover_slot_binding, entry_matches

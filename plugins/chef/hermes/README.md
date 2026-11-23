@@ -32,8 +32,9 @@ directory. Keep the checkout available for the lifetime of the running process.
 Python 3.11+, local filesystem permissions, project tools and a project adapter
 are required. Use `.hermes/orchestrator/adapter.json`, or the explicit
 `HAN_ADAPTERS_DIR` registry. Hermes-specific overrides go in `runtimes.hermes`;
-machine-specific paths and commands belong in excluded `local.json`. If present,
-`$HERMES_HOME/chef/adapters` is the Hermes home registry fallback.
+machine-specific paths and commands belong in excluded `local.json`. The Hermes
+home registry fallback is `chef/adapters` under the active request profile's
+home. In a standalone CLI process it is under `$HERMES_HOME`.
 
 The native context supplies the absolute `Chef CLI Python executable` from the
 running Hermes process, including before a project adapter or slot is selected.
