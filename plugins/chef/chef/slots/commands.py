@@ -928,7 +928,14 @@ def current_session_context(project, name, session_id, resume=False, dry_run=Fal
     if not isinstance(project, str) or not os.path.isabs(project):
         raise UsageError("프로젝트 절대 경로가 필요함")
     located = locate(project, "hermes")
-    config = Config(located, read_adapter(located.adapter_path, "hermes"), "hermes")
+    adapter = read_adapter(located.adapter_path, "hermes")
+    if "externalSlots" in adapter:
+        from chef.runtimes.hermes.external_slots import selection
+
+        if not isinstance(name, str):
+            raise UsageError("external slot name is required")
+        return selection(located, adapter, name, session_id, resume, dry_run)
+    config = Config(located, adapter, "hermes")
     config.check_name(name)
     config.check_requirements(name)
     with (contextlib.nullcontext() if dry_run else FileLock(config.slot_lock_path(name), f"슬롯 {name}")):

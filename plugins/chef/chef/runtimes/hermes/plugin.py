@@ -12,7 +12,10 @@ import sys
 import threading
 
 from chef.guards import integrity, mission, questions, subagents
+from chef.infrastructure.errors import UsageError
+from chef.infrastructure.paths import inside_real_root, same_path
 from chef.locations import PLUGIN_ROOT
+from chef.runtimes.hermes import external_slots
 
 SKILLS = ("mission", "slots", "adapter-init", "doctor", "distill")
 PATCH_HEADER = re.compile(r"^(\*\*\* (?:Add File|Update File|Delete File|Move to): )(.+)$", re.MULTILINE)
@@ -93,16 +96,17 @@ def canonical_payload(tool_name, args, session_id, task_id, cwd):
     }
 
 
-def ownership_problem(payload):
+def workspace_policy(payload):
     targets = questions.tool_targets(payload)
     contexts = questions.adapter_contexts(payload, targets, mission)
+    external = any(external_slots.configured(adapter) for _, adapter in contexts)
     for located, adapter in contexts:
         active = mission.read_active(mission.state_dir_of(located.project, adapter))
         if active.corrupt:
-            return "ACTIVE is corrupt; inspect the mission before continuing"
+            return external, "ACTIVE is corrupt; inspect the mission before continuing"
         if active.id and (active.session != payload["session_id"] or active.runtime not in ("", "hermes")):
-            return "this workspace belongs to another active mission session"
-    return ""
+            return external, "this workspace belongs to another active mission session"
+    return external, ""
 
 
 def configuration_problem(located):
@@ -123,6 +127,16 @@ def failed_policy(messages):
     return any(any(marker in message for marker in (
         "오류", "건너뜀", "무시", "확인 실패", "못 찾음", "미설정", "적용하지 않음",
     )) for message in messages)
+
+
+def originating_request(session):
+    try:
+        from gateway.session_context import get_session_env
+    except ImportError:
+        return None
+    if get_session_env("HERMES_SESSION_ID") == session:
+        return get_session_env("HERMES_SESSION_MESSAGE_ID")
+    return None
 
 
 class Bridge:
@@ -173,9 +187,20 @@ class Bridge:
             payload = canonical_payload(tool_name, args, session_id, task_id, cwd)
             payload["han_origin_cwd"] = origin
             located = mission.locate_adapter(payload)
-            problem = configuration_problem(located) or ownership_problem(payload)
+            external, ownership = workspace_policy(payload)
+            problem = configuration_problem(located) or ownership
             if problem:
                 return block(problem)
+            with self.lock:
+                context = self.bindings.get((session_id, task_id), {})
+            if external or context.get("external"):
+                role = payload["tool_input"].get("subagent_type")
+                if tool_name == "chef_delegate" and isinstance(role, str) and role and ":" not in role:
+                    payload["tool_input"]["subagent_type"] = "chef:" + role
+                directive = self.external_tool(context, tool_name, payload, session_id)
+                if directive or (tool_name == "terminal" and mission.MARKER.fullmatch(
+                        payload["tool_input"]["command"].strip())):
+                    return directive
             if located and tool_name in ("delegate_task", "execute_code"):
                 return block("use chef_delegate for configured role workers; native delegation/code execution is unavailable in Chef workspaces")
             if tool_name in ("terminal", "write_file", "patch", "chef_delegate"):
@@ -195,6 +220,37 @@ class Bridge:
             return None
         except Exception:
             return block("guard evaluation failed; execution was blocked")
+
+    @staticmethod
+    def external_tool(context, tool, payload, session):
+        if tool not in ("terminal", "write_file", "patch", "chef_delegate", "delegate_task", "execute_code"):
+            return None
+        if not context.get("external"):
+            return block("select the external slot in this task before running commands or writing")
+        try:
+            slot = external_slots.from_context(context)
+            cwd = payload["cwd"]
+            if not same_path(cwd, slot.cwd) and not inside_real_root(slot.cwd, cwd):
+                return block("external slot working directory escaped the selected workspace")
+            if tool == "terminal":
+                command = payload["tool_input"]["command"]
+                marker = mission.MARKER.fullmatch(command.strip())
+                if marker:
+                    if not same_path(cwd, slot.cwd):
+                        return block("use the selected workspace root for mission markers")
+                    request = originating_request(session) if marker.group(1).lower() == "open" else None
+                    slot.transition(marker, session, request)
+                    return None
+                if mission.contains_marker(command, "Bash"):
+                    return block("run the mission marker alone")
+                slot.check_command(command)
+            slot.check(session)
+            if tool in ("write_file", "patch") and any(
+                    not inside_real_root(slot.state, target) for target in questions.tool_targets(payload)):
+                return block("external slot source writes belong to a delegated worker")
+        except (OSError, RuntimeError, ValueError, UsageError) as exc:
+            return block(str(exc))
+        return None
 
     def slot(self, args, session_id="", task_id="", **_):
         try:
@@ -231,7 +287,15 @@ class Bridge:
                 return json.dumps({"error": directive["message"]}, ensure_ascii=False)
             from chef.runtimes.hermes.workers import delegate
 
-            result = delegate(args, session_id=session_id, task_id=task_id, cwd=cwd)
+            with self.lock:
+                context = self.bindings.get((session_id, task_id), {})
+            if context.get("external"):
+                slot = external_slots.from_context(context)
+                with slot.lock():
+                    slot.check(session_id)
+                    result = delegate(args, session_id=session_id, task_id=task_id, cwd=cwd, external=context)
+            else:
+                result = delegate(args, session_id=session_id, task_id=task_id, cwd=cwd)
             return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)

@@ -367,6 +367,10 @@ def cmd_active(ctx, args):
 
 def cmd_close_stale(ctx, args):
     # 끊긴(마지막 활동이 기준 시간을 넘긴) ACTIVE 만, --force-close-stale 이 있을 때만 닫음. 없으면 미리보기
+    from chef.runtimes.hermes.external_slots import configured
+
+    if configured(ctx.adapter):
+        raise StateError("external slot reservation requires operator recovery")
     active = mission_guard.read_active(ctx.state_dir)
     path = mission_guard.active_path_of(ctx.state_dir)
     if not active.id:

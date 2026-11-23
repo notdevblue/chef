@@ -67,6 +67,33 @@ approval transport remain Hermes/gateway responsibilities; Chef never treats
 silence, expiry, reconnects or worker output as user approval. This plugin does
 not post messages or change Slack/channel routing.
 
+## Externally managed workspaces
+
+For native Hermes, a registry adapter can declare `runtimes.hermes.externalSlots` instead of managed
+`slots`. Register the manager and each workspace as exact roots of the same adapter. In its local
+overlay set `externalSlots.root` to the allowed parent directory, `provider` to an absolute executable
+argv, and `workspaces` to a map from existing Chef slot names to `{path, data?}`. `path` is the existing
+workspace's absolute directory. Optional `data` is an object passed to the provider. The workspace
+must be inside `root`. Names follow the standard Chef slot rules and apply independently of the directory name.
+Optional `protectedCommands` are case-insensitive regular expressions for provider operations that
+the Hermes coordinator and its workers cannot run as shell commands, including through one-time overrides.
+
+The provider runs from the manager with a schema-1 JSON request on stdin. Common fields are `action`,
+`project`, `workspace`, `name`, `stateDir`, `data` and `clean`. Actions are `status` (inventory and
+availability), `acquire` (new reservation), `check` (current reservation) and `release` (release the
+same reservation). `acquire`, `check` and `release` also receive `who` and `key`. The provider must
+verify its workspace identity and enforce the requested clean state. It returns only `{"ok":true}`
+with exit 0 for success. Acquisition must be exclusive, and any release must be atomic with the
+ownership check. Providers should avoid logging identities or returning them in responses.
+
+`chef_slot` checks availability and binds the task cwd. The native mission guard acquires the
+reservation on the standalone `open` marker, using the gateway's originating message ID and Hermes
+session. The `close` marker returns the original reservation after worker completion. Guard state is
+kept outside the workspace in the Hermes profile. Unconfirmed transitions require operator recovery.
+The coordinator and delegated workers check reservation ownership before tool use. This is a
+cooperative reservation. The provider's own workspace rules still apply to tools used outside Chef.
+Managed create, refresh and remove are unavailable for external workspaces.
+
 ## Codex subscription workers
 
 Role work uses `chef_delegate(role="chef:dev-small", prompt="...")`, not Hermes

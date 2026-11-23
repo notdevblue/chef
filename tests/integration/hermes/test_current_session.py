@@ -159,7 +159,7 @@ def test_chef_slot_matches_missing_path_spelling_via_recorded_identity(tmp_path,
         "enabled": True, "vcs": "none", "root": str(slots_root),
         "client": "test-{name}", "names": ["one"], "prepare": []}}
     (folder / "adapter.json").write_text(json.dumps(adapter))
-    missing = tmp_path / "fixture-workspaces" / "sample-slot"
+    missing = tmp_path / "Users" / "sample-user" / "workspaces" / "orchard-slots" / "one"
     registry = hermes_home / "chef/adapters"
     registry.mkdir(parents=True)
     (registry / "one/adapter.json").parent.mkdir(parents=True, exist_ok=True)

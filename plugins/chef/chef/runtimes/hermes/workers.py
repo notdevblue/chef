@@ -11,6 +11,7 @@ from pathlib import Path
 
 from chef.guards import mission as guard
 from chef.infrastructure.configuration import locate, read_adapter
+from chef.infrastructure.errors import UsageError
 from chef.infrastructure.fingerprints import implementation_digest
 from chef.infrastructure.locking import FileLock, process_alive
 from chef.infrastructure.paths import inside_real_root, same_path
@@ -105,6 +106,15 @@ def worker_denial(payload):
     command = str(inputs.get("command") or "") if isinstance(inputs, dict) else ""
     if any(word in command for word in ("han-mission", "chef-mission", "mission_state.py", "mission_entry.py")):
         return "Codex 역할 워커는 미션 소유권·상태를 변경하지 않음"
+    if data.get("external"):
+        from chef.runtimes.hermes.external_slots import from_context
+
+        try:
+            slot = from_context(data["external"])
+            slot.check_command(command)
+            slot.check(data["session"], data["mission"])
+        except (OSError, RuntimeError, ValueError, UsageError) as exc:
+            return f"external slot reservation check failed: {exc}"
     from chef.guards import questions
     targets = questions.tool_targets(payload)
     if command:
@@ -112,6 +122,8 @@ def worker_denial(payload):
         targets.extend(paths + trees)
     for target in targets:
         path = os.path.realpath(os.path.join(payload.get("cwd") or data["cwd"], target))
+        if data.get("external") and not inside_real_root(data["cwd"], path):
+            return "external slot worker write escaped the workspace"
         root = data["state"]
         if same_path(path, root) or inside_real_root(root, path) or inside_real_root(path, root):
             return "미션 상태 파일은 Hermes 코디네이터가 관리함"
@@ -267,7 +279,7 @@ def run_codex(command, prompt, env, timeout):
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def delegate(args, *, session_id, task_id="", cwd):
+def delegate(args, *, session_id, task_id="", cwd, external=None):
     """Called only by the native Hermes tool with trusted session context."""
     if not isinstance(args, dict) or set(args) - {"role", "prompt", "timeout"}:
         raise ValueError("chef_delegate requires role, prompt and optional timeout")
@@ -315,6 +327,8 @@ def delegate(args, *, session_id, task_id="", cwd):
                     "cwd": os.path.realpath(cwd), "state": state, "mission": active.id, "ready": str(ready),
                     "guard_ready": str(guard_ready), "guard": checker,
                     "digest": implementation_digest()}
+            if external is not None:
+                data["external"] = external
             context.write_text(json.dumps(data), encoding="utf-8")
             context.chmod(0o600)
             env = python_environment({**child_env(cwd), WORKER_ENV: str(context)}, cache_root=home / "interpreters")

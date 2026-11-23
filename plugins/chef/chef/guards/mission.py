@@ -746,6 +746,11 @@ def decide(payload):
     if verdict.kind == "mixed":
         outcome.deny = verdict.reason
     elif verdict.kind == "marker":
+        from chef.runtimes.hermes.external_slots import configured
+
+        if configured(adapter):
+            outcome.deny = "external slots require the native Hermes mission guard"
+            return outcome
         if is_grok_subagent(payload):
             outcome.deny = (
                 "Grok 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
