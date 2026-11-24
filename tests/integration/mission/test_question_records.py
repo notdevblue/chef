@@ -75,7 +75,10 @@ def test_recommended_and_alternative_answers_preserve_raw_text_and_explicit_stat
 
 
 def test_partial_answer_withdrawal_and_separate_approval(tmp_path):
-    publish_document(tmp_path, document("confirm-A"))
+    legacy = document("confirm-A")
+    (tmp_path / "questions").mkdir()
+    source_path(tmp_path, "confirm-A.md").write_text(json.dumps(legacy), encoding="utf-8")
+    publish_document(tmp_path, legacy)
     partial = answer(updates=[{"id": "1", "status": "answered", "answer": "권장"}])
     first = answer_document(tmp_path, "confirm-A.md", partial)
     assert summarize_document(first).pending_count == 1
@@ -95,6 +98,8 @@ def test_partial_answer_withdrawal_and_separate_approval(tmp_path):
 def test_render_labels_separate_approval_request_without_changing_original_approval_text(tmp_path):
     record = document("confirm-A")
     record["intro"] = "확인 A 전체 승인: 승인 완료"
+    (tmp_path / "questions").mkdir()
+    source_path(tmp_path, "confirm-A.md").write_text(json.dumps(record), encoding="utf-8")
     publish_document(tmp_path, record)
     payload = answer()
     payload["text"] = "전체 승인: 기존 확인 A 승인 유지"

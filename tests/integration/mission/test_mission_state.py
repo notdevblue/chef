@@ -165,7 +165,12 @@ class Mission:
         return record
 
     def publish_question(self, *args, **kwargs):
-        return mission_state.question_records.publish_document(self.folder, self.question_record(*args, **kwargs))
+        record = self.question_record(*args, **kwargs)
+        if record['id'].startswith('confirm-A'):
+            source = mission_state.question_records.source_path(self.folder, record['id'] + '.md')
+            source.parent.mkdir(exist_ok=True)
+            source.write_text(json.dumps(record), encoding='utf-8')
+        return mission_state.question_records.publish_document(self.folder, record)
 
     def json_input(self, name, value):
         path = self.root / name
@@ -969,6 +974,8 @@ def test_question_preflight_matches_publish_checks_without_lock_or_side_effects(
 
 def test_question_cli_publish_answer_and_render_preserve_verbatim_answer_and_headers(opened, monkeypatch):
     record = opened.question_record("confirm-A.md", approval="pending")
+    record.update(schema=2, blocks=[{'id': 'scope', 'type': 'list', 'title': 'Scope',
+                                    'items': [{'id': 'books', 'label': 'Books', 'text': 'Saved books.'}]}])
     draft = opened.json_input("draft.json", record)
     header = (opened.folder / "mission.md").read_bytes()
     locks = []

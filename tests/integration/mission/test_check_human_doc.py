@@ -33,6 +33,15 @@ def write_record(path, record):
     return path
 
 
+def publish_legacy_record(folder, record):
+    # These archive fixtures represent documents already saved by schema 1 releases.
+    records = check_human_doc.question_records
+    source = records.source_path(folder, record['id'] + '.md')
+    source.parent.mkdir(parents=True, exist_ok=True)
+    write_record(source, record)
+    return records.publish_document(folder, record)
+
+
 def migration(tmp_path):
     raw = "\ufeff# 원문\r\n\r\n" + SCHEMA_TABLE.replace("\n", "\r\n")
     raw += "\r\n\r\n```md\r\n## 답\r\n예시 답은 이관 대상 아님\r\n```\r\n\r\n## 답변 (2026-10-20)\r\n\r\n"
@@ -256,7 +265,7 @@ def test_damaged_json_is_reported_as_cli_failure_without_traceback(tmp_path, cap
 
 def test_revision_can_retire_old_design_only_after_actual_archive_verification(tmp_path):
     record = document()
-    check_human_doc.question_records.publish_document(tmp_path, record)
+    publish_legacy_record(tmp_path, record)
     source = tmp_path / "questions/confirm-A.json"
     revised = copy.deepcopy(record)
     revised.update(revision=2, body="## Current shape\n\n" + CURRENT_TABLE)
@@ -272,7 +281,7 @@ def test_revision_can_retire_old_design_only_after_actual_archive_verification(t
 def test_archive_cannot_exempt_loss_when_content_identity_revision_or_path_is_wrong(tmp_path, change):
     records = check_human_doc.question_records
     original = document()
-    records.publish_document(tmp_path, original)
+    publish_legacy_record(tmp_path, original)
     source = write_record(tmp_path / "original.json", original)
     revised = copy.deepcopy(original)
     revised.update(revision=2, body=CURRENT_TABLE)
@@ -308,7 +317,7 @@ def test_archive_cannot_exempt_loss_when_content_identity_revision_or_path_is_wr
 def test_explicit_archive_checks_unpublished_draft_and_prior_revision_snapshot(tmp_path, capsys):
     records = check_human_doc.question_records
     original = document()
-    records.publish_document(tmp_path, original)
+    publish_legacy_record(tmp_path, original)
     old_source = write_record(tmp_path / "original.json", original)
     revised = copy.deepcopy(original)
     revised.update(revision=2, body=CURRENT_TABLE)
@@ -327,7 +336,7 @@ def test_explicit_archive_checks_unpublished_draft_and_prior_revision_snapshot(t
 def test_verified_archive_does_not_allow_removing_every_current_design_table(tmp_path, body):
     records = check_human_doc.question_records
     original = document()
-    records.publish_document(tmp_path, original)
+    publish_legacy_record(tmp_path, original)
     revised = copy.deepcopy(original)
     revised.update(revision=2, body=body)
     target = write_record(tmp_path / "draft.json", revised)
@@ -350,7 +359,7 @@ def test_legacy_schema_migration_compares_actual_current_field_definitions(tmp_p
 def test_verified_archive_requires_fields_in_current_body_not_only_details(tmp_path, location):
     records = check_human_doc.question_records
     original = document()
-    records.publish_document(tmp_path, original)
+    publish_legacy_record(tmp_path, original)
     revised = copy.deepcopy(original)
     revised.update(revision=2, body="")
     revised[location] = [{"id": "shape", "type": "fields", "fields": [{"name": "Color", "type": "string"}]}]

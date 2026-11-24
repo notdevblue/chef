@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "ask-palette",
   "revision": 1,
   "title": "어떤 팔레트를 사용할까요?",
@@ -10,8 +10,18 @@
       "title": "팔레트 선택",
       "body": "각 선택의 표시 효과를 비교해 주세요.",
       "options": [
-        {"id": "blue", "label": "권장: 파란색", "description": "차가운 색조", "impact": "차분한 표시"},
-        {"id": "amber", "label": "대안: 호박색", "description": "따뜻한 색조", "impact": "강조 표시"}
+        {
+          "id": "blue",
+          "label": "권장: 파란색",
+          "description": "차가운 색조",
+          "impact": "차분한 표시"
+        },
+        {
+          "id": "amber",
+          "label": "대안: 호박색",
+          "description": "따뜻한 색조",
+          "impact": "강조 표시"
+        }
       ],
       "status": "pending",
       "answer": ""
@@ -21,27 +31,57 @@
   "blocks": [
     {
       "id": "scope",
-      "type": "paragraph",
+      "type": "list",
       "title": "적용 범위",
-      "text": "팔레트 선택은 가상 표시 도구의 색조에만 적용합니다."
+      "items": [
+        {
+          "id": "palette",
+          "label": "팔레트",
+          "text": "가상 표시 도구의 색조에 적용합니다."
+        }
+      ]
     },
     {
       "id": "palette",
       "type": "fields",
       "title": "팔레트 필드",
       "fields": [
-        {"name": "Id", "type": "string", "key": "primary", "description": "팔레트 식별자"},
-        {"name": "Label", "type": "string", "description": "표시 이름"}
+        {
+          "name": "Id",
+          "type": "string",
+          "key": "primary",
+          "description": "팔레트 식별자"
+        },
+        {
+          "name": "Label",
+          "type": "string",
+          "description": "표시 이름"
+        }
       ]
     },
     {
       "id": "preview",
       "type": "table",
       "title": "표시 예",
-      "columns": ["팔레트", "표시"],
-      "rows": [["Blue", "차분함"], ["Amber", "강조"]]
+      "columns": [
+        "팔레트",
+        "표시"
+      ],
+      "rows": [
+        [
+          "Blue",
+          "차분함"
+        ],
+        [
+          "Amber",
+          "강조"
+        ]
+      ]
     }
   ],
-  "approval": {"status": "none", "reason": ""},
+  "approval": {
+    "status": "none",
+    "reason": ""
+  },
   "answers": []
 }

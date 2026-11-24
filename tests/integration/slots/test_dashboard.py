@@ -137,6 +137,11 @@ def write_question(folder, name, title, items, approval="none", answer="", intro
     expected_revision = ""
     if previous:
         expected_revision = previous["revision"]
+    if not previous and record['id'].startswith('confirm-A'):
+        # Existing schema 1 documents remain readable in dashboards after upgrade.
+        source = question_records.source_path(folder, name)
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(json.dumps(record), encoding='utf-8')
     question_records.publish_document(folder, record, expected_revision)
     reason = ""
     if approval == "pending":
@@ -2022,3 +2027,22 @@ def test_page_functions_share_one_realpath_memo_per_request(monkeypatch):
     slots.request_realpath(".")
     slots.request_realpath(".")
     assert len(calls) == 4
+
+
+def test_schema_two_document_is_served_with_separate_rules_and_choice_lines(world):
+    folder = world.mission("slot1", "reading-list")
+    original = write_question(folder, "confirm-A2.md", "Reading list", [("Storage", "pending")])
+    upgraded = question_records.patch_document(original, {
+        "set": {"schema": 2, "revision": original["revision"] + 1},
+        "upsert_blocks": [{"id": "validation", "type": "rules", "title": "Validation", "items": [
+            {"id": "unique", "label": "Unique ID", "when": "An ID is duplicated", "result": "Reject publication."}]}],
+    }, editorial=True)
+    question_records.publish_document(folder, upgraded, original["revision"], editorial=True)
+    world.share(folder, "confirm-A2.md")
+    status, text = world.get(dashboard.view_url(folder / "confirm-A2.md"))
+    assert status == 200
+    embedded = text.split('id="source"', 1)[1].split('>', 1)[1].split('</script>', 1)[0]
+    source = json.loads(embedded)
+    assert source == question_records.render_document(upgraded)
+    assert 'id="validation.unique"' in source
+    assert "An ID is duplicated" in source and "Reject publication." in source

@@ -19,7 +19,7 @@
 끝난 정형 문항의 현재 선택은 selected에서 생성한다. 자유답의 현재 유효 조건은 작성자가 문서 `body` 또는 `blocks`에 간결히 쓴다. 다른 절에서 명확하면 별도 `## 현재 결과`로 반복하지 않는다. 답 원문·옛 선택지·폐기 표·변경 일지는 생성 이력과 기존 개정 보관으로 연결한다.
 예시의 사실·선택지·승인을 새 질문으로 가져오지 않는다.
 
-정본 `schema: 1`의 필드는 다음과 같다.
+정본의 공통 필드는 다음과 같다. schema 1은 기존 문서 호환 형식이며 새 초안은 schema 2를 사용한다.
 
 | 필드 | 값과 의미 |
 | --- | --- |
@@ -304,3 +304,47 @@ Markdown에만 남은 답은 원문을 보존하고 실제 답·대상 개정을
 `question answer <문서.md> --input <reply.json>`으로 원문과 `updates`를 기록한다. 누락된 문항·설계까지 복구해야 하면 위 `question restore` 절차를 따른다.
 JSON이 맞고 생성본만 잘못됐으면 `question render`, 새 질문 개정이면 `question publish`,
 현재 채팅에서 새로 받은 답이면 `question answer`를 사용하고 마지막에 `question check`를 실행한다.
+
+## Schema 2 작성 입력
+
+새 확인 A(`confirm-A`, `confirm-A1` 등)는 schema 2로 발행한다. [설계 초안](templates/design-confirm.json) 또는 [질문 초안](templates/question.json)을 복사하고 `question patch`로 수정한다. schema 1 문서의 읽기·답 기록·복원·기존 개정은 계속 지원한다. 기존 문서를 전환하려면 `set.schema: 2`와 전체 새 blocks를 한 patch에 명시한다. schema 2에서 schema 1로의 개정은 거부한다. 실행 중인 문서를 자동 전환하지 않는다.
+
+| 입력 | 제한 |
+| --- | --- |
+| 문서·절·문항 제목, 문서·문항·선택 ID | 80자 |
+| 항목명·선택 이름·열 이름 | 40자 |
+| 서두·문항 설명·선택 이유·영향·승인 요청 사유·표 셀·필드 설명 | 각각 160자 |
+| 한 항목의 조건·결과 또는 동작·실패 동작 합계 | 320자 |
+
+공백을 포함한 Python Unicode 문자열 길이로 계산한다. 제어문자·줄바꿈·블록 Markdown·HTML·산문 안의 링크는 거부한다. 제목과 산문을 늘려 계약을 숨기지 않고 항목을 추가한다. 독립된 조건 목록은 각 조건이 160자 이하다. 빈 선택 설명과 빈 표 셀은 허용한다. 사용자 답 원문과 답에서 받은 승인 조건은 이 제한의 대상에서 제외하고 이력에 그대로 보존한다. 현재 화면에는 답에서 기록한 승인 조건의 원문 링크와 승인 상태를 표시한다.
+
+`body`는 빈 문자열이고 `blocks`는 비어 있지 않은 배열이다. `detail_blocks`를 생성하는 경우에도 같은 입력 규격을 사용한다. 각 블록은 `id`, `type`, `title`과 아래 내용을 갖는다.
+
+| type | 내용 |
+| --- | --- |
+| list | `items`의 각 객체에 `id`, `label`, `text` |
+| steps | list와 같은 필드, 선택 `failure` |
+| rules | `items`의 각 객체에 `id`, `label`, `result`. 선택 `when` 또는 `conditions`, `exception_of`, `refs` |
+| table | `columns`, `rows`. 선택 `row_ids`는 각 행에 하나씩 고유 ID |
+| fields | 기존 `fields` 정의. `ref`는 동일 출력 문서 안의 필드·항목 ID |
+| literal | `format`과 원문 `value`. 형식은 identifier/formula/code/link |
+
+`conditions`는 `{ "mode": "all", "items": ["조건 하나", "조건 둘"] }` 형태다. `all`은 모두 충족, `any`는 하나 이상 충족이며 임의 중첩은 지원하지 않는다. 더 복잡한 조건은 항목을 나누고 `refs`로 연결한다. 빈 when의 의미가 모호해지지 않도록 when은 생략하거나 비어 있지 않은 조건을 쓴다.
+
+규칙·단계·설명 항목의 참조 ID는 `blockId.itemId`, 표 행은 `blockId.rowId`, 필드는 `blockId.fieldName`이다. 예외는 `exception_of`에 원래 규칙 ID를 명시하고 적용 조건을 함께 쓴다. 예외의 대상은 규칙이며 자기 참조·예외 순환은 거부한다. 여러 규칙에 우선순위가 필요하면 rules 블록의 `priority`에 모든 항목 ID를 한 번씩 우선순위 순서대로 쓴다. 본문과 상세 간 교차 앵커는 거부하고 별도 link 블록으로 연결한다.
+
+literal의 identifier/formula/link는 2,048자, code는 8,192자가 상한이다. identifier는 공백 없는 기술 식별자이며 링크는 http(s) 또는 상대 경로다. 식별자·수식·코드는 원문을 보존해 줄바꿈 가능한 코드로 출력하고 링크는 제목으로 표시한다. 산문은 list/rules/steps로 작성한다. 코드와 수식의 의미는 기존 설계 검토에서 확인한다.
+
+항목 하나의 수정은 아래처럼 한다. 기존 항목의 순서와 나머지 항목은 유지하며 새 ID는 뒤에 추가한다. 삭제는 `remove_entries: [{"block": "validation", "id": "unique"}]`다. priority가 있는 블록에서 항목 집합을 바꾸면 upsert_blocks로 priority도 같은 patch에서 갱신한다.
+
+```json
+{
+  "upsert_entries": [
+    {"block": "validation", "entry": {"id": "unique", "label": "식별자 중복", "result": "중복이면 게시를 거부합니다."}}
+  ]
+}
+```
+
+patch·preview·preflight·publish는 동일한 작성 입력 규격을 사용한다. 작성 입력 오류는 경로·원인·길이를 모아서 반환하고 정본·생성본에 쓰지 않는다. 잘못된 일부 항목을 자동 삭제하거나 문장을 자동 축약하지 않는다. 현재 개정·원문 바이트·답 이력·동시 수정 보호는 기존 발행 경로를 유지한다.
+
+schema 2의 선택 이름·설명·영향은 별도 줄로 출력하며 현재 선택도 같은 배치를 사용한다. 표의 긴 조건은 본문 rules/list 항목으로 옮기고 `refs`와 표의 `row_ids` 또는 fields 이름으로 연결한다. 명세·승인에 필요한 조건과 예외는 현재 본문에 둔다. 표·필드·literal은 editorial 개정에서 원문을 보호하며 목록 산문 수정은 기존 독립 의미 검토를 따른다.

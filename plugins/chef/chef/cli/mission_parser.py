@@ -89,7 +89,7 @@ def build_parser(handlers=None):
     patch.description = "제한된 draft 변경 JSON을 적용해 stdout JSON 출력. 정본·이력·revision 자동 변경 없음."
     patch.add_argument("--input", required=True, help="유효한 질문 draft JSON")
     patch.add_argument(
-        "--changes", required=True, help="set/upsert/remove/reopen_items/request_approval 변경 JSON"
+        "--changes", required=True, help="set/upsert/remove/upsert_entries/remove_entries/reopen_items/request_approval 변경 JSON"
     )
     patch.add_argument(
         "--editorial", action="store_true", help="기존 답·선택·승인 범위를 보존하는 문체 patch"

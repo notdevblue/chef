@@ -1,0 +1,118 @@
+{
+  "schema": 2,
+  "id": "confirm-A",
+  "revision": 1,
+  "title": "독서 목록 저장 설계를 승인할까요?",
+  "intro": "독서 목록의 저장 필드와 검증 동작을 확인합니다.",
+  "items": [
+    {
+      "id": "color",
+      "title": "팔레트 선택",
+      "body": "각 선택의 표시 효과를 비교해 주세요.",
+      "options": [
+        {
+          "id": "blue",
+          "label": "권장: 파란색",
+          "description": "차가운 색조",
+          "impact": "차분한 표시"
+        },
+        {
+          "id": "amber",
+          "label": "대안: 호박색",
+          "description": "따뜻한 색조",
+          "impact": "강조 표시"
+        }
+      ],
+      "status": "pending",
+      "answer": ""
+    }
+  ],
+  "body": "",
+  "blocks": [
+    {
+      "id": "scope",
+      "type": "list",
+      "title": "적용 범위",
+      "items": [
+        {
+          "id": "palette",
+          "label": "팔레트",
+          "text": "가상 표시 도구의 색조에 적용합니다."
+        }
+      ]
+    },
+    {
+      "id": "palette",
+      "type": "fields",
+      "title": "팔레트 필드",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "string",
+          "key": "primary",
+          "description": "팔레트 식별자"
+        },
+        {
+          "name": "Label",
+          "type": "string",
+          "description": "표시 이름"
+        }
+      ]
+    },
+    {
+      "id": "preview",
+      "type": "table",
+      "title": "표시 예",
+      "columns": [
+        "팔레트",
+        "표시"
+      ],
+      "rows": [
+        [
+          "Blue",
+          "차분함"
+        ],
+        [
+          "Amber",
+          "강조"
+        ]
+      ]
+    },
+    {
+      "id": "validation",
+      "type": "rules",
+      "title": "게시 전 검증",
+      "items": [
+        {
+          "id": "unique",
+          "label": "식별자 중복",
+          "when": "식별자가 다른 행과 중복될 때",
+          "result": "게시를 거부합니다."
+        }
+      ]
+    },
+    {
+      "id": "save",
+      "type": "steps",
+      "title": "저장 순서",
+      "items": [
+        {
+          "id": "load",
+          "label": "조회",
+          "text": "현재 독서 상태를 읽습니다."
+        },
+        {
+          "id": "write",
+          "label": "기록",
+          "text": "새 독서 상태를 저장합니다.",
+          "failure": "기존 상태를 유지합니다."
+        }
+      ]
+    }
+  ],
+  "approval": {
+    "status": "pending",
+    "reason": "독서 목록 저장 설계 전체를 확인해 주세요."
+  },
+  "answers": []
+}

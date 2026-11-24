@@ -426,7 +426,7 @@ PoC 명세와의 일치로 쓴다.
    - 작성자는 `<plugin-root>/skills/mission/references/human-writing.md`에서 해당 양식과 예시만 읽는다. 기존 Markdown 양식은 본문 문체·순서·승인 범위의 참고로 쓴다.
      파견할 때 원문·최신 답과 상태·문서 id·개정·JSON 초안·출력·상세 위치와 공통 규칙·작성 안내·선택한 양식·예시의 실제 경로를 넘긴다.
      작성자가 전체 본문·상세를 고정 원문·최신 답·승인·규칙·양식·예시에 함께 대조해 명확한 결함을 모두 고친 뒤 반환한다. 대조 경로·결과·남은 판단만 짧게 덧붙인다. 수정도 작성 담당에게 맡기며 코디네이터가 사후 윤문하지 않는다.
-   - 질문마다 작성 담당 하나가 정형 JSON 초안과 짧은 근거를 쓴다. 선택지는 구조화하고, 같은 계약·표를 body와 details에 중복하지 않는다. 생성 Markdown은 CLI에 맡긴다. 코디네이터가 검토를 마친 초안을 발행한다.
+   - 질문마다 작성 담당 하나가 schema 2 정형 JSON 초안과 짧은 근거를 쓴다. 새 확인 A는 `templates/design-confirm.json`의 list/rules/steps/table/fields/literal 입력을 사용하며 자유 본문은 비운다. 기존 schema 1 문서는 자동 전환하지 않는다. 선택지는 구조화하고, 같은 계약·표를 body와 details에 중복하지 않는다. 생성 Markdown은 CLI에 맡긴다. 코디네이터가 검토를 마친 초안을 발행한다.
      보고서(`report.md`, `details/report.md`)는 하네스가 서브에이전트의 보고서 `.md` 작성을 거부하므로, 작성자가 완성 본문
      (또는 절별 교체 내용)을 돌려주고 코디네이터가 받은 그대로 반영한다. 검사·검토에서 나온 수정은 작성자에게 다시 맡긴다.
    - 상세 양식은 `<plugin-root>/skills/mission/references/details-template.md`다. 같은 id·개정으로 연결하고, 상세를 루트의 `ask-1-details.md`처럼 두지 않는다.

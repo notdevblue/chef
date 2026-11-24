@@ -22,6 +22,7 @@ from chef.questions.blocks import (
     validate_options,
 )
 from chef.questions.summary import QuestionItem, QuestionSummary, markdown_lines
+from chef.questions.authored import approval_from_answer, render_choice, validate_authored
 
 DOCUMENT_ID = re.compile(r"(?:ask|confirm)-[A-Za-z0-9][A-Za-z0-9_.-]*")
 RECORD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -155,14 +156,17 @@ def validate_answer(value):
 
 def validate_document(record):
     validate_fields(record, DOCUMENT_FIELDS, ("legacy_markdown", "blocks", "detail_blocks"), "질문")
-    if type(record.get("schema")) is not int or record["schema"] != 1:
-        raise QuestionRecordError("질문 schema는 1이어야 함")
+    if type(record.get("schema")) is not int or record["schema"] not in (1, 2):
+        raise QuestionRecordError("질문 schema는 1 또는 2이어야 함")
+    if record["schema"] == 2:
+        validate_authored(record)
     validate_identifier(record.get("id"), "문서 id", DOCUMENT_ID)
     validate_revision(record.get("revision"))
     required_text(record.get("title"), "title", True)
     required_text(record.get("intro"), "intro")
     required_text(record.get("body"), "body")
-    validate_blocks(record)
+    if record["schema"] == 1:
+        validate_blocks(record)
     validate_approval(record.get("approval"))
     items = record.get("items")
     if not isinstance(items, list) or not items:
@@ -283,7 +287,10 @@ def render_document(record, *, legacy_layout=False, tabular_choices=False):
         f"별도 승인 요청: {APPROVAL_LABELS[approval['status']]}",
     ]
     if approval["reason"]:
-        sections.append(approval["reason"])
+        if record["schema"] == 2 and approval_from_answer(record):
+            sections.append(f"[현재 승인 조건 원문](details/history/{record['id']}.md)")
+        else:
+            sections.append(approval["reason"])
     if record["intro"]:
         sections.append(record["intro"])
     if summary.pending_count or legacy_layout:
@@ -299,16 +306,22 @@ def render_document(record, *, legacy_layout=False, tabular_choices=False):
             sections.append(item["body"])
         if old_choices and "options" in item:
             sections.append(render_options(item["options"]))
+        elif record["schema"] == 2 and "options" in item:
+            sections.extend(render_choice(option) for option in item["options"])
         elif "options" in item and (choices := unmatched_options(item)):
             sections.append("\n".join(choices))
         if old_choices or "options" not in item:
             sections.append(f"- 상태: {STATUS_LABELS[item['status']]}")
-        if item["answer"]:
+        if item["answer"] and record["schema"] == 1:
             sections.extend(["답 내용:", item["answer"]])
     selected = [item for item in record["items"] if "selected" in item]
     if selected:
         sections.append("## 현재 선택")
-        if old_choices:
+        if record["schema"] == 2:
+            for item in selected:
+                option = next(option for option in item["options"] if option["id"] == item["selected"])
+                sections.extend(["### " + item["title"], render_choice(option)])
+        elif old_choices:
             sections.extend(render_selection(item) for item in selected)
         else:
             choices = []
@@ -317,7 +330,7 @@ def render_document(record, *, legacy_layout=False, tabular_choices=False):
                 choices.append(f"- {item['title']} · {option_prose(option)}")
             sections.append("\n".join(choices))
     if "blocks" in record:
-        sections.append(render_blocks(record["blocks"]))
+        sections.append(render_blocks(record["blocks"], record["schema"]))
     elif record["body"]:
         sections.append(record["body"])
     if record.get("detail_blocks"):
@@ -357,9 +370,9 @@ def render_record_history(record, include_evidence=True):
             sections.append(render_selection(item))
     sections.append(record["body"])
     if "blocks" in record:
-        sections.append(render_blocks(record["blocks"]))
+        sections.append(render_blocks(record["blocks"], record["schema"]))
     if record.get("detail_blocks"):
-        sections.extend(["### 상세", render_blocks(record["detail_blocks"])])
+        sections.extend(["### 상세", render_blocks(record["detail_blocks"], record["schema"])])
     if include_evidence:
         sections.append(render_history_evidence(record["answers"], [record.get("legacy_markdown", "")]))
     return "\n\n".join(sections) + "\n"
@@ -761,7 +774,7 @@ def restore_document(folder, input_path, source, expected_revision, expected_sha
 def render_detail_document(record):
     return (
         f"<!-- chef:question-detail:{record['id']}:v1 -->\n\n# {record['title']} — 상세\n\n"
-        f"[현재 문서](../{record['id']}.md)\n\n" + render_blocks(record["detail_blocks"]) + "\n"
+        f"[현재 문서](../{record['id']}.md)\n\n" + render_blocks(record["detail_blocks"], record["schema"]) + "\n"
     )
 
 
@@ -886,6 +899,8 @@ def render_saved_document(folder, name):
 
 
 def validate_publication(current, record, editorial):
+    if current["schema"] == 2 and record["schema"] != 2:
+        raise QuestionRecordError("schema 2 문서는 schema 1로 되돌릴 수 없음")
     current_items = {item["id"]: item for item in current["items"]}
     items = {item["id"]: item for item in record["items"]}
     if editorial:
@@ -893,12 +908,12 @@ def validate_publication(current, record, editorial):
             before = [
                 {key: value for key, value in block.items() if key != "title"}
                 for block in current.get(field, [])
-                if block["type"] != "paragraph"
+                if block["type"] in ("table", "fields", "literal")
             ]
             after = [
                 {key: value for key, value in block.items() if key != "title"}
                 for block in record.get(field, [])
-                if block["type"] != "paragraph"
+                if block["type"] in ("table", "fields", "literal")
             ]
             if before != after:
                 raise QuestionRecordError(f"editorial 발행은 {field} table/fields 계약을 변경할 수 없음")
@@ -993,6 +1008,13 @@ def publication_plan(folder, record, expected_revision="", editorial=False):
                     )
                 )
         else:
+            if record["schema"] == 1 and re.fullmatch(r"confirm-A[0-9]*", record["id"]) and not markdown_path.exists():
+                raise QuestionRecordError("새 확인 A는 schema 2 정형 초안으로 작성하세요")
+            if record["schema"] == 2 and (
+                record["answers"] or record["approval"]["status"] == "complete"
+                or any(item["status"] != "pending" or item["answer"] for item in record["items"])
+            ):
+                raise QuestionRecordError("새 schema 2 문서는 미답 상태로 발행하고 답·승인은 answer로 기록하세요")
             if editorial:
                 raise QuestionRecordError("editorial 발행에는 기존 질문이 필요함")
             if expected_revision != "":
@@ -1070,12 +1092,16 @@ def patch_document(record, changes, editorial=False):
             "remove_blocks",
             "upsert_detail_blocks",
             "remove_detail_blocks",
+            "upsert_entries",
+            "remove_entries",
             "request_approval",
         ),
         "patch",
     )
     if "set" in changes:
-        validate_fields(changes["set"], (), ("revision", "title", "intro", "body"), "patch set")
+        validate_fields(changes["set"], (), ("schema", "revision", "title", "intro", "body"), "patch set")
+        if record["schema"] == 2 and changes["set"].get("schema", 2) != 2:
+            raise QuestionRecordError("schema 2 문서는 schema 1로 되돌릴 수 없음")
         record.update(copy.deepcopy(changes["set"]))
     reopened = changes.get("reopen_items", [])
     if not isinstance(reopened, list):
@@ -1133,6 +1159,32 @@ def patch_document(record, changes, editorial=False):
         record[target] = [value for value in values if value["id"] not in removed]
         if target == "blocks" and not record[target]:
             del record[target]
+    entry_operations = set()
+    for operation in ("upsert_entries", "remove_entries"):
+        operations = changes.get(operation, [])
+        if not isinstance(operations, list):
+            raise QuestionRecordError(f"{operation} must be an array")
+        for change in operations:
+            field = "entry" if operation == "upsert_entries" else "id"
+            validate_fields(change, ("block", field), label=operation)
+            block = next((value for value in record.get("blocks", []) if value["id"] == change["block"]), None)
+            if record["schema"] != 2 or block is None or block["type"] not in ("list", "rules", "steps"):
+                raise QuestionRecordError("항목 수정에는 schema 2 본문 list/rules/steps 블록이 필요함")
+            identifier = change[field].get("id") if field == "entry" and isinstance(change[field], dict) else change[field]
+            validate_identifier(identifier, "entry id")
+            key = (change["block"], identifier)
+            if key in entry_operations:
+                raise QuestionRecordError(f"중복 항목 수정: {key}")
+            entry_operations.add(key)
+            indexed = {entry["id"]: i for i, entry in enumerate(block["items"])}
+            if operation == "remove_entries":
+                if identifier not in indexed:
+                    raise QuestionRecordError(f"제거할 항목 없음: {key}")
+                block["items"].pop(indexed[identifier])
+            elif identifier in indexed:
+                block["items"][indexed[identifier]] = copy.deepcopy(change[field])
+            else:
+                block["items"].append(copy.deepcopy(change[field]))
     identifiers = set()
     items = {item["id"]: item for item in record["items"]}
     for identifier in reopened:

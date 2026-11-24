@@ -154,7 +154,11 @@ def table(columns, rows):
     return "\n".join(lines)
 
 
-def render_blocks(blocks):
+def render_blocks(blocks, schema=1):
+    if schema == 2:
+        from chef.questions.authored import render_authored_block
+
+        return "\n\n".join(render_authored_block(block) for block in blocks)
     sections = []
     for block in blocks:
         sections.append(f'<a id="{block["id"]}"></a>')
