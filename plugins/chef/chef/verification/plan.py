@@ -1,5 +1,6 @@
 """verification / plan."""
 
+import copy
 import os
 import platform
 import re
@@ -16,6 +17,12 @@ from chef.verification.contracts import (
     digest,
     file_hash,
     read_json,
+)
+from chef.verification.plan_policy import (
+    coordinator_eligibility,
+    coordinator_tool_identity,
+    plan_warnings,
+    require_coordinator_eligible,
 )
 
 
@@ -464,6 +471,8 @@ def policy_settings(project, plan, settings=None):
                 for command in settings["readiness"][grade]
             ]
         }
+    if "coordinatorChecks" in settings:
+        policy["coordinatorChecks"] = copy.deepcopy(settings["coordinatorChecks"])
     return policy
 
 
@@ -472,10 +481,13 @@ def policy_runtime(project, plan, settings=None):
     if not policy:
         return {}
     configured = verification_settings(project, plan, policy)
-    return {
+    identity = {
         "settings": policy,
         "readiness": [command_runtime(project, command) for command in configured["readiness"]],
     }
+    if "coordinatorChecks" in policy:
+        identity["coordinatorTools"] = coordinator_tool_identity(project, policy["coordinatorChecks"])
+    return identity
 
 
 def guarded_runtime(project, command, guard):
@@ -504,6 +516,8 @@ def preflight(project, plan, guard, settings=None, require_matches=False):
         "commandCount": 0,
         "readinessCount": 0,
         "resources": [],
+        "warnings": [],
+        "executionPolicy": {"eligible": False, "route": "verifier", "reasons": []},
         "failure": {},
     }
     try:
@@ -520,6 +534,7 @@ def preflight(project, plan, guard, settings=None, require_matches=False):
         if not isinstance(grades, list) or not all(isinstance(grade, str) and grade for grade in grades):
             raise VerificationError("verify.grades 는 등급 문자열 배열이어야 함", "plan_invalid")
         validate_plan(project, plan, grades, require_matches)
+        result["warnings"] = plan_warnings(project, plan)
         reference_identity(project, plan)
         configured = verification_settings(project, plan, settings)
         for command in [*plan["commands"], *configured["readiness"]]:
@@ -529,6 +544,7 @@ def preflight(project, plan, guard, settings=None, require_matches=False):
             commandCount=len(plan["commands"]),
             readinessCount=len(configured["readiness"]),
             resources=configured["resources"],
+            executionPolicy=coordinator_eligibility(project, plan, settings),
         )
     except (VerificationError, OSError, ValueError, TypeError, RuntimeError) as error:
         category = getattr(error, "category", "preflight")

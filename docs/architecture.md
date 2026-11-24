@@ -10,7 +10,7 @@ Claude·Codex·Grok·Hermes의 등록 형식과 도구 차이는 런타임 경�
 | --- | --- |
 | `plugins/chef/chef/mission/` | 미션 상태, 단위 작업, 실행 관리와 통계 |
 | `plugins/chef/chef/questions/` | 질문 정본, 문서 렌더링과 답 이력 |
-| `plugins/chef/chef/verification/` | 검증 계획, 실행, 증거, 재사용과 리뷰 |
+| `plugins/chef/chef/verification/` | 검증 계획·정책, 실행, 증거, 입력 lease, 결과 재사용과 리뷰 |
 | `plugins/chef/chef/slots/` | 슬롯 설정, 작업 흐름과 실행 |
 | `plugins/chef/chef/dashboard/` | 읽기 전용 조회, 화면과 HTTP 응답 |
 | `plugins/chef/chef/infrastructure/` | 설정 검색, 파일 저장, 경로, 잠금과 버전 관리 |
@@ -71,6 +71,12 @@ gate는 빈 파일에서도 잠글 수 있다. 잠그기 전에 초기 바이트
 명시적으로 셸을 호출할 때만 명령 문자열을 셸 문법으로 분석한다. 검증 가드는 `guard.argv(argv, cwd)`를
 제공하고 기존 문자열 콜백도 호환한다. 실행 시 실제 cwd와 환경변수 PWD를 일치시킨다.
 이 계약은 Claude·Codex·Grok·Hermes가 사용하는 공유 검증 경로에 적용한다.
+
+검증 실행과 지원되는 리뷰 명령은 계획 입력 경로의 cooperative lease를 등록하고, 공유 쓰기 가드는 지원되는 파일 도구·알려진
+리터럴 쓰기 대상과 Rename 경로의 사용 직전에 충돌을 검사한다. 경로 별칭 목록은 lease 등록 때 계산한다. lease 저장소와 경로
+인덱스는 중첩 깊이·크기에 제한이 있으며 상태를 안전하게 확인할 수 없거나 한도를 넘으면 fail closed한다. 이는 OS 파일 잠금이나
+임의 프로세스 쓰기 차단이 아니므로, 해석할 수 없는 동적 shell 경로·미계측 쓰기·분리된 후손 프로세스는 보장하지 않으며 미계측
+변경은 실행 뒤 입력 hash로 감지한다. 같은 단위의 검증·계약 변경·완료 처리는 단위 실행 gate로 직렬화한다.
 
 슬롯 런처는 런타임 CLI 인자와 터미널 백엔드를 분리한다. GUI가 없는 Hermes는 현재 작업의
 `chef_slot`을 사용한다. 다른 런타임의 터미널 실행은 사용 가능한 백엔드를 먼저 확인한다.

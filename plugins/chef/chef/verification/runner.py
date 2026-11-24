@@ -10,13 +10,14 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
 
 from chef.infrastructure import locking
+from chef.verification import execution
+from chef.verification.execution import tracked_subprocess as subprocess
 from chef.verification import references as reference_bundle
 from chef.verification.contracts import (
     COPY_BUDGET,
@@ -110,6 +111,14 @@ from chef.verification.reviews import (
 
 
 class ResourceLock(locking.FileLock):
+    def __exit__(self, *args):
+        if not getattr(self, "retain_marker", False):
+            return super().__exit__(*args)
+        try:
+            self.release_gate()
+        finally:
+            self.thread_lock.release()
+
     def reclaim_if_stale(self):
         try:
             pid, started = self.read_holder()
@@ -124,13 +133,14 @@ class ResourceLock(locking.FileLock):
 @contextlib.contextmanager
 def resource_locks(settings):
     with contextlib.ExitStack() as locks:
+        holders = []
         try:
             for name in settings["resources"]:
                 path = Path(settings["resourceDir"]) / f"{name}.lock"
-                locks.enter_context(ResourceLock(str(path), name, timeout=0))
+                holders.append(locks.enter_context(ResourceLock(str(path), name, timeout=0)))
         except locking.LockBusy as error:
             raise VerificationError(str(error), "resource_busy") from error
-        yield
+        yield holders
 
 
 def child_environment(cwd=None):
@@ -195,17 +205,78 @@ def record_failure(project, folder, unit, error, category="plan_invalid"):
     )
 
 
-def run(project, folder, unit, plan, guard, force=False, settings=None):
-    checked = preflight(project, plan, guard, settings)
-    if checked["status"] == "fail":
-        failure = checked["failure"]
-        return record_failure(project, folder, unit, failure["message"], failure["category"])
+def run(project, folder, unit, plan, guard, force=False, settings=None, *, unit_lock_held=False):
     try:
+        lock = contextlib.nullcontext() if unit_lock_held else execution.unit_execution_lock(folder, unit)
+        with lock:
+            return _run_owned(project, folder, unit, plan, guard, force, settings)
+    except execution.ExecutionBusy as error:
+        # An in-flight result is a reference to its owner, never evidence for a
+        # changed plan/runtime/input set. No failure receipt overwrites that run.
+        error.record["sameRequest"] = False
+        try:
+            error.record["sameRequest"] = error.record.get("requestIdentity") == run_request_identity(
+                project, unit, plan, settings
+            )
+        except (VerificationError, OSError, TypeError, ValueError, KeyError):
+            pass
+        raise
+
+
+def run_request_identity(project, unit, plan, settings):
+    return digest({"project": str(Path(project).resolve()), "unit": unit, "plan": plan,
+                   "settings": settings, "snapshot": snapshot(project, plan["inputs"]),
+                   "runtime": runtime_key(project, plan, settings)})
+
+
+def _run_owned(project, folder, unit, plan, guard, force, settings):
+    try:
+        if not isinstance(plan, dict):
+            raise VerificationError("검증 계획은 객체여야 함", "plan_invalid")
         configured = verification_settings(project, plan, settings)
-        with resource_locks(configured):
-            return _run_locked(project, folder, unit, plan, guard, force, configured["readiness"], settings)
+        with resource_locks(configured) as resources:
+            inputs = plan.get("inputs")
+            if not isinstance(inputs, list) or not inputs:
+                raise VerificationError("inputs 에 검증에 영향을 주는 파일·폴더를 지정할 것", "plan_invalid")
+            targets = [project_path(project, value) for value in inputs]
+            with execution.input_lease(targets, label=f"verify:{unit}") as lease:
+                checked = preflight(project, plan, guard, settings)
+                if checked["status"] == "fail":
+                    failure = checked["failure"]
+                    return record_failure(project, folder, unit, failure["message"], failure["category"])
+                job = execution.reserve_job(
+                    folder, "verify", {"unit": unit}, restart_completed=True,
+                    request_identity=run_request_identity(project, unit, plan, settings),
+                    unit=unit,
+                )
+                if not job["acquired"]:
+                    raise execution.ExecutionBusy(job)
+                try:
+                    with execution.track_commands(folder, job, lease):
+                        result = _run_locked(project, folder, unit, plan, guard, force, configured["readiness"], settings)
+                    execution.finish_job(folder, job["key"], job["token"], {
+                        "receipt": str(result[0]), "receiptHash": file_hash(result[0]),
+                        "status": result[1]["status"], "requestIdentity": job["requestIdentity"],
+                    })
+                    return result
+                except BaseException:
+                    # A failed launch or interrupted call must not leave a live
+                    # same-process reservation that blocks a later retry.
+                    current = execution.active_verification(folder, unit)
+                    if current and current["token"] == job["token"]:
+                        execution.finish_job(folder, job["key"], job["token"], release=True)
+                    raise
+                finally:
+                    current = execution.active_verification(folder, unit)
+                    if current and (current.get("launchPending") is True or execution.child_alive(current)):
+                        for holder in resources:
+                            holder.retain_marker = True
+    except execution.ExecutionBusy:
+        raise
     except VerificationError as error:
         return record_failure(project, folder, unit, error, error.category)
+    except locking.LockBusy as error:
+        return record_failure(project, folder, unit, error, "execution_busy")
     except OSError as error:
         return record_failure(project, folder, unit, error, "preflight")
 

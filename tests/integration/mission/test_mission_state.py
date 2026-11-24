@@ -1284,7 +1284,8 @@ def test_verify_passes_adapter_settings(opened, monkeypatch):
     opened.add_unit()
     plan_path = verification_input(opened)
     settings_seen = []
-    def run(project, folder, unit, plan, guard, force, settings=None):
+    def run(project, folder, unit, plan, guard, force, settings=None, *, unit_lock_held=False):
+        assert unit_lock_held is True
         settings_seen.append(settings)
         guard("python -V")
         return "receipt.json", {"status": "pass", "grade": "pytest-pass", "log": "output.log", "error": ""}, False

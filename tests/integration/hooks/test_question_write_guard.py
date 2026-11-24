@@ -56,6 +56,16 @@ def test_question_scan_requires_valid_participating_session(project, monkeypatch
     assert bool(scans) == participating
 
 
+@pytest.mark.parametrize("command", ["Rename-Item src/old.txt -NewName new.txt",
+                                      "Rename-Item -LiteralPath src/old.txt -NewName new.txt",
+                                      "ren src/old.txt new.txt"])
+def test_shell_rename_new_name_uses_source_directory(project, command):
+    targets, _ = question_write_guard.shell_targets(command, "PowerShell", str(project), mission_guard)
+    assert str(project / "src/new.txt") in targets
+    assert str(project / "src/old.txt") in targets
+    assert str(project / "new.txt") not in targets
+
+
 @pytest.mark.parametrize("target", ["state/mission/details/ask-1.md", "state/mission/details/history/notes.md", "state/mission/details/history/ask-1-original.md.txt", "state/mission/draft.json", "state/mission/reply.json", "state/mission/report.md", "src/app.py"])
 def test_other_project_writes_allowed_without_active(project, target):
     (project / "state/ACTIVE").unlink()

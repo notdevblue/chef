@@ -110,8 +110,14 @@ from chef.mission.storage import (
     write_table,
     write_text,
 )
+from chef.mission import evidence as file_evidence
+from chef.mission import unit_contracts
+from chef.mission import review_dispatch
+from chef.mission import review_worker
 from chef.questions import records as question_records
 from chef.runtimes.grok import transcript as grok_transcript
+from chef.verification import execution
+from chef.verification import plan as plan_policy
 from chef.verification import references as reference_bundle
 from chef.verification import runner as verification
 
@@ -244,16 +250,17 @@ def cmd_unit_add(ctx, args):
 
 def cmd_unit_set(ctx, args):
     require_folder(ctx)
-    if args.status == "doing":
-        require_question_integrity(ctx.folder)
     path = ctx.path(UNITS_FILE)
     rows = read_table(path, UNIT_HEADER)
     row = require_unit(rows, clean(args.id))
+    old = dict(row)
     changed = []
+    supplied = False
     for name in EDITABLE_FIELDS:
         value = getattr(args, name)
         if value is None:
             continue
+        supplied = True
         cleaned = clean(value)
         if not cleaned:
             hint = f" ({NONE_CELL} 로 비움 표시)" if name in ("human", "after") else ""
@@ -262,15 +269,23 @@ def cmd_unit_set(ctx, args):
             cleaned = parse_timebox(cleaned)
         if name == "after":
             cleaned = normalize_after(cleaned, rows, row["id"])
-        row[name] = cleaned
-        changed.append(name)
+        if row[name] != cleaned:
+            row[name] = cleaned
+            changed.append(name)
+    brief_changed = bool(changed)
     if args.unit is not None:
-        row["unit"] = require_text("--unit", args.unit)
-        changed.append(f"unit={row['unit']}")
+        supplied = True
+        value = require_text("--unit", args.unit)
+        if row["unit"] != value:
+            row["unit"] = value
+            changed.append(f"unit={value}")
     if changed and row["status"] == "done" and args.status != "doing":
         raise StateError("완료한 단위의 브리프를 바꾸려면 --status doing 으로 재개할 것")
+    if args.status:
+        supplied = True
     if args.status and args.status != row["status"]:
         if args.status == "doing":
+            require_question_integrity(ctx.folder)
             pending = []
             for dependency in [d for d in row["after"].split(",") if d != NONE_CELL]:
                 other = find_row(rows, "id", dependency)
@@ -284,9 +299,22 @@ def cmd_unit_set(ctx, args):
         row["status"] = args.status
         changed.append(f"status={args.status}")
     if not changed:
+        if supplied:
+            return [f"{row['id']} 변경 없음 (no-op)"]
         raise StateError("바꿀 칸 없음: --status, --unit, --goal 같은 옵션을 줄 것")
-    write_table(path, UNIT_HEADER, rows)
-    return [f"{row['id']} 갱신: {', '.join(changed)}"]
+    event = None
+    with execution.unit_execution_lock(ctx.folder, row["id"]):
+        if brief_changed:
+            contract, event = unit_contracts.prepare_change(
+                ctx.folder, old, row, mission_guard.now_iso(), read_table(ctx.path(LEDGER_FILE), LEDGER_HEADER)
+            )
+            unit_contracts.commit_change(ctx.folder, row, contract, lambda: write_table(path, UNIT_HEADER, rows))
+        else:
+            write_table(path, UNIT_HEADER, rows)
+    lines = [f"{row['id']} 갱신: {', '.join(changed)}"]
+    if event and event["reverificationNeeded"]:
+        lines.append(json.dumps({"unit": row["id"], "contractChange": event}, ensure_ascii=False))
+    return lines
 
 
 def cmd_unit_list(ctx, args):
@@ -311,7 +339,10 @@ def cmd_ledger_record(ctx, args):
         raise StateError(
             f"grade 허용 값: {', '.join(grades)} (어댑터 verify.grades + {NEEDS_HUMAN}): {grade}"
         )
-    evidence = require_text("--evidence", args.evidence)
+    if getattr(args, "evidence_input", ""):
+        evidence = file_evidence.capture(ctx.project, args.evidence_input, clean(args.evidence))
+    else:
+        evidence = require_text("--evidence", args.evidence)
     files = clean(args.files) or NONE_CELL
     append_row(
         ctx.path(LEDGER_FILE),
@@ -319,6 +350,14 @@ def cmd_ledger_record(ctx, args):
         [mission_guard.now_iso(), clean(args.unit), args.status, grade, evidence, files],
     )
     return [f"ledger {clean(args.unit)} {args.status} {grade}"]
+
+
+def cmd_ledger_audit(ctx, args):
+    require_folder(ctx)
+    result = file_evidence.audit(ctx.project, read_table(ctx.path(LEDGER_FILE), LEDGER_HEADER),
+                                 args.limit, args.unit)
+    args.exit_code = FAILED if result["status"] == "fail" else OK
+    return [json.dumps(result, ensure_ascii=False)]
 
 
 def cmd_decision_add(ctx, args):
@@ -443,6 +482,10 @@ def cmd_status(ctx, args):
             stuck.append(f"{name} 기록 확인 필요")
         elif question.pending:
             stuck.append(f"{name} 답 없음")
+    for row in rows:
+        contract = unit_contracts.status(ctx.folder, row)
+        if contract and contract["reverificationNeeded"]:
+            stuck.append(f"{row['id']} reverification needed (contract v{contract['current']['version']})")
     active = mission_guard.read_active(ctx.state_dir)
     if active.id == ctx.mission_id and not active.corrupt:
         state = mission_guard.staleness(ctx.state_dir, active, mission_guard.stale_hours_of(ctx.adapter))
@@ -493,6 +536,9 @@ def verification_plan(ctx, args):
         except reference_bundle.ReferenceError as error:
             raise verification.VerificationError(str(error), "plan_invalid") from error
     plan["unitBrief"] = {name: row[name] for name in EDITABLE_FIELDS}
+    contract = unit_contracts.binding(ctx.folder, row)
+    if contract:
+        plan["unitContract"] = contract
     return plan
 
 
@@ -555,7 +601,8 @@ def cmd_schema(ctx, args):
 
 def cmd_reference_snapshot(ctx, args):
     bundle = reference_bundle.snapshot(
-        ctx.project, args.source, args.output, args.revision, args.section, args.expect_sha256
+        ctx.project, args.source, args.output, args.revision, args.section, args.expect_sha256,
+        freeze=getattr(args, "freeze", False)
     )
     return [
         json.dumps(
@@ -573,7 +620,8 @@ def cmd_reference_check(ctx, args):
 
 
 def cmd_reference_show(ctx, args):
-    return [json.dumps(reference_bundle.load(ctx.project, args.input), ensure_ascii=False)]
+    bundle = reference_bundle.load(ctx.project, args.input)
+    return [json.dumps({**bundle, "readSources": reference_bundle.read_sources(bundle)}, ensure_ascii=False)]
 
 
 def cmd_brief(ctx, args):
@@ -586,10 +634,15 @@ def cmd_brief(ctx, args):
         **{name: row[name] for name in EDITABLE_FIELDS},
         "approvalSources": [ctx.path("mission.md")],
     }
+    contract = unit_contracts.status(ctx.folder, row)
+    if contract:
+        result["contract"] = contract
     for name in question_records.document_names(ctx.folder):
         result["approvalSources"].append(str(question_records.source_path(ctx.folder, name)))
     if args.references:
-        result["references"] = reference_bundle.require_current(ctx.project, args.references)["sources"]
+        bundle = reference_bundle.require_current(ctx.project, args.references)
+        result["references"] = bundle["sources"]
+        result["readSources"] = reference_bundle.read_sources(bundle)
     return [json.dumps(result, ensure_ascii=False)]
 
 
@@ -616,24 +669,30 @@ def cmd_handoff(ctx, args):
 def cmd_verify(ctx, args):
     require_folder(ctx)
     require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
-    try:
-        plan = verification_plan(ctx, args)
-    except verification.VerificationError as error:
-        category = error.category
-        if category == "result_invalid":
-            category = "plan_invalid"
-        verification.record_failure(ctx.project, ctx.folder, args.id, error, category)
-        raise
+    with execution.unit_execution_lock(ctx.folder, args.id):
+        try:
+            plan = verification_plan(ctx, args)
+            if getattr(args, "coordinator", False):
+                plan_policy.require_coordinator_eligible(ctx.project, plan, settings=ctx.adapter.get("verify"))
+        except verification.VerificationError as error:
+            if error.category == "coordinator_ineligible":
+                raise
+            category = error.category
+            if category == "result_invalid":
+                category = "plan_invalid"
+            verification.record_failure(ctx.project, ctx.folder, args.id, error, category)
+            raise
 
-    path, receipt, reused = verification.run(
-        ctx.project,
-        ctx.folder,
-        args.id,
-        plan,
-        verification_guard(ctx),
-        args.force,
-        settings=ctx.adapter.get("verify"),
-    )
+        path, receipt, reused = verification.run(
+            ctx.project,
+            ctx.folder,
+            args.id,
+            plan,
+            verification_guard(ctx),
+            args.force or getattr(args, "coordinator", False),
+            settings=ctx.adapter.get("verify"),
+            unit_lock_held=True,
+        )
     args.exit_code = FAILED
     if receipt["status"] == "pass":
         args.exit_code = OK
@@ -647,6 +706,27 @@ def cmd_verify(ctx, args):
         f"검증 {receipt['status']} {receipt['grade']} {mode} | {path}",
         log,
     ]
+
+
+def cmd_review_run(ctx, args):
+    require_folder(ctx)
+    plan = verification_plan(ctx, args)
+    scope = review_dispatch.request_array(ctx.project, args.scope)
+    findings = review_dispatch.request_array(ctx.project, args.findings)
+    argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+    result = review_dispatch.run(
+        ctx.project, ctx.folder, args.id, plan, ctx.adapter.get("verify") or {}, verification_guard(ctx),
+        expected_snapshot=args.snapshot, purpose=args.purpose, scope=scope, findings=findings,
+        argv=argv, plan_path=args.plan, timeout=args.timeout_seconds, plan_loader=lambda: verification_plan(ctx, args),
+        adapter=ctx.adapter, runtime_name=ctx.runtime,
+    )
+    args.exit_code = FAILED if (result.get("result") or {}).get("status") == "failed" else OK
+    return [json.dumps(result, ensure_ascii=False)]
+
+
+def cmd_review_worker(_ctx, args):
+    review_worker.run_from_file(args.input)
+    return []
 
 
 def cmd_review(ctx, args):
@@ -697,6 +777,12 @@ def cmd_review_scope(ctx, args):
 
 def cmd_complete(ctx, args):
     require_folder(ctx)
+    with execution.unit_execution_lock(ctx.folder, args.id):
+        return complete_unit(ctx, args)
+
+
+def complete_unit(ctx, args):
+    require_folder(ctx)
     require_question_integrity(ctx.folder)
     rows = read_table(ctx.path(UNITS_FILE), UNIT_HEADER)
     row = require_unit(rows, args.id)
@@ -710,6 +796,9 @@ def cmd_complete(ctx, args):
     verification.validate_latest(ctx.folder, args.id, args.receipt)
     if receipt.get("plan", {}).get("unitBrief") != {name: row[name] for name in EDITABLE_FIELDS}:
         raise StateError("검증 이후 브리프·완료 조건이 바뀜")
+    contract = unit_contracts.binding(ctx.folder, row)
+    if contract and receipt.get("plan", {}).get("unitContract") != contract:
+        raise StateError("검증 이후 unit contract version 이 바뀜; reverification needed")
     if receipt.get("grade") not in (ctx.adapter.get("verify") or {}).get("grades", []):
         raise StateError("검증 등급이 현재 어댑터와 다름")
     verification.validate_review(ctx.folder, args.id, args.receipt, args.review)
@@ -832,7 +921,7 @@ def main(argv=None, runtime="claude"):
             args = build_parser().parse_args(argv)
         except SystemExit:
             return OK
-        if args.handler in (cmd_inspect, cmd_question_patch):
+        if args.handler in (cmd_inspect, cmd_question_patch, cmd_review_worker):
             for line in args.handler({}, args):
                 print(line)
             return OK
@@ -869,6 +958,7 @@ def main(argv=None, runtime="claude"):
         readonly = args.handler in (
             cmd_status,
             cmd_context,
+            cmd_ledger_audit,
             cmd_transcripts,
             cmd_unit_list,
             cmd_review_scope,
@@ -892,7 +982,7 @@ def main(argv=None, runtime="claude"):
             lock_name = f"{mission_id}-verify-{args.id}"
         lock = (
             contextlib.nullcontext()
-            if readonly
+            if readonly or args.handler in (cmd_verify, cmd_review_run)
             else infrastructure_locking.FileLock(
                 os.path.join(state_dir, ".locks", f"{lock_name}.lock"),
                 "미션 상태",
@@ -901,6 +991,10 @@ def main(argv=None, runtime="claude"):
         )
         with lock:
             lines = args.handler(Context(adapter, state_dir, mission_id, runtime, located.project), args)
+    except execution.ExecutionBusy as error:
+        print(json.dumps({"schema": 1, "status": "running", "category": error.category,
+                          "execution": error.record}, ensure_ascii=False))
+        return FAILED
     except (
         StateError,
         OSError,

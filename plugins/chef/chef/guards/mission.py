@@ -129,6 +129,7 @@ from chef.guards.shell import (
     unquote,
 )
 from chef.runtimes.hooks import is_grok_subagent, normalize_payload
+from chef.verification import execution
 
 
 def active_path_of(state_dir):
@@ -654,6 +655,104 @@ def decide_write(payload):
     return outcome
 
 
+def execution_write_reason(payload):
+    """Check only mutation paths statically resolved by supported tool syntax.
+
+    This hook is a pre-use check, not an OS lock or a reservation spanning the
+    tool invocation. Dynamic/uninstrumented writers still need the runner's
+    post-execution hash checks.
+    """
+    if payload.get("tool_name") not in (*question_write_guard.STRUCTURED_TOOLS, *question_write_guard.PATCH_TOOLS, *GUARDED_TOOLS):
+        return ""
+    try:
+        if not execution.has_input_leases():
+            return ""
+    except (execution.VerificationError, execution.locking.LockBusy, OSError, ValueError) as error:
+        return f"execution input protection: {error}"
+    cwd = payload.get("cwd") or os.getcwd()
+    targets = question_write_guard.tool_targets(payload)
+    if targets:
+        targets = [question_write_guard.absolute_path(target, cwd) for target in targets]
+    elif payload.get("tool_name") in GUARDED_TOOLS:
+        command = (payload.get("tool_input") or {}).get("command")
+        if not isinstance(command, str) or len(command) > 128 * 1024:
+            return ""
+        tool_name = payload["tool_name"]
+        literal_paths = set()
+        fragment_cwd = cwd
+        # The shared shell extractor resolves literal cd and constant variable
+        # assignments. Do not invent a cwd after an unresolved directory change.
+        for fragment in question_write_guard.ordered_fragments(command, tool_name, sys.modules[__name__]):
+            raw_tokens = question_write_guard.SHELL_TOKEN.findall(fragment)
+            tokens = [unquote(token) for token in raw_tokens]
+            if not tokens:
+                continue
+            name = tokens[0].casefold()
+            if name in ("pushd", "popd", "push-location", "pop-location"):
+                return ""
+            if name in ("cd", "chdir", "set-location", "sl"):
+                arguments = [token for token in tokens[1:] if not token.startswith("-") and token.casefold() != "/d"]
+                if not arguments or any(char in arguments[0] for char in "$`*?[]%~"):
+                    return ""
+            fragment_cwd = question_write_guard.changed_directory(tokens, fragment_cwd)
+            folded = [token.casefold() for token in tokens]
+            for index, raw in enumerate(raw_tokens):
+                single_quoted = raw.startswith("'") and raw.endswith("'")
+                double_quoted = raw.startswith('"') and raw.endswith('"') and not any(char in raw for char in "$`")
+                literal_flag = index > 0 and folded[index - 1] == "-literalpath" and (single_quoted or not any(char in raw for char in "$`"))
+                quoted_path = (single_quoted or double_quoted) and tool_name != "PowerShell"
+                if quoted_path or literal_flag:
+                    literal_paths.add(question_write_guard.absolute_path(tokens[index], fragment_cwd))
+            if question_write_guard.python_consumer(fragment, sys.modules[__name__]) and "-c" in tokens:
+                index = tokens.index("-c") + 1
+                if index < len(tokens):
+                    python_paths, python_trees = question_write_guard.python_targets(tokens[index])
+                    literal_paths.update(question_write_guard.absolute_path(path, fragment_cwd)
+                                         for path in [*python_paths, *python_trees])
+            if name in ("rename-item", "ren"):
+                source = ""
+                for flag in ("-literalpath", "-path"):
+                    if flag in folded and folded.index(flag) + 1 < len(tokens):
+                        source = tokens[folded.index(flag) + 1]
+                        break
+                values = question_write_guard.positional_arguments(tokens[1:])
+                source = source or (values[0] if values else "")
+                new_name = ""
+                if "-newname" in folded and folded.index("-newname") + 1 < len(tokens):
+                    new_name = tokens[folded.index("-newname") + 1]
+                elif len(values) > 1:
+                    new_name = values[-1]
+                if source and new_name and os.path.basename(new_name) == new_name:
+                    source_path = question_write_guard.absolute_path(source, fragment_cwd)
+                    destination = os.path.join(os.path.dirname(source_path), new_name)
+                    source_literal = source_path in literal_paths or not any(char in source for char in "$`*?[]%~")
+                    name_literal = question_write_guard.absolute_path(new_name, fragment_cwd) in literal_paths or not any(char in new_name for char in "$`%~")
+                    if source_literal and name_literal:
+                        literal_paths.add(destination)
+        targets, subtrees = question_write_guard.shell_targets(command, tool_name, cwd, sys.modules[__name__])
+        targets.extend(subtrees)
+        resolved_targets = []
+        for target in targets:
+            if target in literal_paths:
+                resolved_targets.append(target)
+            elif not any(char in target for char in "$`%~"):
+                wildcard = next((index for index, char in enumerate(target) if char in "*?[]"), None)
+                if wildcard is None:
+                    resolved_targets.append(target)
+                else:
+                    # A static glob may write any descendant of its literal
+                    # parent. Protect that prefix without guessing its matches.
+                    resolved_targets.append(os.path.dirname(target[:wildcard]) or cwd)
+        targets = resolved_targets
+    if not targets:
+        return ""
+    try:
+        execution.require_mutation_allowed(targets)
+    except (execution.VerificationError, execution.locking.LockBusy, OSError, ValueError) as error:
+        return f"execution input protection: {error}"
+    return ""
+
+
 def decide(payload):
     payload = normalize_payload(payload)
     if payload.get("han_hermes_worker"):
@@ -663,6 +762,9 @@ def decide(payload):
             return Outcome(deny=denied)
     payload = question_write_guard.resolved_payload(payload)
     outcome = Outcome()
+    outcome.deny = execution_write_reason(payload)
+    if outcome.deny:
+        return outcome
     try:
         outcome.deny = question_write_guard.question_write_reason(payload, sys.modules[__name__])
     except GuardOff as e:

@@ -130,18 +130,19 @@ python "<mission-state>" <mission-state-runtime> <명령> [인자]
 | `init [--tier S|M|L] [--force-tier] [--goal]` | §1 미션 폴더 만들기(S는 `--force-tier` 없이 거부, 티어 없으면 경고) |
 | `mission set [--stage] [--confirm A=승인]… [--state] [--poc <경로>]` | 단계·확인·상태·PoC 진입 파일 바꾸기 |
 | `unit add <id> --goal --files --done --verify --timebox --forbid [--human] [--after]` | §4 마일스톤 추가 |
-| `unit set <id> [--status] [--unit] [칸]` / `unit list` | §5 진행 상태·브리프. done은 complete만 허용 |
-| `ledger record <unit> --status --grade --evidence [--files]` | §5 판정 기록 |
+| `unit set <id> [--status] [--unit] [칸]` / `unit list` | §5 진행 상태·브리프. done은 complete만 허용. 브리프 계약이 바뀌면 버전을 올리고 재검증 필요를 표시 |
+| `ledger record <unit> --status --grade --evidence [--files] [--evidence-input <json>]` / `ledger audit [--unit <id>] [--limit 1..100]` | §5 판정·파일 증거 기록 / 출력 제한형 읽기 전용 감사(기본 한도 20) |
 | `decision add --what --chosen --why --affects [--fixes Dn]` | `[~]` 결정, 앞 기록 정정 |
 | `status` | 세 줄 요약(마일스톤 수·최근 판정·걸린 것) |
 | `context` | 재개용 요약: 현재 단위·최근 판정·최근 결정·승인 원본 위치 |
 | `schema` | adapter의 허용 열거형·검증 등급·리뷰 상태(clean, findings, closed-low) 조회(ACTIVE 불필요) |
-| `reference snapshot --source <파일>… --output <묶음.json> [--expect-sha256 <해시>]` | 원문 경로·해시 고정. 출력은 프로젝트 안 상대 경로. 기존 묶음 갱신은 직전 `output.sha256` 필수 |
+| `reference snapshot --source <파일>… --output <묶음.json> [--expect-sha256 <해시>] [--freeze]` | 원문 경로·해시 고정. `--freeze`는 검증 가능한 사본을 보관. 출력은 프로젝트 안 상대 경로. 기존 묶음 갱신은 직전 `output.sha256` 필수 |
 | `reference check --input <묶음.json>` / `reference show --input <묶음.json>` | 참조 변경·누락 검사 / 참조 포인터 조회 |
 | `brief <id> [--references <묶음.json>]` | 단위 브리프·승인 원문 위치·검사한 참조 포인터를 읽기 전용으로 출력 |
 | `handoff <id> --summary <결과> --detail <상세> [--evidence <근거>]…` | 기존 상세·증거 파일을 해시와 함께 읽기 전용 반환. 완료·승인 상태는 바꾸지 않음 |
-| `preflight <id> --plan <json>` | 명령 실행 없이 계획·입력·실행 준비·참조 검사 |
-| `verify <id> --plan <json> [--force]` | 검증 실행·결과 수집, 유효한 같은 입력 결과 재사용 |
+| `preflight <id> --plan <json>` | 명령 실행 없이 계획·입력·실행 준비·참조 검사. 실행 경로 정책과 경고를 함께 출력 |
+| `verify <id> --plan <json> [--force] [--coordinator]` | 검증 실행·결과 수집, 유효한 같은 입력 결과 재사용. `--coordinator`는 매번 새로 실행하며 어댑터의 명시 허용 계획만 받음 |
+| `review-run <id> --plan <json> --snapshot <sha256> --purpose <text> --scope <배열JSON> --findings <배열JSON> [--timeout-seconds 1..3600] -- <argv…>` | 현재 계획 입력 snapshot에 결부한 idempotent 리뷰 요청(기본 시간 제한 600초). 중복 요청은 재파견하지 않음. 실행 완료는 clean 리뷰 판정이 아님 |
 | `review-scope <id> --plan <json>` | 직전 리뷰 이후 바뀐 입력 파일과 파일별 diff 경로(최신 리뷰 기록의 사본 기준, `review-start`를 썼으면 그 시작 시점 사본 대비, 새 파일 포함) |
 | `review-start <id> --plan <json>` | 리뷰 파견 직전 입력 snapshot 기록. 리뷰 중 바뀐 파일은 다음 `review-scope` 범위로 넘어감 |
 | `review <id> --receipt <json> --evidence <파일> --reviewer <이름> --kind poc\|unit\|integration --status clean\|findings\|closed-low` | 독립 리뷰 근거와 검증 입력 상태 연결. `closed-low`는 Low만 남았을 때 코디네이터가 diff를 확인해 닫는 기록 |
@@ -266,6 +267,14 @@ PoC 명세와의 일치로 쓴다.
 | `started` | `doing`으로 바꾼 시각 |
 | `status` | `todo` / `doing` / `done` / `held` |
 
+`unit set`은 정규화된 유효 브리프 값이 같으면 no-op으로 끝나고 TSV나 sidecar를 쓰지 않는다. 브리프 계약이 실제로 바뀌면
+`contracts/<unit>.json` sidecar에 old/new TSV hash를 가진 전이 journal과 계약 버전·이전 identity 이력을 원자 저장한다. 읽기 전용 조회는
+현재 TSV 행의 hash로 이전 또는 새 committed view를 선택해 journal을 쓰지 않고 복구한다. 다음 실제 변경이 journal을 정상 정리한다.
+기존 receipt·최신 ledger pass는 이력으로 유지되며,
+응답의 `contractChange`가 새 계약 identity와 `reverificationNeeded`를 보여 주며 `brief`·`status`도 재검증 대기 상태를 드러낸다.
+새 `verify`는 해당 계약 버전에 결부되고,
+`complete`는 예전 버전의 receipt를 거부한다. 계약을 수정했다가 원래 값으로 되돌려도 버전은 되돌아가지 않으므로 다시 검증한다.
+
 같이 할 것:
 
 - **파일 배분**: VCS에서 이미 열려 있는 파일(`adapter.md`의 명령)과 독점 락 파일을 피한다.
@@ -289,7 +298,7 @@ PoC 명세와의 일치로 쓴다.
 
 `M1`을 먼저 끝까지 완료한다. 그 뒤 이번 턴에 조건이 맞는 구현 단위를 모두 골라 구현을 한 번에 파견한다. 조건은 `after`가 모두 `done`이고, 승인된 계약이 고정되어 있고, `.cs`·`.meta`·생성물 파일 소유와 공유 자원 소유가 서로 겹치지 않는 것이다. 아래 1–2는 그 집합에 대해 같은 턴에 한다.
 
-검증은 단위마다 verifier 하나다. 검증 자원이 서로 다르면 구현이 돌아온 단위부터 검증을 병렬로 맡긴다. 같은 검증 자원(공유 Unity, `adapter.verify.resources`의 같은 이름)을 쓰는 단위만 관련 구현이 모두 돌아온 뒤 한 명에게 모은다. 4–5는 그 단위의 검증이 끝나는 대로 진행한다.
+검증은 단위마다 한 경로로 실행한다. `preflight`의 `executionPolicy`가 코디네이터 실행을 명시적으로 허용한 전체 계획만 직접 실행하고, 그 밖에는 verifier 하나에게 맡긴다. 검증 자원이 서로 다르면 구현이 돌아온 단위부터 검증을 병렬로 맡긴다. 같은 검증 자원(공유 Unity, `adapter.verify.resources`의 같은 이름)을 쓰는 단위만 관련 구현이 모두 돌아온 뒤 한 verifier에게 모은다. 4–5는 그 단위의 검증이 끝나는 대로 진행한다.
 
 에디터는 검증·에셋 임포트가 필요할 때만 쓴다. 조사·계획·서버 작업·리뷰·사람 답 대기 동안 상시 실행하지 않는다.
 시작·종료는 코디네이터가 `adapter.md`의 에디터 수명 절차로 맡는다. 구현 에이전트가 Refresh 등이 필요하면 코디네이터에게 요청한다.
@@ -312,7 +321,7 @@ PoC 명세와의 일치로 쓴다.
    파견 역할의 부분 반환·실패·턴 상한은 done이나 사용자 승인 요청이 아니다. 코디네이터가 근거와 현재 상태로 원인을 진단하고
    승인 범위 안의 수정과 남은 범위를 새 브리프로 파견한다. 리뷰 3라운드·timebox 상한과 실제 멈춤 조건은 유지한다.
 3. **검증 파견** — 브리프의 타깃 명령·입력·환경과 `referenceBundle`로 계획 JSON을 한 번 만들고
-   `preflight <id> --plan …`을 먼저 실행한다. 통과 뒤 그 단위의 `roles.verify` 하나에 `verify <id> --plan …` 실행과 결과 수집을 맡긴다. `roles.verify` 설정이 없으면 런타임 계약의 기본 검증 역할을 쓴다.
+   `preflight <id> --plan …`을 먼저 실행한다. `executionPolicy`가 coordinator 경로를 허용한 계획은 코디네이터가 명시적으로 `verify <id> --plan … --coordinator`를 실행할 수 있다. 그 외에는 그 단위의 `roles.verify` 하나에 `verify <id> --plan …` 실행과 결과 수집을 맡긴다. `roles.verify` 설정이 없으면 런타임 계약의 기본 검증 역할을 쓴다.
    검증 자원이 다른 단위는 구현이 돌아오는 대로 각각 파견한다. 같은 자원을 쓰는 단위만 그 구현이 모두 돌아온 뒤 verifier 한 명에게 모은다.
    - 검증 역할·모델은 런타임 계약을 따른다. 필수 역할·모델을 지정할 수 없으면 미확인으로 반환하며 구현 역할로 대신하지 않는다.
    - Unity Refresh·컴파일·EditMode·Play 순서와 입력 동결은 `<plugin-root>/skills/mission/references/verification-workflow.md`를 따른다.

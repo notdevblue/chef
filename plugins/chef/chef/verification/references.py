@@ -5,7 +5,8 @@ import re
 import tempfile
 from pathlib import Path
 
-from chef.locations import PLUGIN_ROOT
+from chef.infrastructure.locking import FileLock
+from chef.infrastructure.paths import normalize_path
 
 
 class ReferenceError(ValueError):
@@ -24,7 +25,7 @@ def text_value(value, label):
 
 def resolve_path(project, value, external=False):
     text_value(value, "path")
-    raw = value.replace("\\", "/")
+    raw = value.replace("\\", "/") if os.name == "nt" else value
     if ".." in raw.split("/") or ":" in raw[2:] or (":" in raw and not re.match(r"^[A-Za-z]:/", raw)):
         raise ReferenceError(f"path 형식 오류: {value}")
     root = Path(project).resolve()
@@ -67,7 +68,44 @@ def validate_destination(project, output, expected_sha256):
         raise ReferenceError("--expect-sha256 대상 reference 파일 없음")
 
 
-def snapshot(project, sources, output, revision="", section="", expected_sha256=""):
+def snapshot(project, sources, output, revision="", section="", expected_sha256="", freeze=False):
+    destination = resolve_path(project, output)
+    # Keep CAS serialized across CLI/API callers without adding files to source trees.
+    key = hashlib.sha256(normalize_path(destination).encode("utf-8")).hexdigest()
+    lock = Path(tempfile.gettempdir()) / "chef-reference-locks" / f"{key}.lock"
+    with FileLock(lock, "reference snapshot", timeout=2):
+        return _snapshot(project, sources, output, revision, section, expected_sha256, freeze)
+
+
+def frozen_copy(project, destination, pointer, source):
+    relative = destination.parent.relative_to(Path(project).resolve()) / ".reference-objects" / "sha256" / pointer["sha256"]
+    target = resolve_path(project, relative.as_posix())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = ""
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent, delete=False) as stream:
+            temporary = stream.name
+            copied_hash = hashlib.sha256()
+            with source.open("rb") as original:
+                for chunk in iter(lambda: original.read(1024 * 1024), b""):
+                    stream.write(chunk)
+                    copied_hash.update(chunk)
+        if copied_hash.hexdigest() != pointer["sha256"]:
+            raise ReferenceError(f"source 가 snapshot 중 바뀜: {pointer['path']}")
+        try:
+            # Publish only absent objects. Existing content-addressed objects are never replaced.
+            os.link(temporary, target)
+        except FileExistsError:
+            pass
+        if file_pointer(project, relative.as_posix())["sha256"] != pointer["sha256"]:
+            raise ReferenceError(f"frozen object hash 불일치: {relative.as_posix()}")
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+    return {"path": relative.as_posix(), "sha256": pointer["sha256"]}
+
+
+def _snapshot(project, sources, output, revision="", section="", expected_sha256="", freeze=False):
     if not sources:
         raise ReferenceError("--source 파일을 하나 이상 지정할 것")
     destination = resolve_path(project, output)
@@ -88,7 +126,10 @@ def snapshot(project, sources, output, revision="", section="", expected_sha256=
         if resolved in seen:
             raise ReferenceError(f"중복 source: {source}")
         seen.add(resolved)
-        pointers.append({**pointer, **metadata})
+        record = {**pointer, **metadata}
+        if freeze:
+            record["frozen"] = frozen_copy(project, destination, pointer, resolved)
+        pointers.append(record)
     bundle = {"schema": 1, "sources": pointers}
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = ""
@@ -127,15 +168,23 @@ def load(project, value):
         if (
             not isinstance(source, dict)
             or not {"path", "sha256"}.issubset(source)
-            or set(source) - {"path", "sha256", "revision", "section"}
+            or set(source) - {"path", "sha256", "revision", "section", "frozen"}
         ):
-            raise ReferenceError("reference source 는 path/sha256 및 선택적 revision/section만 허용됨")
+            raise ReferenceError("reference source 는 path/sha256 및 선택적 revision/section/frozen만 허용됨")
         resolved = resolve_path(project, source["path"], external=True)
         if resolved in seen:
             raise ReferenceError(f"중복 reference source: {source['path']}")
         seen.add(resolved)
         if not isinstance(source["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"]):
             raise ReferenceError("reference sha256 형식 오류")
+        if "frozen" in source:
+            frozen = source["frozen"]
+            if (not isinstance(frozen, dict) or set(frozen) != {"path", "sha256"}
+                    or frozen.get("sha256") != source["sha256"]):
+                raise ReferenceError("frozen pointer 형식 오류")
+            copied = resolve_path(project, frozen["path"])
+            if tuple(copied.parts[-3:]) != (".reference-objects", "sha256", source["sha256"]):
+                raise ReferenceError("frozen pointer 는 content-addressed object여야 함")
         for name in ("revision", "section"):
             if name in source:
                 text_value(source[name], name)
@@ -145,22 +194,36 @@ def load(project, value):
 def check(project, value):
     bundle = load(project, value)
     missing, changed = [], []
+    live_missing, live_changed = [], []
+    frozen_count = 0
     for source in bundle["sources"]:
-        path = resolve_path(project, source["path"], external=True)
+        pointer = source.get("frozen", source)
+        external = "frozen" not in source
+        path = resolve_path(project, pointer["path"], external=external)
         if not path.is_file():
-            missing.append(source["path"])
-        elif file_pointer(project, source["path"], external=True)["sha256"] != source["sha256"]:
-            changed.append(source["path"])
+            missing.append(pointer["path"])
+        elif file_pointer(project, pointer["path"], external=external)["sha256"] != pointer["sha256"]:
+            changed.append(pointer["path"])
+        if "frozen" in source:
+            frozen_count += 1
+            original = resolve_path(project, source["path"], external=True)
+            if not original.is_file():
+                live_missing.append(source["path"])
+            elif file_pointer(project, source["path"], external=True)["sha256"] != source["sha256"]:
+                live_changed.append(source["path"])
     status = "pass"
     if missing or changed:
         status = "fail"
-    return {
+    result = {
         "schema": 1,
         "status": status,
         "sources": bundle["sources"],
         "missing": missing,
         "changed": changed,
     }
+    if frozen_count:
+        result["liveSources"] = {"missing": live_missing, "changed": live_changed}
+    return result
 
 
 def require_current(project, value):
@@ -170,3 +233,11 @@ def require_current(project, value):
             f"reference 변경/누락: changed={result['changed']} missing={result['missing']}; 원본을 확인하고 snapshot을 갱신할 것"
         )
     return result
+
+
+def read_sources(bundle):
+    """Explicit effective read targets, separate from original provenance."""
+    return [{**source.get("frozen", {key: source[key] for key in ("path", "sha256")}),
+             "mode": "frozen" if "frozen" in source else "live",
+             "provenance": {key: value for key, value in source.items() if key != "frozen"}}
+            for source in bundle["sources"]]

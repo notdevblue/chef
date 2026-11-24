@@ -562,7 +562,13 @@ def shell_targets(command, tool_name, cwd, guard):
             ]
             sources = sources or [value for value in values if value not in destinations]
             for destination in destinations:
-                if os.path.isdir(absolute_path(destination, cwd)):
+                if executable in ("ren", "rename-item"):
+                    if os.path.basename(destination) == destination:
+                        targets.extend(
+                            os.path.join(os.path.dirname(absolute_path(source, cwd)), destination)
+                            for source in sources
+                        )
+                elif os.path.isdir(absolute_path(destination, cwd)):
                     targets.extend(
                         os.path.join(destination, os.path.basename(source))
                         for source in sources

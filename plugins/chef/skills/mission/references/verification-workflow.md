@@ -2,8 +2,9 @@
 
 `<mission-state>`·`<mission-state-runtime>`은 현재 런타임 mission 진입점이 정한 경로·인자다.
 
-코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `preflight <단위> --plan <계획.json>`으로 정적 검사한 뒤
-`roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
+코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `preflight <단위> --plan <계획.json>`으로 정적 검사한다.
+`executionPolicy`가 coordinator 경로를 명시적으로 허용한 계획은 코디네이터가 `verify --coordinator`로 실행할 수 있고,
+그 밖의 계획은 `roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
 기본 역할·모델·effort와 어댑터 `rolePolicy.model`의 적용은 현재 런타임 진입점의 실행 계약을 따른다.
 검증자는 코드·검증 범위·모델을 바꾸거나 하위 에이전트를 띄우지 않는다. 실패·예상 밖 상태는 증거와 미완료 이유를 반환한다.
 검증 입력을 스냅샷으로 확정한 시점부터 결과 수집이 끝날 때까지 해당 입력을 바꾸는 작업을 동결한다.
@@ -40,7 +41,44 @@ Play 조작은 브리프의 순서·기대 결과·증거 경로를 따르며, �
 ## 실행 준비와 공유 자원
 
 `preflight`는 계획 구조·입력·cwd·실행 파일·가드·참조 묶음과 어댑터의 준비 명령을 읽기 전용으로 검사한다.
-명령·테스트·readiness를 실행하거나 receipt·로그·잠금 폴더를 만들지 않는다. 통과는 실제 검증 통과가 아니다.
+명령·테스트·readiness를 실행하거나 receipt·로그·잠금 폴더를 만들지 않는다. 기존 pass/fail 판정에 `warnings`와
+`executionPolicy`를 덧붙인다. 경고는 실행 경로 선택이나 결과 판정을 바꾸지 않으며, 통과는 실제 검증 통과가 아니다.
+
+코디네이터 직접 실행은 프로젝트 어댑터의 `verify.coordinatorChecks`가 명시적으로 허용한 계획에만 쓴다.
+`verify <id> --plan <json> --coordinator`는 계획의 등급과 전체 명령 순서·argv·해석된 cwd가 허용 항목과 정확히 맞지 않거나
+정책이 없거나 유효하지 않으면 명령 실행 전에 거부된다. 각 허용 명령은 `reusable`을 명시하고 범위가 좁은 비어 있지 않은
+`inputs`와 `outputs: []`를 가져야 한다. 프로젝트 루트 전체를 입력·출력으로 잡거나 readiness·공유 자원·결과 파일 검사를 쓰는
+계획은 허용되지 않는다. 설정은 계획의 각 명령을 `{argv, cwd, tools}`로 열거하고 실행 도구·런처 스크립트를 포함해 모든
+도구/의존 파일의 현재 SHA-256을 고정한다. extra dependency도 명시할 수 있으며, 해시가 하나라도 다르면 허용되지 않는다.
+허용 목록에 없는 실행기, scriptless interpreter·`python -m`·`-c`, 모든 shell 계열 실행기, `.bat`·`.cmd` 래퍼는 verifier 경로에 남는다.
+이 경로는 매번 force 실행해 전체 receipt 재사용으로 새 발견을 가리지 않는다. 별도 always-run 설정 없이 `--coordinator`가 이 동작을 고른다.
+시간이 짧다는 이유로 실행 경로를 자동 선택하지 않는다.
+
+이 설정과 pinned dependency의 현재 hash는 receipt identity에 포함된다. 정책을 추가·수정하거나 pinned helper가 바뀌면 과거 receipt를
+재사용하지 않는다. 설정은 운영자가 신뢰한 계획을 선택하는 정책이다. 모든 숨은 import나 도구의 부작용을 자동으로 찾아 증명하지 않으므로,
+읽기 전용·결정론적 검사임을 확인하고 사용하는 모든 의존 파일을 고정해야 한다. 직접 실행에서도 기존 결과·receipt 검사,
+독립 의미 리뷰와 사람 승인은 그대로 유지한다.
+
+`verify`는 계획 입력을 위한 cooperative input lease를 잡고 실행이 끝나면 해제하며 실행 뒤 입력 hash도 다시 확인한다.
+지원되는 Write·Edit·MultiEdit·NotebookEdit·apply_patch와 파악 가능한 shell 쓰기는 도구 사용 전에 lease와 충돌하는지 확인한다.
+이것은 OS 전체 파일 잠금이나 프로세스 수명 동안 쓰기 예약이 아니다. 해석할 수 없는 shell 대상·cwd와 미계측 쓰기는 막지 못하므로,
+그런 경로가 남으면 별도 입력 동결을 보장하거나 미확인으로 반환한다.
+
+외부 리뷰 명령을 예약·실행할 때는 다음 형식으로 현재 계획 snapshot에 묶는다.
+
+```text
+review-run <id> --plan <계획.json> --snapshot <sha256> --purpose <설명> --scope <배열JSON> --findings <배열JSON> [--timeout-seconds 1..3600] -- <argv…>
+```
+
+CLI가 현재 계획의 effective `inputs` snapshot을 계산해 `--snapshot`과 다르면 예약이나 실행 전에 거부한다. 요청 동일성은 effective plan,
+유닛 브리프·계약, 리뷰 argv, 설정, 해석한 실행 파일·스크립트 지문, 선언한 환경변수와 제한 시간을 포함한다. 이미 실행 중이거나
+완료된 같은 요청은 새로 실행하지 않고 기존 작업을 돌려준다. 별도 supervisor가 실행 수명을 소유하고 child PID/start를 추적한다.
+부모 CLI가 종료돼도 알려진 child가 끝날 때까지 lease와 작업 예약을 유지한다. `launchPending` 상태가 불명확하거나 자식 상태를
+확정할 수 없으면 `needs-recovery`로 보존하며 자동 회수·재실행하지 않는다.
+완료 요청의 재사용은 현재 snapshot·도구·설정·계약과 저장 결과·표준 출력·오류의 hash가 여전히 맞을 때만 가능하다.
+표준 출력·오류는 각각 제한된 크기로 저장하며 포인터와 잘림 여부를 반환한다. 기본 제한 시간은 600초다.
+종료 코드 0은 자식 명령이 끝났다는 뜻일 뿐, finding 없음이나 독립 `clean` 리뷰 판정을 뜻하지 않는다.
+이 경로는 공개 `review-run` CLI를 통한 명령 예약에 적용된다. 임의로 분리된 후손 프로세스와 일반 런타임의 native agent/Codex 협업 파견은 자동으로 포착하지 않는다.
 
 공유 자원은 `adapter.verify.resources`의 등급별 이름과 `resourceDir`로 지정한다.
 같은 자원을 쓰는 프로젝트·슬롯은 같은 폴더와 이름을 써야 서로 배타 실행된다.

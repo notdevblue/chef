@@ -206,8 +206,12 @@ def test_preflight_is_read_only_and_checks_readiness_without_running(mission, mo
     monkeypatch.setattr(verification.subprocess, "run", unexpected)
     result = verification.preflight(root, plan, allow_command, settings)
     assert json.loads(json.dumps(result)) == result
-    assert result == {"status": "pass", "grade": "pytest-pass", "commandCount": 1,
-                      "readinessCount": 1, "resources": ["engine"], "failure": {}}
+    assert {key: result[key] for key in ("status", "grade", "commandCount", "readinessCount", "resources", "failure")} == {
+        "status": "pass", "grade": "pytest-pass", "commandCount": 1,
+        "readinessCount": 1, "resources": ["engine"], "failure": {}}
+    assert isinstance(result["warnings"], list)
+    assert result["executionPolicy"]["eligible"] is False
+    assert result["executionPolicy"]["route"] == "verifier"
     assert sorted(str(path.relative_to(root)) for path in root.rglob("*")) == before
     assert not (folder / "verification").exists()
     assert not Path(settings["resourceDir"]).exists()

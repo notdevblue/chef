@@ -12,13 +12,20 @@
 현재 파일 해시가 다르거나 출력이 참조 묶음이 아니면 덮어쓰지 않는다.
 `reference check --input <묶음.json>`이 통과한 묶음 하나를 구현·수정·첫 리뷰·재리뷰 브리프가 모두 가리킨다.
 재리뷰 입력은 그 묶음과 바뀐 절만이다. `brief <단위> --references <묶음.json>`의 출력에 작업별 계약·직전 finding·반환 항목을 더한다.
-`reference show --input <묶음.json>`은 경로·해시·선택 메타데이터를 출력하며 원문 내용은 복사하지 않는다.
+`reference show --input <묶음.json>`과 `brief --references <묶음.json>`은 실제 읽을 포인터를 `readSources`로 출력한다.
+각 항목은 유효 `path`·`sha256`·`mode`(`live` 또는 `frozen`)와 원문 `provenance` 경로·해시·선택 메타데이터를 담으며 원문 내용은 복사하지 않는다.
+기본 snapshot은 원문 경로를 live 참조한다. `reference snapshot --freeze`는 원문 사본을 내용 해시 경로에 보관하고,
+묶음에서 사본의 해시를 독립 검증한다. frozen 입력에서는 `readSources.path`가 사본이고 원본 포인터는 `provenance`다.
+source 경로의 이후 변경은 origin drift 참고 정보로 별도 표시되며 frozen 내용의 무결성을 바꾸지 않는다.
+`--freeze`를 생략한 동작과 기존 schema 1 묶음은 그대로 유지한다.
 `--revision`·`--section`으로 자료의 개정·절을 덧붙일 수 있다. snapshot 출력은 프로젝트 안 상대 경로,
 source는 명시한 외부 파일도 허용한다. 파일 해시는 의미·승인을 판정하지 않는다.
 참조가 바뀌거나 충돌하면 코디네이터가 원문과 승인 범위를 확인해 묶음을 함께 갱신한다.
 전체 대화·완료한 작업·큰 로그와 구현자 맥락을 리뷰어에게 fork하지 않는다.
 프로젝트 자료는 프로젝트에서 참조하며 플러그인에 복사·요약·익명화하지 않는다.
 프로젝트 판정이 가능한 규칙은 어댑터 검사 또는 `verify.commands[]`에 연결한다. 이 공개 플러그인에는 회사·고객·비공개 프로젝트의 규칙이나 사례를 어떤 형태로도 넣지 않으며, 예시는 처음부터 가상으로 만든다.
+
+판정에 파일 증거를 붙이려면 `ledger record --evidence-input <json>`에 schema 1 JSON을 지정한다. `files` 항목은 프로젝트 기준 상대 `path`, `kind`, 선택적 기대값 `sha256`을 가진다. CLI는 파일의 존재와 해시를 기록한다. `ledger audit [--unit <id>] [--limit 1..100]`은 기본 20개까지 기록된 증거를 읽기 전용으로 요약하고 누락·변경·잘못된 항목의 수를 반환한다. 결과의 `semanticValidity`는 `not_checked`다. 따라서 파일 존재·해시 일치는 판정 내용의 의미를 증명하지 않는다. 기존 자유 텍스트 `--evidence`는 계속 지원한다.
 
 구현·검증처럼 비용이 큰 파견 전에 코디네이터는 실제 대상 경로, 파일·자원 소유와 허용된 편집 범위,
 문서에 정의된 명령·API 사용법, 변경 파일·계약을 덮는 검증 명령을 확인하고 구체적 근거를 브리프에 넣는다.
