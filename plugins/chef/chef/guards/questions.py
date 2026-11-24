@@ -586,7 +586,7 @@ def shell_targets(command, tool_name, cwd, guard):
 
 
 def unbundled_question_commands(command, tool_name, cwd, guard):
-    projects = []
+    invocations = []
     for fragment in ordered_fragments(command, tool_name, guard):
         tokens = [guard.unquote(token) for token in SHELL_TOKEN.findall(fragment)]
         if not tokens:
@@ -602,7 +602,8 @@ def unbundled_question_commands(command, tool_name, cwd, guard):
                 candidates.pop(0)
         if not candidates or re.split(r"[\\/]", candidates[0])[-1].casefold() != "mission_state.py":
             continue
-        if canonical_path(absolute_path(candidates[0], cwd)) == canonical_path(BUNDLED_CLI):
+        script = absolute_path(candidates[0], cwd)
+        if canonical_path(script) == canonical_path(BUNDLED_CLI):
             continue
         if not any(
             tokens[index] == "question" and tokens[index + 1] in QUESTION_ACTIONS
@@ -612,8 +613,8 @@ def unbundled_question_commands(command, tool_name, cwd, guard):
         project = cwd
         if "--project" in tokens and tokens.index("--project") + 1 < len(tokens):
             project = absolute_path(tokens[tokens.index("--project") + 1], cwd)
-        projects.append(os.path.join(project, "adapter-lookup"))
-    return projects
+        invocations.append((os.path.join(project, "adapter-lookup"), script))
+    return invocations
 
 
 def question_write_reason(payload, guard):
@@ -636,9 +637,13 @@ def question_write_reason(payload, guard):
             unbundled = unbundled_question_commands(command, tool_name, cwd, guard)
     if not targets and not unbundled:
         return ""
-    contexts = mission_contexts(payload, targets + unbundled, guard)
+    contexts = mission_contexts(payload, targets + [project for project, _ in unbundled], guard)
     if unbundled and contexts:
-        return "질문 쓰기는 현재 번들의 mission_state.py question publish/answer/restore/render 를 사용할 것"
+        _, script = unbundled[0]
+        return (
+            f'질문 쓰기에 허용되지 않는 실행 경로: "{script}". '
+            f'현재 번들의 "{BUNDLED_CLI}"로 question publish/answer/restore/render를 실행하세요.'
+        )
     for target in targets:
         if protected_path(target, cwd, contexts, guard) or (
             target in subtrees and protected_tree(target, cwd, contexts, guard)

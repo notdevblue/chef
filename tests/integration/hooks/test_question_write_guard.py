@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -26,8 +27,8 @@ def project(tmp_path, monkeypatch):
     return root
 
 
-def outcome(project, tool="Write", **tool_input):
-    return mission_guard.decide({"cwd": str(project), "session_id": "owner", "tool_name": tool, "tool_input": tool_input})
+def outcome(project, tool="Write", *, runtime="claude", **tool_input):
+    return mission_guard.decide({"cwd": str(project), "session_id": "owner", "han_runtime": runtime, "tool_name": tool, "tool_input": tool_input})
 
 
 @pytest.mark.parametrize("tool,key", [("Write", "file_path"), ("Edit", "path"), ("MultiEdit", "file_path"), ("NotebookEdit", "notebook_path")])
@@ -327,16 +328,34 @@ def test_move_and_copy_to_mission_directory_uses_actual_destination_filename(pro
 
 
 @pytest.mark.parametrize("action", ["publish --input draft.json", "answer ask-1.md --input reply.json", "restore --input draft.json --source history.json --expect-revision 1 --expect-sha256 abc", "render ask-1.md"])
-def test_bundled_cli_and_appended_direct_write(project, action):
-    script = PLUGIN_ROOT / "skills" / "mission" / "scripts" / "mission_state.py"
-    command = f'python "{script}" --project "{project}" --mission mission question {action}'
-    assert not outcome(project, "Bash", command=command).deny
-    assert outcome(project, "Bash", command=command + " > state/mission/ask-1.md").deny
-    assert outcome(project, "Bash", command=command + "; echo answer > state/mission/ask-1.md").deny
+@pytest.mark.parametrize("skill,runtime,tool", [
+    ("skills/mission/SKILL.md", "claude", "Bash"),
+    ("codex/skills/chef-mission/SKILL.md", "codex", "PowerShell"),
+    ("grok/skills/chef-mission/SKILL.md", "grok", "run_terminal_command"),
+])
+def test_documented_cli_and_appended_direct_write(project, action, skill, runtime, tool):
+    instructions = (PLUGIN_ROOT / skill).read_text(encoding="utf-8")
+    script_match = re.search(r"`<mission-state>`: `<plugin-root>/([^`]+)`", instructions)
+    runtime_match = re.search(r"`<mission-state-runtime>`: `([^`]+)`", instructions)
+    assert script_match and runtime_match
+    runtime_args = runtime_match[1]
+    assert runtime_args.split()[:2] == ["--runtime", runtime]
+    runtime_args = runtime_args.replace('"<작업 루트>"', f'"{project}"')
+    script = PLUGIN_ROOT / script_match[1]
+    assert script.is_file()
+    project_args = "" if "--project" in runtime_args else f'--project "{project}"'
+    command = f'python "{script}" {runtime_args} {project_args} --mission mission question {action}'
+
+    assert not outcome(project, tool, runtime=runtime, command=command).deny
+    assert outcome(project, tool, runtime=runtime, command=command + " > state/mission/ask-1.md").deny
+    combined = command + "; echo answer > state/mission/questions/ask-1.json"
+    assert outcome(project, tool, runtime=runtime, command=combined).deny
 
 
 def test_nonbundled_question_cli_writes_denied_but_reads_allowed(project):
-    assert outcome(project, "Bash", command="python other/mission_state.py question answer ask-1.md --input reply.json").deny
+    reason = outcome(project, "Bash", command="python other/mission_state.py question answer ask-1.md --input reply.json").deny
+    assert str(project / "other" / "mission_state.py") in reason
+    assert question_write_guard.BUNDLED_CLI in reason
     assert not outcome(project, "Bash", command="python other/mission_state.py question show ask-1.md").deny
 
 

@@ -27,7 +27,8 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 ## 실행 경로
 
 - `<mission-entry>`: `<plugin-root>/grok/scripts/mission_entry.py`, `<mission-entry-runtime>`: 빈 값.
-- `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<mission-state-runtime>`: `--runtime grok --project "<작업 루트>"`.
+- `<mission-state-runtime>`: `--runtime grok --project "<작업 루트>"`.
+- `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`.
 - `<p4-wrapper>`: `<plugin-root>/grok/skills/chef-mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/grok/skills/chef-distill/SKILL.md`. 슬롯은 `chef-slots`, 어댑터는 `chef-adapter-init`이다.
 - M·L은 코디네이터이며 프로젝트 파일은 역할에 맡긴다. S는 `chef-run` 직접 처리이며 사용자가 명시적으로 원할 때만 `init --tier S --force-tier`로 미션을 열고 분리를 유지한다.

@@ -105,19 +105,22 @@ patch는 승인 의미를 추론하지 않는다. 일반 patch에서 기존 문�
 의미가 같은 문체 변경은 `question patch --editorial`로 기존 답을 보존한 draft를 만들고 `preflight`·`publish`에도 `--editorial`을 명시한다. patch 결과에도 기존 발행의 editorial 보호 검사를 적용하므로 옵션·선택·답·상태·이력·승인 상태·table/fields 구조를 바꿀 수 없다.
 실제 질문 정의·옵션 변경이면 일반 patch의 `reopen_items`로 다시 묻는다. 전체 범위 변경에 기존 해결 문항을 유지하면 `request_approval`도 명시한다.
 
+아래 예제에서 `<mission-state>`는 현재 번들의 `skills/mission/scripts/mission_state.py` 절대 경로다.
+Claude·Codex·Grok은 각 미션 스킬에 지정된 `<mission-state-runtime>` 인자를 넣는다.
+
 ```sh
-python "<mission-cli>" question patch --input draft.json --changes changes.json > draft-r2.json
-python "<mission-cli>" question preflight --input draft-r2.json --expect-revision 1
-python "<mission-cli>" question preview --input draft-r2.json > preview.md
-python "<mission-cli>" question publish --input draft-r2.json --expect-revision 1
+python "<mission-state>" <mission-state-runtime> question patch --input draft.json --changes changes.json > draft-r2.json
+python "<mission-state>" <mission-state-runtime> question preflight --input draft-r2.json --expect-revision 1
+python "<mission-state>" <mission-state-runtime> question preview --input draft-r2.json > preview.md
+python "<mission-state>" <mission-state-runtime> question publish --input draft-r2.json --expect-revision 1
 ```
 
 문체만 바꾸는 경우는 같은 명령 흐름에 의도를 명시한다.
 
 ```sh
-python "<mission-cli>" question patch --input draft.json --changes wording.json --editorial > draft-r2.json
-python "<mission-cli>" question preflight --input draft-r2.json --expect-revision 1 --editorial
-python "<mission-cli>" question publish --input draft-r2.json --expect-revision 1 --editorial
+python "<mission-state>" <mission-state-runtime> question patch --input draft.json --changes wording.json --editorial > draft-r2.json
+python "<mission-state>" <mission-state-runtime> question preflight --input draft-r2.json --expect-revision 1 --editorial
+python "<mission-state>" <mission-state-runtime> question publish --input draft-r2.json --expect-revision 1 --editorial
 ```
 
 `preflight`는 publish와 같은 revision·답 원문·legacy·승인·옵션·상세 소유·출력 검사를 읽기 전용으로 실행한다.
@@ -128,7 +131,6 @@ python "<mission-cli>" question publish --input draft-r2.json --expect-revision 
 
 ## 처음 발행하기
 
-아래 `<mission-cli>`는 미션 스킬의 상태 CLI 호출에 쓰는 `scripts/mission_state.py`의 실제 절대 경로다.
 필요하면 기존 CLI와 같이 `--project`·`--mission`으로 프로젝트와 미션을 지정한다.
 공통 검사기는 `<plugin-root>/skills/mission/scripts/check_human_doc.py`다. `<plugin-root>`는 실제 플러그인 루트로 치환하며
 Claude에서는 `${CLAUDE_PLUGIN_ROOT}`를 쓸 수 있다. Codex도 이 공통 파일을 호출한다.
@@ -146,10 +148,10 @@ Claude에서는 `${CLAUDE_PLUGIN_ROOT}`를 쓸 수 있다. Codex도 이 공통 �
 아래는 새 문서를 처음 발행하는 예다. 기존 문서 정리는 아래 개정 절차의 원문·이력 비교를 거친다.
 
 ```sh
-python "<mission-cli>" question preview --input draft.json > preview.md
+python "<mission-state>" <mission-state-runtime> question preview --input draft.json > preview.md
 python "<plugin-root>/skills/mission/scripts/check_human_doc.py" draft.json
-python "<mission-cli>" question publish --input draft.json
-python "<mission-cli>" question check
+python "<mission-state>" <mission-state-runtime> question publish --input draft.json
+python "<mission-state>" <mission-state-runtime> question check
 ```
 
 `preview`는 초안을 검증해 Markdown을 출력하며 미션 정본·생성본을 쓰지 않는다. `preview.md`는 사람의 독립 검토용 임시 파일이다.
@@ -183,8 +185,8 @@ python "<mission-cli>" question check
 ```
 
 ```sh
-python "<mission-cli>" question answer ask-1.md --input reply.json
-python "<mission-cli>" question check
+python "<mission-state>" <mission-state-runtime> question answer ask-1.md --input reply.json
+python "<mission-state>" <mission-state-runtime> question check
 ```
 
 답 입력의 `id`는 문서 id가 아니라 중복 실행을 식별하는 고유 작업 id다. 같은 id·같은 입력의 재시도는 멱등이고,
@@ -205,11 +207,11 @@ python "<mission-cli>" question check
 질문 id·답·상태·승인 범위가 같으면 아래처럼 문체 개정으로 발행한다. 생성 이력이 없거나 원문 개정이 빠져 있으면 보존 검사부터 해결한다.
 
 ```sh
-python "<mission-cli>" question show ask-1.md
-python "<mission-cli>" question render ask-1.md
+python "<mission-state>" <mission-state-runtime> question show ask-1.md
+python "<mission-state>" <mission-state-runtime> question render ask-1.md
 python "<plugin-root>/skills/mission/scripts/check_human_doc.py" draft-r2.json --source <미션>/questions/ask-1.json --archive <미션>/details/history/ask-1.md
-python "<mission-cli>" question publish --input draft-r2.json --expect-revision 1 --editorial
-python "<mission-cli>" question check
+python "<mission-state>" <mission-state-runtime> question publish --input draft-r2.json --expect-revision 1 --editorial
+python "<mission-state>" <mission-state-runtime> question check
 ```
 
 - `show`·`render`에는 `ask-1.md`처럼 `.md`가 붙은 루트 문서 이름을 준다. `show`는 현재 정본 JSON을 출력한다. 이를 읽고 별도 초안을 작성한다.
@@ -240,9 +242,9 @@ python "<mission-cli>" question check
 `restore`는 그 검토가 끝난 입력에만 쓰는 명시적 기록 수리다. 산문에서 답을 추론하거나 새 승인으로 기록하지 않는다.
 
 ```sh
-python "<mission-cli>" question preview --input reviewed-recovery.json > preview.md
-python "<mission-cli>" question restore --input reviewed-recovery.json --source saved-original.md --expect-revision 3 --expect-sha256 <현재-JSON-바이트의-SHA256>
-python "<mission-cli>" question check
+python "<mission-state>" <mission-state-runtime> question preview --input reviewed-recovery.json > preview.md
+python "<mission-state>" <mission-state-runtime> question restore --input reviewed-recovery.json --source saved-original.md --expect-revision 3 --expect-sha256 <현재-JSON-바이트의-SHA256>
+python "<mission-state>" <mission-state-runtime> question check
 ```
 
 - 기존 JSON과 Markdown이 모두 있어야 한다. 입력의 문서 id와 revision은 현재 정본과 같아야 하며, 과거 답의 `revision`·`at`·`text`는 실제 기록대로 유지한다.

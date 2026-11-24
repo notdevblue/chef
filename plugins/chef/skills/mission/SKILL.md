@@ -12,7 +12,7 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 ## 실행 경로와 역할
 
 - `<mission-entry>`: `<plugin-root>/skills/mission/scripts/mission_entry.py`, `<mission-entry-runtime>`: `--runtime claude`.
-- `<mission-state-runtime>`: 빈 값.
+- `<mission-state-runtime>`: `--runtime claude`.
 - `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/skills/mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/skills/distill/SKILL.md`. 슬롯은 `/chef:slots`, 어댑터는 `/chef:adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Claude 절을 따른다. `${CLAUDE_PLUGIN_ROOT}`를 실제 루트로 쓸 수 있다.

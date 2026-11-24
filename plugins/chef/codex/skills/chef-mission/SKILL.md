@@ -28,8 +28,8 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 ## 실행 경로와 검증 범위
 
 - `<mission-entry>`: `<plugin-root>/codex/skills/chef-mission/scripts/mission_entry.py`, `<mission-entry-runtime>`: 빈 값.
-- `<mission-state-runtime>`: 빈 값.
-- `<mission-state>`: `<plugin-root>/codex/skills/chef-mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/codex/skills/chef-mission/scripts/p4c.py`.
+- `<mission-state-runtime>`: `--runtime codex`.
+- `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/codex/skills/chef-mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/codex/skills/chef-distill/SKILL.md`. 슬롯은 `$chef:chef-slots`, 어댑터는 `$chef:chef-adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Codex 절을 따른다.
 - 검증 명령은 변경 경로·계약을 실제로 덮어야 한다. 프로젝트 전역 실패를 별도 게이트로 유지하고 약한 타깃 검사로 대체하거나 범위를 우회하지 않는다.
