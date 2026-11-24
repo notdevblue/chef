@@ -1,4 +1,4 @@
-"""Chef role admission and Codex CLI execution for Hermes."""
+"""Chef role admission and selected worker execution for Hermes."""
 
 import json
 import hashlib
@@ -172,9 +172,11 @@ def backend_for(adapter):
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
         raise ValueError("workers must be an object")
-    backend = settings.get("backend", "codex")
-    if backend not in ("codex", "hermes"):
-        raise ValueError("workers.backend must be codex or hermes")
+    backend = settings.get("backend", "hermes")
+    if backend not in ("codex", "hermes", "claude"):
+        from chef.runtimes.hermes.attachment import attachment_settings
+
+        attachment_settings(settings, backend)
     return backend
 
 
@@ -184,8 +186,7 @@ def permitted_roles(adapter, backend):
     patterns, problem = subagents.allow_patterns(adapter)
     if problem:
         raise ValueError(problem)
-    roles = ("researcher",) if backend == "hermes" else ROLES
-    return [role for role in roles if patterns is None or subagents.allows(patterns, "chef:" + role)]
+    return [role for role in ROLES if patterns is None or subagents.allows(patterns, "chef:" + role)]
 
 
 def codex_executable():
@@ -205,7 +206,7 @@ def worker_guard(adapter):
     return checker
 
 
-def status(adapter, research):
+def status(adapter, research=None, native=None, cwd=None):
     backend = backend_for(adapter)
     roles = ["chef:" + role for role in permitted_roles(adapter, backend)]
     result = {"backend": backend, "roles": roles, "available": False}
@@ -214,16 +215,41 @@ def status(adapter, research):
             raise ValueError("agents.allow permits no roles for this worker backend")
         worker_guard(adapter)
         if backend == "hermes":
-            research.check_available()
-        else:
+            host = native or research
+            if host is None:
+                raise ValueError("Hermes native worker lifecycle is unavailable in this plugin host")
+            host.check_available()
+            if native is None:
+                result["roles"] = [role for role in roles if role == "chef:researcher"]
+                if not result["roles"]:
+                    raise ValueError("legacy Hermes host supports no roles permitted by agents.allow; update the host")
+        elif backend == "codex":
             extra_arguments(adapter)
             codex_executable()
+        elif backend == "claude":
+            from chef.runtimes.hermes import claude
+
+            claude.executable(cwd=cwd, settings_path=adapter.get("workers", {}).get("claudeSettings"))
+            settings = adapter.get("workers", {}).get("claudeRoles", {})
+            for role in permitted_roles(adapter, backend):
+                claude.role_config(role, settings)
+        else:
+            from chef.runtimes.hermes.attachment import Attachment
+
+            if native is None:
+                raise ValueError("attachment requires Hermes native guarded tool execution")
+            native.check_tool_execution()
+            attached = Attachment(adapter["workers"], backend)
+            advertised = attached.status()
+            result["roles"] = [role for role in roles if role in advertised]
+            if not result["roles"]:
+                raise ValueError("attachment advertises no roles permitted by agents.allow")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return {**result, "error": str(exc)}
     return {**result, "available": True}
 
 
-def project_denial(payload):
+def project_denial(payload, env=None):
     """Run the slot's workers.guardCommand for a worker tool call; any failure denies.
 
     The command receives the normalized hook payload (owner session, worker agent id)
@@ -246,7 +272,7 @@ def project_denial(payload):
     cwd = payload.get("cwd") or data["cwd"]
     try:
         result = subprocess.run(argv, input=json.dumps(request, ensure_ascii=False).encode("utf-8"), cwd=cwd,
-                                capture_output=True, timeout=GUARD_TIMEOUT, env=child_env(cwd))
+                                capture_output=True, timeout=GUARD_TIMEOUT, env=child_env(cwd) if env is None else env)
     except (OSError, subprocess.SubprocessError) as e:
         return f"프로젝트 워커 가드를 실행하지 못함: {e}"
     if result.returncode:
@@ -335,7 +361,7 @@ def run_codex(command, prompt, env, timeout):
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def delegate(args, *, session_id, task_id="", cwd, external=None, research=None):
+def delegate(args, *, session_id, task_id="", cwd, external=None, research=None, native=None):
     """Called only by the native Hermes tool with trusted session context."""
     if not isinstance(args, dict) or set(args) - {"role", "prompt", "timeout"}:
         raise ValueError("chef_delegate requires role, prompt and optional timeout")
@@ -358,70 +384,109 @@ def delegate(args, *, session_id, task_id="", cwd, external=None, research=None)
     if folder.is_symlink() or not (folder / "mission.md").is_file():
         raise ValueError("initialize the owned mission with mission_state.py init before delegating")
     backend = backend_for(adapter)
-    if backend == "hermes" and role != "researcher":
-        raise ValueError("the Hermes worker backend supports only chef:researcher")
     if role not in permitted_roles(adapter, backend):
         raise ValueError("role is not permitted by agents.allow")
     checker = worker_guard(adapter)
-    if backend == "hermes":
-        if research is None:
-            raise ValueError("Hermes subagent lifecycle is unavailable in this plugin host")
-        from chef.runtimes.hermes import external_slots
-
-        slot = external_slots.from_context(external) if external is not None else None
-        return research.run(prompt, timeout, cwd, state, active, checker, slot)
-    extra = extra_arguments(adapter)
-    executable = codex_executable()
     gateway_home = process_home().resolve()
     home = gateway_home / "chef/workers"
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     identity = os.stat(cwd)
     workspace_key = hashlib.sha256(f"{identity.st_dev}:{identity.st_ino}".encode()).hexdigest()
-    with FileLock(str(home / ("worker-" + workspace_key + ".lock")), "Codex role worker"):
-        with tempfile.TemporaryDirectory(prefix="call-", dir=home) as directory:
-            context, ready = Path(directory) / "context.json", Path(directory) / "ready"
-            guard_ready = Path(directory) / "guard-ready"
-            data = {"schema": 1, "pid": os.getpid(), "session": session_id, "role": role,
-                    "cwd": os.path.realpath(cwd), "state": state, "mission": active.id, "ready": str(ready),
-                    "guard_ready": str(guard_ready), "guard": checker,
-                    "digest": implementation_digest()}
-            if external is not None:
-                data["external"] = external
-                data["gatewayHome"] = str(gateway_home)
-            context.write_text(json.dumps(data), encoding="utf-8")
-            context.chmod(0o600)
-            env = python_environment(
-                {**child_env(cwd), "HERMES_HOME": str(active_home().resolve()), WORKER_ENV: str(context)},
-                cache_root=home / "interpreters",
-            )
-            for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
-                env.pop(name, None)
-            protected = protected_state(state, active.id)
-            # A read-only probe proves that the installed, trusted Chef hook
-            # matches this deployment before any write-capable worker starts.
-            # Project settings from workers.codexArguments also apply to the probe.
-            probe = command_for(executable, "researcher", cwd, extra)
-            checked = run_codex(probe, "Call the shell tool once with exactly: echo han-mission open chef-worker-probe\nThe Chef worker hook must deny it. Do not attempt another command. Then return READY.", env, min(timeout, 120))
-            if checked.returncode or not ready.is_file() or ready.read_text() != data["digest"] or not guard_ready.is_file() or guard_ready.read_text() != data["digest"]:
-                raise ValueError("Codex Chef hooks are missing, untrusted or outdated; update and trust /hooks first")
-            current = guard.read_active(state)
-            if current != active or protected_state(state, active.id) != protected:
-                raise ValueError("Hermes mission changed during worker preflight")
-            ready.unlink()
-            result = run_codex(command_for(executable, role, cwd, extra), prompt, env, timeout)
-            if protected_state(state, active.id) != protected:
-                raise ValueError("protected mission state changed during worker; inspect it before accepting results (no automatic rollback)")
-            if not ready.is_file() or ready.read_text() != data["digest"]:
-                raise ValueError("Codex worker did not acknowledge its Chef hooks")
-            messages = []
-            for line in result.stdout.splitlines():
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                item = event.get("item", {})
-                if event.get("type") == "item.completed" and item.get("type") == "agent_message":
-                    messages.append(item.get("text", ""))
-            return {"ok": result.returncode == 0, "runtime": "codex", "role": "chef:" + role,
-                    "exit_code": result.returncode, "result": "\n".join(messages),
-                    "error": result.stderr[-2000:] if result.returncode else ""}
+    # Every backend shares this physical-workspace gate, including native workers
+    # and profiles with a different state directory. Revalidate after admission.
+    with FileLock(str(home / ("worker-" + workspace_key + ".lock")), "Hermes role worker"):
+        if guard.read_active(state) != active:
+            raise ValueError("Hermes mission ownership changed before worker admission")
+        from chef.runtimes.hermes import external_slots
+
+        slot = external_slots.from_context(external) if external is not None else None
+        if slot is not None:
+            slot.check(active.session, active.id)
+        protected = protected_state(state, active.id)
+        try:
+            if backend == "hermes":
+                if native is not None:
+                    settings = adapter.get("workers", {}).get("hermesRoles", {})
+                    if not isinstance(settings, dict):
+                        raise ValueError("workers.hermesRoles must be an object")
+                    config = settings.get(role, settings.get("chef:" + role))
+                    result = native.run(role, prompt, timeout, cwd, state, active, checker, slot, config=config)
+                elif research is not None and role == "researcher":
+                    result = research.run(prompt, timeout, cwd, state, active, checker, slot)
+                else:
+                    raise ValueError("Hermes native worker lifecycle is unavailable for this role")
+            elif backend == "codex":
+                result = _delegate_codex(adapter, role, prompt, timeout, cwd, state, active,
+                                         checker, external, gateway_home, home)
+            elif backend == "claude":
+                from chef.runtimes.hermes import claude
+
+                result = claude.run(role, prompt, timeout, cwd, state, active, checker,
+                                    settings=adapter.get("workers", {}).get("claudeRoles", {}),
+                                    settings_path=adapter.get("workers", {}).get("claudeSettings"),
+                                    external=external, gateway_home=gateway_home, home=home)
+            else:
+                from chef.runtimes.hermes.attachment import Attachment
+
+                if native is None:
+                    raise ValueError("attachment requires Hermes native guarded tool execution")
+                result = Attachment(adapter["workers"], backend).run(
+                    native, role, prompt, timeout, cwd, state, active, checker, slot)
+            if slot is not None:
+                slot.check(active.session, active.id)
+            return result
+        finally:
+            if guard.read_active(state) != active or protected_state(state, active.id) != protected:
+                raise ValueError("protected mission state changed or mission ownership was lost during worker; inspect it before accepting results (no automatic rollback)")
+
+
+def _delegate_codex(adapter, role, prompt, timeout, cwd, state, active, checker, external, gateway_home, home):
+    extra = extra_arguments(adapter)
+    executable = codex_executable()
+    with tempfile.TemporaryDirectory(prefix="call-", dir=home) as directory:
+        context, ready = Path(directory) / "context.json", Path(directory) / "ready"
+        guard_ready = Path(directory) / "guard-ready"
+        data = {"schema": 1, "pid": os.getpid(), "session": active.session, "role": role,
+                "cwd": os.path.realpath(cwd), "state": state, "mission": active.id, "ready": str(ready),
+                "guard_ready": str(guard_ready), "guard": checker,
+                "digest": implementation_digest()}
+        if external is not None:
+            data["external"] = external
+            data["gatewayHome"] = str(gateway_home)
+        context.write_text(json.dumps(data), encoding="utf-8")
+        context.chmod(0o600)
+        env = python_environment(
+            {**child_env(cwd), "HERMES_HOME": str(active_home().resolve()), WORKER_ENV: str(context)},
+            cache_root=home / "interpreters",
+        )
+        for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
+            env.pop(name, None)
+        protected = protected_state(state, active.id)
+        # A read-only probe proves that the installed, trusted Chef hook
+        # matches this deployment before any write-capable worker starts.
+        # Project settings from workers.codexArguments also apply to the probe.
+        probe = command_for(executable, "researcher", cwd, extra)
+        checked = run_codex(probe, "Call the shell tool once with exactly: echo han-mission open chef-worker-probe\nThe Chef worker hook must deny it. Do not attempt another command. Then return READY.", env, min(timeout, 120))
+        if checked.returncode or not ready.is_file() or ready.read_text() != data["digest"] or not guard_ready.is_file() or guard_ready.read_text() != data["digest"]:
+            raise ValueError("Codex Chef hooks are missing, untrusted or outdated; update and trust /hooks first")
+        current = guard.read_active(state)
+        if current != active or protected_state(state, active.id) != protected:
+            raise ValueError("Hermes mission changed during worker preflight")
+        ready.unlink()
+        result = run_codex(command_for(executable, role, cwd, extra), prompt, env, timeout)
+        if protected_state(state, active.id) != protected:
+            raise ValueError("protected mission state changed during worker; inspect it before accepting results (no automatic rollback)")
+        if not ready.is_file() or ready.read_text() != data["digest"]:
+            raise ValueError("Codex worker did not acknowledge its Chef hooks")
+        messages = []
+        for line in result.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item", {})
+            if event.get("type") == "item.completed" and item.get("type") == "agent_message":
+                messages.append(item.get("text", ""))
+        return {"ok": result.returncode == 0, "runtime": "codex", "role": "chef:" + role,
+                "exit_code": result.returncode, "result": "\n".join(messages),
+                "error": result.stderr[-2000:] if result.returncode else ""}

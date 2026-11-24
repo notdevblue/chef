@@ -31,6 +31,7 @@ def project(tmp_path, monkeypatch):
     write_json(selected, {
         "schema": 1, "project": "fictional-orchard", "paths": {"stateDir": "state"},
         "agents": {"allow": ["chef:*"]},
+        "workers": {"backend": "codex"},
         "guard": {"deny": [{"pattern": "forbidden-action", "reason": "fictional command blocked"}]},
     })
     active = root / "state/ACTIVE"
@@ -237,6 +238,7 @@ def native(project, monkeypatch):
     lifecycle.cancelled = lifecycle.timeout = False
     lifecycle.observe = lambda: None
     bridge = plugin.Bridge(lifecycle)
+    bridge.native = None  # Exercise the legacy read-only host compatibility path.
     monkeypatch.setattr(plugin, "native_cwd", lambda _: str(project.root))
     monkeypatch.setattr(research, "profile_config", lambda: {"delegation": {"inherit_mcp_toolsets": False}})
     monkeypatch.setattr(workers.shutil, "which", lambda _: None)
@@ -280,7 +282,7 @@ def test_native_research_reads_only_its_owned_workspace(project, native, tmp_pat
 def test_native_worker_preflight_and_unsupported_role(project, native, monkeypatch):
     status = lambda: json.loads(native.bridge.worker_status({}, "garden-owner", "task"))
     assert status() == {"available": True, "backend": "hermes", "roles": ["chef:researcher"]}
-    assert "only chef:researcher" in native.run("chef:dev-small")["error"]
+    assert "unavailable for this role" in native.run("chef:dev-small")["error"]
     monkeypatch.setattr(research, "profile_config", lambda: {"delegation": {"inherit_mcp_toolsets": True}})
     assert "inherit_mcp_toolsets" in status()["error"]
     assert "inherit_mcp_toolsets" in native.run()["error"]
@@ -378,7 +380,7 @@ def test_worker_arguments_default_to_none(project):
 ])
 def test_invalid_or_pinned_worker_arguments_stop_before_auth(project, codex, workers_value):
     adapter = json.loads(project.adapter.read_text(encoding="utf-8"))
-    adapter["workers"] = workers_value
+    adapter["workers"] = {"backend": "codex", **workers_value} if isinstance(workers_value, dict) else workers_value
     write_json(project.adapter, adapter)
     with pytest.raises(ValueError, match="workers"):
         delegate(project)

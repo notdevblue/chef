@@ -72,10 +72,18 @@ def normalize_payload(payload, runtime=""):
         result["tool_input"] = original_input
     else:
         result["tool_input"] = tool_input
-    if runtime == "codex" and os.environ.get("CHEF_HERMES_WORKER"):
-        from chef.runtimes.hermes.workers import normalize_worker_payload
+    if runtime in ("claude", "codex") and os.environ.get("CHEF_HERMES_WORKER"):
+        from chef.runtimes.hermes.workers import normalize_worker_payload, worker_record
 
+        record = worker_record()
+        backend = record.get("backend", "codex")
+        if backend != runtime:
+            raise ValueError("Hermes worker hook runtime does not match its assigned backend")
         result = normalize_worker_payload(result)
+        if runtime == "claude":
+            from chef.runtimes.hermes.claude import validate_payload
+
+            result = validate_payload(result)
     return result
 
 

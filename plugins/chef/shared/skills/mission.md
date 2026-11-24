@@ -581,4 +581,4 @@ chef 플러그인(상태 CLI·가드·스킬)이 대상이고, 이때도 스킬 
 - 상시 에이전트 군집, 사람 없는 밤샘 루프, 중단·종료된 세션의 자동 재개
 # Hermes 현재 세션
 
-Hermes는 [전용 진입점](../../hermes/skills/mission/SKILL.md)의 도구·역할 연결을 사용한다. 공통 승인·미션 상태·검증 계약은 그대로 적용하며 현재 작업 세션에서 실행한다. 역할 작업은 Codex 구독 CLI의 기존 Chef 역할로 파견한다.
+Hermes는 [전용 진입점](../../hermes/skills/mission/SKILL.md)의 도구·역할 연결을 사용한다. 공통 승인·미션 상태·검증 계약은 그대로 적용하며 현재 작업 세션에서 실행한다. 기본 역할 파견은 현재 Hermes 프로필의 모델과 인증을 사용한다. Codex·Claude CLI나 명시 설정한 JSONL bridge를 선택할 수 있으며 세부 설정은 [Hermes 안내](../../hermes/README.md)를 따른다.

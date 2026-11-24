@@ -113,39 +113,62 @@ Managed create, refresh and remove are unavailable for external workspaces.
 
 Call `chef_delegate` to dispatch a role worker after the owned mission is initialized.
 `chef_worker_status` reports the backend configured for the current workspace and the
-roles it can dispatch under `agents.allow`. It checks executable and login status for
-Codex, and the public lifecycle API for Hermes. Model execution and hook/tool access
-are confirmed on dispatch.
+roles it can dispatch under `agents.allow`. The selected backend and role limits are
+checked before dispatch. No backend is silently substituted.
 
-### Hermes researcher
+### Hermes profile backend
 
-To use the current Hermes profile's model routing and credentials, opt in through
-the adapter or its `local.json` overlay:
+`hermes` is the default backend and supports researcher, dev-small, dev-medium,
+verifier, code-reviewer and reviewer-small. It uses the active Hermes profile's
+model routing and credentials. You can explicitly set a model or provider for an
+individual role in the adapter or its `local.json` overlay:
 
-```json
-{"runtimes": {"hermes": {"workers": {"backend": "hermes"}}}}
+Set leaf delegation in the Hermes profile so role workers cannot spawn more
+workers. Disable inherited MCP toolsets so the child receives only its assigned
+Chef tools:
+
+```yaml
+delegation:
+  inherit_mcp_toolsets: false
+  max_spawn_depth: 1
 ```
 
-This backend supports `chef:researcher`. Enable the `chef-research` toolset for
-the profile/surface if you manage an explicit toolset list. Set
-`delegation.inherit_mcp_toolsets: false` in the Hermes profile to keep parent MCP
-tools out of research children. Use the default `delegation.max_spawn_depth: 1`
-or set `delegation.orchestrator_enabled: false` to keep research children as leaves.
-The child runs in a fresh Hermes session with a tool for listing directories, reading text
-files and querying Git HEAD in the assigned workspace. Listings and reads have
-size limits. The tool excludes symbolic links, Git administrative files and the
-Chef mission state. The child has no shell or write tools. A configured
-`workers.guardCommand` checks each research read. A timeout revokes workspace
-access before requesting child cancellation. Result routing metadata identifies
-the provider and model selected at child launch.
+If the profile restricts enabled toolsets, allow `chef` for the parent session and
+`chef-worker-read`, `chef-worker-write` and `chef-worker-shell` for worker roles.
+Chef grants children only the role's required subset. `orchestrator_enabled: false`
+can be used instead of `max_spawn_depth: 1` to prevent nested delegation.
+
+```json
+{
+  "runtimes": {
+    "hermes": {
+      "workers": {
+        "backend": "hermes",
+        "hermesRoles": {
+          "researcher": {"model": "demo-research", "provider": "sample-cloud"}
+        }
+      }
+    }
+  }
+}
+```
+
+Values are passed as routing preferences to the Hermes worker API. They do not
+change credentials. Hermes worker lifecycle support must be available in the
+installed runtime. The worker's file and shell tools use the assigned native job
+and Chef guards.
 
 ### Codex subscription workers
 
-The default `codex` backend dispatches through Codex CLI. Available roles are
+Select `codex` explicitly to dispatch through Codex CLI. Available roles are
 researcher, dev-small, dev-medium, verifier,
 code-reviewer and reviewer-small. They use the committed `codex/agents/chef-*.toml`
 instructions and model/effort settings. Roles without a model override use the
 user's existing Codex default; no Hermes model or paid API fallback is selected.
+
+```json
+{"runtimes": {"hermes": {"workers": {"backend": "codex"}}}}
+```
 
 Install Codex CLI and log in with `codex login` using ChatGPT. Install/update Chef
 for Codex and explicitly trust its hooks in `/hooks`. Workers enable hooks but
@@ -181,6 +204,108 @@ isolation guarantee. Research/review roles use
 read-only sandboxes; implementation/verification use workspace-write. Nested
 Codex multi-agent tools are disabled. Worker return text is evidence to inspect,
 not a completed unit, approval, or independent validation by itself.
+
+### Claude CLI workers
+
+Select `claude` explicitly to dispatch through the installed Claude CLI. All six
+Chef roles are available. The default role model and effort come from the installed
+Chef role definitions. Optional `workers.claudeRoles` entries can set a model and
+effort for a role. Effort accepts `low`, `medium`, `high` or `max`.
+
+```json
+{
+  "runtimes": {
+    "hermes": {
+      "workers": {
+        "backend": "claude",
+        "claudeRoles": {
+          "dev-small": {"model": "demo-coder", "effort": "medium"}
+        }
+      }
+    }
+  }
+}
+```
+
+Claude Code 2.1.295 or newer is required for fail-closed hooks. Dispatch also requires
+a logged-in CLI account. Without an explicit settings snapshot, authentication comes
+from the Hermes process environment, the selected `CLAUDE_CONFIG_DIR` and Claude's
+credential store. Chef checks that the isolated worker resolves to the same auth route
+and account. If known user or workspace settings select auth or provider routing, dispatch
+stops and asks for an explicit snapshot instead of importing full settings.
+
+Set `workers.claudeSettings` in a private adapter overlay to an absolute path to a
+private JSON file. This snapshot accepts only `env`, `apiKeyHelper`, `awsAuthRefresh`,
+`awsCredentialExport`, `gcpAuthRefresh`, `forceLoginMethod`, `forceLoginOrgUUID` and
+`modelOverrides`. Values are limited to strings, string maps for `env` and
+`modelOverrides`, and strings or a string list for `forceLoginOrgUUID`. The
+`forceLoginMethod` values are `claudeai`, `console` or `gateway`, subject to the
+configured CLI account policy. The `env` map cannot replace `CHEF_`, `HERMES_`,
+`HAN_` or `PYTHON` variables. Other settings are rejected. Claude managed policy
+remains controlled by the installed CLI.
+
+```json
+{
+  "runtimes": {
+    "hermes": {
+      "workers": {
+        "claudeSettings": "/home/example/.config/chef/claude-auth.json"
+      }
+    }
+  }
+}
+```
+
+Chef writes the selected auth fields and fixed per-phase worker permissions to a
+private temporary settings file. The auth-status check, hook probe and assigned role
+work use the same auth fields, workspace and process environment. Secrets stay out of
+command arguments.
+Each role launch disables nested agents and verifies the installed Chef hook with a
+denied Bash probe before assigned role work.
+Research and review roles have read tools only. Implementation roles can use guarded
+write tools. Verifier shell use remains subject to the assigned job guards. These
+CLI permissions and hooks are cooperative controls and do not provide OS filesystem
+isolation.
+
+### Named JSONL attachments
+
+Use a named attachment for a model bridge that is not one of the built-in backends.
+The bridge is a trusted local executable. Its configuration accepts only an absolute
+executable path and literal arguments. No shell expansion or placeholders are used.
+The bridge inherits the caller's authentication environment, so its owner must
+review the executable and its credential handling.
+
+```json
+{
+  "runtimes": {
+    "hermes": {
+      "workers": {
+        "backend": "demo-bridge",
+        "attachments": {
+          "demo-bridge": {"command": ["/opt/demo/bridge", "--profile", "sample"]}
+        }
+      }
+    }
+  }
+}
+```
+
+The process uses schema 1 JSONL on stdin and stdout. It first answers a `status`
+request with supported Chef roles and `transport: "chef-tools-v1"`. Chef then sends
+a `delegate` request with a host-generated task ID, role, prompt, assigned workspace,
+timeout and allowed tool names. A tool request includes a unique request ID, tool
+name and arguments. Chef executes it through the same native job and sends a matching
+`tool_result` with the result or error. The bridge finishes with a `result` object.
+Chef sends `cancel` after a failed or timed-out delegation.
+Read-only roles receive only the read tool. Messages are limited to 1 MiB and a
+delegation may make at most 1,000 tool calls. Invalid messages, duplicate request
+IDs, timeout or lost job ownership fail the delegation and revoke job access.
+
+This protocol mediates tool requests. The bridge process and its descendants remain
+trusted local programs and the protocol is not an OS filesystem sandbox. The built-in
+`claude` backend supplies the supported Claude CLI integration. Grok Build CLI has
+no built-in backend. Live model execution, provider behavior and installation-specific
+authentication still require testing in the target Hermes environment.
 
 ## Limits and validation
 

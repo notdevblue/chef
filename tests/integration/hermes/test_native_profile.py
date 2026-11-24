@@ -76,18 +76,31 @@ print('{"ok":true}')
         from agent.subagent_lifecycle import bind_subagent_parent
         from tools import delegate_tool, delegate_tool_config
         from tools.delegate_tool_toolsets import _resolve_child_toolsets
+        from chef.runtimes.hermes import native, workers
 
         subprocess.run(["git", "init", "-q", str(slot)], check=True)
         subprocess.run(["git", "-c", "user.name=Fictional", "-c", "user.email=fictional@example.test",
                         "commit", "--allow-empty", "-qm", "Seed fictional workspace"], cwd=slot, check=True)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=slot, text=True).strip()
         (slot / "state/seed/mission.md").write_text("# Fictional mission\n", encoding="utf-8")
-        child = SimpleNamespace(session_id="fern-research-session", _subagent_id="sa-test", _delegate_role="leaf",
+        child = SimpleNamespace(session_id="fern-worker-session", _subagent_id="sa-test", _delegate_role="leaf",
                                 _delegate_depth=1, model="fictional-model", provider="fictional-provider")
-        parent = SimpleNamespace(session_id=request["session_id"], enabled_toolsets=["chef", "chef-research", "file", "terminal"])
+        parent = SimpleNamespace(session_id=request["session_id"], enabled_toolsets=["chef", "chef-research", "file", "terminal",
+                                native.READ_TOOLSET, native.WRITE_TOOLSET, native.SHELL_TOOLSET])
+        current_role = "researcher"
+        sequence = 0
 
         def build(*, goal, toolsets, role, parent_agent, **_):
-            assert _resolve_child_toolsets(parent_agent, toolsets, role)[0] == ["chef-research"]
+            nonlocal sequence
+            sequence += 1
+            child.session_id = "fern-worker-session-" + str(sequence)
+            child._subagent_id = "sa-test-" + str(sequence)
+            expected = [native.READ_TOOLSET]
+            if current_role in native.DEVELOPERS:
+                expected.append(native.WRITE_TOOLSET)
+            if current_role not in workers.READ_ONLY:
+                expected.append(native.SHELL_TOOLSET)
+            assert _resolve_child_toolsets(parent_agent, toolsets, role)[0] == expected
             plugins.invoke_hook("subagent_start", parent_session_id=parent_agent.session_id,
                                 child_session_id=child.session_id, child_subagent_id=child._subagent_id, child_goal=goal)
             return child
@@ -97,10 +110,23 @@ print('{"ok":true}')
             assert get_hermes_home() == profile
             assert plugins.resolve_pre_tool_block("terminal", {"command": "echo blocked"}, **child_request)
             args = {"operation": "head"}
-            assert plugins.resolve_pre_tool_block("chef_research_read", args, **request)
-            assert plugins.resolve_pre_tool_block("chef_research_read", args, **child_request) is None
-            observed = json.loads(registry.dispatch("chef_research_read", args, **child_request))
+            assert plugins.resolve_pre_tool_block(native.READ, args, **request)
+            assert plugins.resolve_pre_tool_block(native.READ, args, **child_request) is None
+            observed = json.loads(registry.dispatch(native.READ, args, **child_request))
             assert observed == {"head": head}, observed
+            write = {"operation": "write", "path": "sample.py", "content": "value = 2\n"}
+            written = json.loads(registry.dispatch(native.WRITE, write, **child_request))
+            if current_role in native.DEVELOPERS:
+                assert written.get("bytes") == 10, written
+                shell = {"command": shlex.quote(sys.executable) + ' -c "from sample import value; assert value == 2; print(value)"'}
+            else:
+                assert "error" in written, written
+                shell = {"command": "printf verified"}
+            checked = json.loads(registry.dispatch(native.SHELL, shell, **child_request))
+            assert (checked.get("exit_code") == 0) == (current_role not in workers.READ_ONLY), checked
+            assert plugins.resolve_pre_tool_block("delegate_task", {}, **child_request)
+            foreign_state = json.loads(registry.dispatch(native.READ, {"operation": "read", "path": "state/ACTIVE"}, **child_request))
+            assert "error" in foreign_state
             plugins.invoke_hook("subagent_stop", parent_session_id=parent.session_id, child_session_id=child.session_id)
             return {"status": "completed", "summary": observed["head"]}
 
@@ -112,8 +138,9 @@ print('{"ok":true}')
               patch.object(delegate_tool, "_build_child_preserving_parent_tools", side_effect=build),
               patch.object(delegate_tool, "_run_child_lifecycle", side_effect=run_child),
               patch("chef.runtimes.hermes.workers.codex_executable", side_effect=AssertionError("Codex was used"))):
-            result = json.loads(registry.dispatch("chef_delegate", {"role": "chef:researcher", "prompt": "Find HEAD"}, **request))
-        assert result["ok"] and result["result"] == head and result["runtime"] == "hermes", result
+            for current_role in workers.ROLES:
+                result = json.loads(registry.dispatch("chef_delegate", {"role": "chef:" + current_role, "prompt": "Inspect and verify the invented sample"}, **request))
+                assert result["ok"] and result["result"] == head and result["runtime"] == "hermes", result
 
     def run(label, home):
         manager, slot = root / (label + "-manager"), root / (label + "-slot")
@@ -177,7 +204,8 @@ elif sys.argv[1] == "list":
                 from chef.cli import mission_entry
 
                 worker_status = json.loads(registry.dispatch("chef_worker_status", {}, **request))
-                assert worker_status == {"available": True, "backend": "hermes", "roles": ["chef:researcher"]}, worker_status
+                from chef.runtimes.hermes.workers import ROLES
+                assert worker_status == {"available": True, "backend": "hermes", "roles": ["chef:" + role for role in ROLES]}, worker_status
                 entry = root / "entry.py"
                 entry.write_text(f"print({json.dumps({'schema': 1, 'action': 'continue'})!r})", encoding="utf-8")
                 write_json(adapter_dir / "mission-entry.json", {"schema": 1, "events": [{

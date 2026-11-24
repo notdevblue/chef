@@ -7,7 +7,7 @@
 
 - Python 3.11 이상, 사용할 Claude Code·Codex CLI·Grok CLI 또는 Hermes Agent.
 - Claude·Codex·Grok 슬롯 실행은 Windows에서 Windows Terminal(`wt.exe`), macOS·Linux에서 대화형 터미널 또는 설정한 터미널 백엔드.
-- Hermes는 macOS·Linux의 native plugin API와 로컬 terminal backend. 역할 파견에는 Codex CLI의 ChatGPT 구독 로그인과 신뢰한 Chef 훅이 필요합니다.
+- Hermes는 macOS·Linux의 native plugin API와 로컬 terminal backend가 필요합니다. 기본 역할 파견은 현재 Hermes 프로필의 모델과 인증을 사용하며 프로필에 `delegation.inherit_mcp_toolsets: false`와 leaf 설정을 둡니다. leaf는 `delegation.max_spawn_depth: 1` 또는 `delegation.orchestrator_enabled: false`로 설정합니다. 명시적인 Codex backend에는 Codex CLI의 ChatGPT 로그인과 신뢰한 Chef 훅이 필요합니다. Claude 및 JSONL bridge 설정은 [Hermes 안내](../plugins/chef/hermes/README.md)를 따릅니다.
 - 프로젝트 어댑터가 사용하는 도구. Perforce·Unity는 해당 프로젝트에서 사용하는 경우에만 필요합니다.
 
 Python과 어댑터 환경은 다음 명령으로 점검합니다.
@@ -136,7 +136,7 @@ Hermes의 레지스트리는 `HAN_ADAPTERS_DIR`이 우선이며, 없으면 `$HER
 현재 Hermes 작업의 `chef_slot`으로 ready 슬롯을 선택하고, 해당 세션에서 미션을 시작합니다.
 같은 Hermes 소유 세션의 진행 중 미션은 `resume`으로 연결하며 다른 세션의 ACTIVE는 인계하지 않습니다.
 native `delegate_task` 대신 `chef_delegate`로 Chef 역할을 파견합니다.
-역할 워커는 Codex 로그인·설치 훅을 확인하며, 설정이 부족하면 실행을 중단하고 필요한 설정을 안내합니다.
+역할 워커는 선택한 backend의 준비 조건을 확인합니다. 기본 `hermes`는 현재 Hermes 프로필의 모델·인증과 `delegation.inherit_mcp_toolsets: false` 및 leaf/toolset 설정을 사용합니다. `codex`는 Codex 로그인과 신뢰한 Chef 훅, `claude`는 지원 버전의 Claude CLI 로그인과 Chef 훅, 명명된 JSONL bridge는 명시적인 실행 파일 구성이 필요합니다. 조건이 부족하면 실행을 중단하고 설정을 안내합니다. 상세 조건은 [Hermes 안내](../plugins/chef/hermes/README.md)를 따릅니다.
 
 Hermes의 네이티브 SQLite 대화 기록은 `distill`의 JSONL 입력으로 읽지 않습니다.
 명시적으로 내보낸 호환 대화 기록만 지정하고, 사용량이 필요하면 관측한 명시적 메타데이터를 제공합니다.

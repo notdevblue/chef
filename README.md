@@ -46,8 +46,9 @@ Windows에서는 junction을 사용합니다. 기존 설치가 있다면 [설치
 ### Hermes Agent (macOS·Linux)
 
 Hermes native 플러그인은 실행 중인 Hermes 작업 세션에서 슬롯을 선택합니다. GUI 터미널이나 새 Hermes 프로세스를
-열지 않습니다. 역할 작업은 기존 Chef Codex 역할 정의와 **Codex CLI의 ChatGPT 구독 로그인**을 사용합니다.
-API 키로 자동 전환하지 않습니다. native 훅·설치·제한 사항은 [Hermes 안내](plugins/chef/hermes/README.md)를 따르세요.
+열지 않습니다. 기본 역할 파견은 현재 Hermes 프로필의 모델과 인증을 사용하며 여섯 Chef 역할을 지원합니다.
+Codex CLI, Claude Code, 또는 사용자가 구성한 JSONL 브리지를 선택할 수도 있습니다. 설치와 제한 사항은
+[Hermes 안내](plugins/chef/hermes/README.md)를 따르세요.
 
 ## 시작하기
 

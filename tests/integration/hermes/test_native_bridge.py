@@ -53,6 +53,23 @@ def test_native_terminal_denial_prevents_execution(world):
     assert call(world, "terminal", {"command": "echo safe"}) is None
 
 
+def test_worker_status_forwards_the_trusted_task_workspace(world, monkeypatch, tmp_path):
+    from chef.runtimes.hermes import workers
+
+    calls = []
+    def status(adapter, research, native=None, cwd=None):
+        calls.append((adapter, research, native, cwd))
+        return {"available": True}
+    monkeypatch.setattr(workers, "status", status)
+    monkeypatch.setattr(plugin, "native_cwd", lambda _: str(tmp_path / "unrelated"))
+    world.bridge.bindings[("owner", "task")] = {"cwd": str(world.project)}
+    result = json.loads(world.bridge.worker_status({}, session_id="owner", task_id="task", cwd="untrusted"))
+    assert result == {"available": True}
+    assert len(calls) == 1 and calls[0][3] == str(world.project)
+    assert calls[0][0]["project"] == "Comet"
+    assert calls[0][1] is world.bridge.research and calls[0][2] is world.bridge.native
+
+
 @pytest.mark.parametrize("tool,args", [
     ("terminal", {"command": "echo han-mission resume mission"}),
     ("write_file", {"path": "state/note.md", "content": "x"}),

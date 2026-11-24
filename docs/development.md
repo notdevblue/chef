@@ -62,8 +62,9 @@ macOS/Linux의 별도 Hermes native job은 고정한 공개 Hermes 소스로 실
 테스트 파일에서 스킬의 구현 디렉터리를 Python 검색 경로로 추가하지 않습니다.
 기존 `python plugins/chef/codex/sync_shared.py`는 체크아웃에서만 쓰는 개발 명령 별칭으로 유지합니다.
 
-Hermes 회귀 검사는 가상의 프로젝트·분리된 홈·가짜 native host/CLI로 가드, 인자 전달, 소유권과 오류 처리를 확인합니다.
-이 결과를 실제 Hermes gateway나 구독 모델 호출의 검증으로 대신하지 않습니다. 실제 검증은 macOS·Linux 각각의
+Hermes 회귀 검사는 가상의 프로젝트·분리된 홈·가짜 native host/CLI와 bridge로 가드, 인자 전달, 소유권과 오류 처리를 확인합니다.
+Claude 구독 backend도 가짜 CLI로 로그인 검사·hook handshake·도구 제한을 확인합니다. 이 결과를 실제 Hermes gateway나
+구독 모델 호출의 검증으로 대신하지 않습니다. 실제 검증은 macOS·Linux 각각의
 서비스 실행 계정에서 GUI 없이 슬롯 선택, 미션 시작, 역할 파견, 질문 응답과 재시작 후 재개를 확인합니다.
 구독 인증·native API·지원 OS를 실제로 확인하지 못한 항목은 완료로 보고하지 않습니다.
 

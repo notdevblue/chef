@@ -20,7 +20,7 @@ Claude·Codex·Grok·Hermes의 등록 형식과 도구 차이는 런타임 경�
 | `plugins/chef/shared/` | 공통 스킬 절차 |
 | `plugins/chef/skills/`, `hooks/`, `codex/`, `grok/` | 런타임 등록, 역할, 참조 문서와 호환 진입점 |
 | `plugins/chef/hermes/` | Hermes native 플러그인 등록과 스킬 진입점 |
-| `plugins/chef/chef/runtimes/hermes/` | Hermes 현재 작업 연결, native 가드와 Codex 구독 역할 워커 |
+| `plugins/chef/chef/runtimes/hermes/` | Hermes 기본 native 역할 워커, 가드와 선택 가능한 Codex·Claude·JSONL bridge backend |
 | `tests/` | 개발용 회귀·통합·계약 검사와 가상 데이터 |
 | `tools/` | 저장소 개발·구조 검사 |
 
@@ -38,9 +38,15 @@ Hermes 연결은 macOS·Linux의 로컬 terminal backend를 대상으로 하며 
 모델이 도구 인자로 넘긴 세션이나 작업 폴더를 신뢰한 실행 문맥으로 사용하지 않는다. 현재 작업의 슬롯 연결을
 사용하고 프로세스 전역 `cwd`나 세션 환경변수를 변경하지 않는다. 준비와 미션 진입은 별개이며 슬롯 선택만으로 ACTIVE를 만들지 않는다.
 
-Hermes 코디네이터의 역할 워커는 기존 Codex 역할 TOML을 읽어 Codex CLI의 ChatGPT 구독 로그인으로 실행한다.
-런타임 전용 native `delegate_task`와 다른 모델로의 자동 대체는 사용하지 않는다. 워커의 세션은 실제 Codex 세션과 구분해
-Hermes 미션 소유권에 연결하며, 설치 코드·훅과 소유권을 확인할 수 없으면 실행을 막는다.
+Hermes 코디네이터는 기본적으로 현재 Hermes 프로필의 모델과 인증으로 여섯 Chef 역할을 파견한다. 선택 설정은
+`workers.hermesRoles`에서 역할별 `model`과 `provider`를 지정한다. Codex와 Claude는 별도 내장 backend이며,
+Codex는 등록된 역할 TOML과 `workers.codexArguments`를 사용하고 Claude는 `workers.claudeRoles`로 역할별 설정을 받는다. 명시된 backend만 선택하고 다른 인증이나
+모델로 자동 대체하지 않는다. 워커 도구는 동일한 native 작업 권한을 거치며 세션·작업 소유권을 확인할 수 없으면 실행을 막는다.
+
+외부 워커는 명명된 `workers.attachments` 항목으로 실행한다. 각 항목은 절대 경로 실행 파일과 인자 배열만 받으며,
+bridge는 제한된 JSONL 프로토콜로 역할과 도구를 요청한다. 모든 도구 호출은 현재 native 작업의 같은 가드와 권한을 통과한다.
+bridge 실행 파일과 그 자식은 관리자가 신뢰해야 한다. 이 연결은 OS 파일시스템 sandbox가 아니다. Claude CLI 연결은
+별도의 내장 backend가 제공한다. Grok Build CLI의 내장 backend는 없다.
 작업 대기열의 새 Hermes 세션 생성, Hermes SQLite 대화 기록의 암묵적 변환, 서비스별 인증·채널 설정은 이 연결의 책임이 아니다.
 
 ## 유지하는 외부 계약

@@ -19,6 +19,7 @@ from chef.infrastructure.paths import inside_real_root, same_path
 from chef.locations import PLUGIN_ROOT
 from chef.runtimes.hermes import external_slots
 from chef.runtimes.hermes import research as research_worker
+from chef.runtimes.hermes import native as native_worker
 
 SKILLS = ("mission", "slots", "adapter-init", "doctor", "distill")
 PATCH_HEADER = re.compile(r"^(\*\*\* (?:Add File|Update File|Delete File|Move to): )(.+)$", re.MULTILINE)
@@ -148,6 +149,10 @@ class Bridge:
         self.released_slots = {}
         self.lock = threading.RLock()
         self.research = research_worker.ResearchWorkers(lifecycle)
+        self.native = native_worker.NativeWorkers(lifecycle)
+
+    def is_worker(self, session_id):
+        return self.research.owns(session_id) or bool(self.native and self.native.owns(session_id))
 
     def cwd(self, session_id, task_id):
         key = identity(session_id, task_id)
@@ -158,7 +163,7 @@ class Bridge:
     def request(self, tool_name, args, session_id="", task_id="", **_):
         """Pin local file and terminal operations to this task's selected slot."""
         try:
-            if tool_name == research_worker.TOOL or self.research.owns(session_id):
+            if tool_name == research_worker.TOOL or tool_name in native_worker.TOOLS or self.is_worker(session_id):
                 return None
             cwd = self.cwd(session_id, task_id)
             if not isinstance(args, dict):
@@ -186,6 +191,10 @@ class Bridge:
 
     def before_tool(self, tool_name, args, session_id="", task_id="", **_):
         try:
+            if self.native and self.native.owns(session_id):
+                return None if tool_name in native_worker.TOOLS else block("the worker can only use its assigned Chef tools")
+            if tool_name in native_worker.TOOLS:
+                return block("only the assigned Hermes worker can use this tool")
             if self.research.owns(session_id):
                 return None if tool_name == research_worker.TOOL else block("the research worker can only use its workspace read tool")
             if tool_name == research_worker.TOOL:
@@ -350,7 +359,8 @@ class Bridge:
 
             with self.lock:
                 context = self.bindings.get((session_id, task_id), {})
-            request = {"session_id": session_id, "task_id": task_id, "cwd": cwd, "research": self.research}
+            request = {"session_id": session_id, "task_id": task_id, "cwd": cwd,
+                       "research": self.research, "native": self.native}
             if context.get("external"):
                 slot = external_slots.from_context(context)
                 with slot.lock():
@@ -364,7 +374,7 @@ class Bridge:
 
     def worker_status(self, args, session_id="", task_id="", **_):
         try:
-            if args or self.research.owns(session_id):
+            if args or self.is_worker(session_id):
                 raise ValueError("worker status is for the parent session and takes no arguments")
             from chef.infrastructure.configuration import read_adapter
             from chef.runtimes.hermes.workers import status
@@ -373,12 +383,13 @@ class Bridge:
             located = mission.locate_adapter({"cwd": cwd, "han_runtime": "hermes"})
             if located is None:
                 raise ValueError("no Chef adapter for this Hermes task; select the slot first")
-            return json.dumps(status(read_adapter(located.adapter_path, "hermes"), self.research), ensure_ascii=False)
+            return json.dumps(status(read_adapter(located.adapter_path, "hermes"), self.research,
+                                     native=self.native, cwd=cwd), ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"available": False, "error": str(exc)}, ensure_ascii=False)
 
     def context(self, session_id="", task_id="", **_):
-        if self.research.owns(session_id):
+        if self.is_worker(session_id):
             return None
         python_context = (
             "Chef CLI Python executable: " + json.dumps(sys.executable) + ". "
@@ -401,7 +412,7 @@ class Bridge:
             return {"context": python_context + "Chef context unavailable. Tool guards will block unresolved operations; inspect the runtime setup."}
 
     def verify(self, session_id="", **kwargs):
-        if self.research.owns(session_id):
+        if self.is_worker(session_id):
             return None
         try:
             task_id = kwargs.get("task_id") or session_id
@@ -466,5 +477,15 @@ def register(ctx):
         ctx.register_tool(research_worker.TOOL, research_worker.TOOLSET, research_worker.SCHEMA, bridge.research.read)
         ctx.register_hook("subagent_start", bridge.research.started)
         ctx.register_hook("subagent_stop", bridge.research.stopped)
+        for tool, toolset, schema in (
+            (native_worker.READ, native_worker.READ_TOOLSET, native_worker.READ_SCHEMA),
+            (native_worker.WRITE, native_worker.WRITE_TOOLSET, native_worker.WRITE_SCHEMA),
+            (native_worker.SHELL, native_worker.SHELL_TOOLSET, native_worker.SHELL_SCHEMA),
+        ):
+            def dispatch(args, _tool=tool, **kwargs):
+                return bridge.native.tool(_tool, args, **kwargs)
+            ctx.register_tool(tool, toolset, schema, dispatch)
+        ctx.register_hook("subagent_start", bridge.native.started)
+        ctx.register_hook("subagent_stop", bridge.native.stopped)
     for name in SKILLS:
         ctx.register_skill(name, PLUGIN_ROOT / "hermes" / "skills" / name / "SKILL.md", "Chef " + name)
