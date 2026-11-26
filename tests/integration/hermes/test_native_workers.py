@@ -156,7 +156,7 @@ def test_project_role_and_external_read_sources_are_bound_to_the_job(workspace, 
     guide.write_text("Approved selected reference.")
     role = workspace.root / ".codex/agents/sample.toml"
     role.parent.mkdir(parents=True)
-    role.write_text('model = "chosen"\ndeveloper_instructions = "Read the selected guide and review sample.py."\n')
+    role.write_text('model = "chosen"\nmodel_reasoning_effort = "high"\ndeveloper_instructions = "Read the selected guide and review sample.py."\n')
     adapter_path = workspace.root / ".hermes/orchestrator/adapter.json"
     adapter = json.loads(adapter_path.read_text())
     adapter["workers"] = {"readOnlySources": {str(guide): hashlib.sha256(guide.read_bytes()).hexdigest()},
@@ -171,6 +171,8 @@ def test_project_role_and_external_read_sources_are_bound_to_the_job(workspace, 
     host.lifecycle.observe = observe
     assert host.run("code-reviewer")["ok"]
     assert host.lifecycle.request["model"] == "chosen"
+    assert "model_reasoning_effort" not in host.lifecycle.request
+    assert "reasoning_effort" not in host.lifecycle.request
     assert "Read the selected guide and review sample.py." in host.lifecycle.request["context"]
 
 

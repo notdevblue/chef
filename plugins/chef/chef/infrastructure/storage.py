@@ -3,8 +3,29 @@
 import json
 import os
 import tempfile
+import time
 import uuid
 from pathlib import Path
+
+
+def replace_file(source, destination):
+    """Publish a complete file, allowing a short Windows reader to close.
+
+    Keep the same temporary file and any caller-owned gate across retries.
+    Persistent access denial still fails without deleting the old destination.
+    """
+    deadline = time.monotonic() + 0.5
+    while True:
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as error:
+            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 33):
+                raise
+            delay = min(0.01, deadline - time.monotonic())
+            if delay <= 0:
+                raise
+            time.sleep(delay)
 
 
 def atomic_write_bytes(path, value, *, durable=False, create_parents=False, creation_mode=None):
@@ -39,7 +60,7 @@ def atomic_write_bytes(path, value, *, durable=False, create_parents=False, crea
             if durable:
                 stream.flush()
                 os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        replace_file(temporary, path)
         if durable and os.name != "nt":
             directory = os.open(path.parent, os.O_RDONLY)
             try:

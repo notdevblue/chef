@@ -29,10 +29,7 @@ def test_role_policy_is_validated_before_a_model_can_be_launched(tmp_path):
     role = tmp_path.resolve() / "role.toml"
     role.write_text('model = "chosen-model"\nmodel_reasoning_effort = "high"\ndeveloper_instructions = "Review sample files."\n')
     settings = {"roleContracts": {"researcher": {"path": role.name, "sha256": fingerprint(role), "modelPolicy": "definition"}}}
-    with pytest.raises(ValueError, match="fixed model_reasoning_effort"):
-        preflight(settings, tmp_path, ["researcher"])
-    role.write_text('model = "chosen-model"\ndeveloper_instructions = "Review sample files."\n')
-    settings["roleContracts"]["researcher"]["sha256"] = fingerprint(role)
+    preflight(settings, tmp_path, ["researcher"])
     routing, body = role_contract(settings, tmp_path, "researcher")
     assert routing == {"model": "chosen-model"} and body == "Review sample files."
     with pytest.raises(ValueError, match="conflicts"):
@@ -40,6 +37,13 @@ def test_role_policy_is_validated_before_a_model_can_be_launched(tmp_path):
     role.write_text('developer_instructions = "unapproved"\n')
     with pytest.raises(ValueError, match="changed"):
         role_contract(settings, tmp_path, "researcher")
+
+
+def test_inherited_hermes_model_does_not_import_codex_effort(tmp_path):
+    role = tmp_path.resolve() / "role.toml"
+    role.write_text('model_reasoning_effort = "high"\ndeveloper_instructions = "Inspect sample files."\n')
+    settings = {"roleContracts": {"researcher": {"path": role.name, "sha256": fingerprint(role), "modelPolicy": "inherit"}}}
+    assert role_contract(settings, tmp_path, "researcher") == ({}, "Inspect sample files.")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Hermes descriptor reads require POSIX")

@@ -42,6 +42,8 @@ Hermes 코디네이터는 기본적으로 현재 Hermes 프로필의 모델과 �
 `workers.hermesRoles`에서 역할별 `model`과 `provider`를 지정한다. Codex와 Claude는 별도 내장 backend이며,
 Codex는 등록된 역할 TOML과 `workers.codexArguments`를 사용하고 Claude는 `workers.claudeRoles`로 역할별 설정을 받는다. 명시된 backend만 선택하고 다른 인증이나
 모델로 자동 대체하지 않는다. 워커 도구는 동일한 native 작업 권한을 거치며 세션·작업 소유권을 확인할 수 없으면 실행을 막는다.
+Hermes native 워커는 역할별 effort를 지정하지 않고 호스트의 reasoning 설정을 따른다.
+연결된 Codex TOML의 지침과 모델을 읽되 `model_reasoning_effort`는 Hermes 실행 설정으로 가져오지 않는다.
 
 외부 워커는 명명된 `workers.attachments` 항목으로 실행한다. 각 항목은 절대 경로 실행 파일과 인자 배열만 받으며,
 bridge는 제한된 JSONL 프로토콜로 역할과 도구를 요청한다. 모든 도구 호출은 현재 native 작업의 같은 가드와 권한을 통과한다.
@@ -70,6 +72,8 @@ gate는 빈 파일에서도 잠글 수 있다. 잠그기 전에 초기 바이트
 기존 결과는 이력으로 읽을 수 있으며, 코드 변경에 따른 보수적인 재검증은 정상 동작이다.
 새 구현 지문은 설치 절대 경로와 무관하게 패키지의 모든 Python 파일 이름과 내용으로 계산한다.
 상태·결과 JSON의 스키마는 유지한다.
+Windows의 일시적인 읽기 공유 충돌(오류 5·32·33)은 같은 완성된 임시 파일로 최대 0.5초 동안 교체를 재시도한다.
+호출자가 잡은 gate를 유지하며, 충돌이 계속되면 기존 목적지 파일을 삭제하지 않고 실패한다.
 
 ## 운영체제 경계
 

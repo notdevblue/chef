@@ -107,12 +107,12 @@ def role_contract(settings, cwd, role, routing=None):
     body = definition.get("developer_instructions")
     if not isinstance(body, str) or not body.strip() or len(body) > 24000:
         raise ValueError("role instructions must contain bounded developer_instructions")
-    declared = {key: definition[key] for key in ("model", "model_reasoning_effort") if key in definition}
+    # The role's source format is Codex TOML, but reasoning effort belongs to
+    # the Hermes host. Import only the model; do not turn Codex's effort into
+    # a worker override or a readiness requirement.
+    declared = {"model": definition["model"]} if "model" in definition else {}
     if contract["modelPolicy"] == "inherit" and declared:
-        raise ValueError("an inherited role must not retain fixed model or effort settings")
-    if declared.get("model_reasoning_effort"):
-        raise ValueError("Hermes public lifecycle does not support the role's fixed model_reasoning_effort; "
-                         "use a supporting backend or explicitly review the role policy")
+        raise ValueError("an inherited role must not retain a fixed model setting")
     if "model" in declared:
         model = declared["model"]
         if not isinstance(model, str) or not model.strip() or "\x00" in model or ("model" in routing and routing["model"] != model):

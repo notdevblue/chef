@@ -344,9 +344,9 @@ write grants. These entries are project configuration, not model tool arguments.
 is a workspace-relative TOML with `developer_instructions`; `modelPolicy` is
 `definition` or `inherit`. Native dispatch loads the pinned body into the child
 context and applies a fixed model at launch, then verifies the returned model.
-Inherited definitions must not retain fixed model/effort fields. The current
-public Hermes lifecycle has no per-launch reasoning-effort field: a fixed
-`model_reasoning_effort` is reported as unsupported during worker preflight,
-never silently inherited or weakened. Existing configured backends remain
-explicit choices. Source hashes and role contracts are checked by
+Inherited definitions must not retain a fixed model. Native Hermes workers use
+the host's reasoning configuration, with no per-worker effort override. The
+Codex TOML field `model_reasoning_effort` is not imported into Hermes routing and
+does not block readiness. Codex and Claude backends keep their own explicit
+settings. Source hashes and role contracts are checked by
 `chef_worker_status` before opening a mission.
