@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from chef.guards import mission
-from chef.infrastructure import configuration, paths, user_config
+from chef.infrastructure import configuration, paths
 from chef.infrastructure.fingerprints import implementation_digest
 from chef.infrastructure.locking import FileLock
 from chef.infrastructure.process import child_env
@@ -19,13 +19,13 @@ from chef.locations import PLUGIN_ROOT
 from chef.mission import unit_contracts
 from chef.mission.contracts import StateError, UNIT_HEADER, UNITS_FILE
 from chef.mission.storage import read_table, require_unit
-from chef.workers import backends
+from chef.workers import backends, policy
 from chef.workers.routing import role_name
 from chef.workers.store import Store, request_identity
 from chef.verification.execution import process_owner_alive, process_start
 
 RUNTIMES = ("claude", "codex", "grok")
-MODES = ("auto", "native", *RUNTIMES)
+MODES = policy.MODES
 READ_ONLY = {"research", "researcher", "review", "reviewSmall", "audit", "code-reviewer", "reviewer-small"}
 ROLE_KEYS = {"researcher": "research", "dev-small": "implementSmall", "dev-medium": "implement",
              "verifier": "verify", "code-reviewer": "review", "reviewer-small": "reviewSmall"}
@@ -117,23 +117,6 @@ def ownership(request):
                      "mission": active.id, "state": state, "unitContract": binding}
 
 
-def routing_mode(request, settings):
-    if "mode" in request:
-        mode = request["mode"]
-    elif "CHEF_WORKERS_MODE" in os.environ:
-        mode = os.environ["CHEF_WORKERS_MODE"]
-    elif "mode" in settings:
-        mode = settings["mode"]
-    else:
-        workers = user_config.read().get("workers", {})
-        if not isinstance(workers, dict):
-            raise ValueError("global workers must be an object")
-        mode = workers.get("mode", "auto")
-    if not isinstance(mode, str) or mode not in MODES:
-        raise ValueError("worker mode must be auto, native, claude, codex or grok")
-    return mode
-
-
 def prepare(value):
     if not isinstance(value, dict):
         raise ValueError("worker request must be an object")
@@ -161,9 +144,10 @@ def prepare(value):
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
         raise ValueError("workers must be an object")
-    mode = routing_mode(request, settings)
-    request["mode"] = mode
-    request["allowedRuntimes"] = list(RUNTIMES) if mode == "auto" else [owner["runtime"] if mode == "native" else mode]
+    resolved = policy.resolve(request, settings, owner_runtime=owner["runtime"], role=request["role"])
+    request["mode"] = resolved["mode"]
+    request["allowedRuntimes"] = resolved["allowedRuntimes"]
+    request["routingPolicy"] = {name: resolved[name] for name in ("runtimes", "roleRouting")}
     request["unitContract"] = owner["unitContract"]
     role_key = requested_role if requested_role in ("audit", "research", "implement", "implementSmall", "verify", "review", "reviewSmall") else ROLE_KEYS[request["role"]]
     roles = adapter.get("roles", {})

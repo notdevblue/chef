@@ -13,6 +13,7 @@ def summary(value, store):
     fields = ("key", "token", "status", "native", "actualRole", "route", "created", "cancellationRequested", "cancelNative", "instruction")
     output = {name: value[name] for name in fields if name in value}
     output["mode"] = value["request"].get("mode", "auto")
+    output["allowedRuntimes"] = value["request"].get("allowedRuntimes", list(controller.RUNTIMES))
     directory = controller.attempt_directory(store, value)
     output["details"] = str(directory)
     if value.get("native") and value.get("status") in ("reserved", "running"):

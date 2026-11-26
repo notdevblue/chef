@@ -33,7 +33,7 @@ Claude Code·Codex CLI·Grok CLI의 미션 코디네이터는 역할을 직접 �
 
 프로젝트에서만 다르게 쓸 기본값은 어댑터 또는 개인 `local.json`의 같은 `workers.mode`에 설정한다. 기존 `workers`의 다른 항목은 보존한다. 이 필드는 Claude·Codex·Grok 공통 dispatcher에 적용하며 Hermes의 기존 backend 선택에는 적용하지 않는다.
 
-실행별로는 `dispatch --mode native`를 쓰거나 요청 JSON에 `"mode": "native"`를 넣는다. CLI 옵션 > 요청 `mode` > `CHEF_WORKERS_MODE` 환경변수 > 어댑터 `workers.mode` > 전역 `~/.chef/config.json`의 `workers.mode` > `auto` 순으로 적용한다. 상위 항목이 지정돼 있으면 사용하지 않는 하위 전역 파일은 읽지 않는다. 환경변수를 쓰면 같은 환경에서 시작한 Chef 세션의 기본값이 된다.
+실행별로는 `dispatch --mode native`를 쓰거나 요청 JSON에 `"mode": "native"`를 넣는다. CLI 옵션 > 요청 `mode` > `CHEF_WORKERS_MODE` 환경변수 > 어댑터 `workers.mode` > 전역 `~/.chef/config.json`의 `workers.mode` > `auto` 순으로 적용한다. 허용 서비스·역할 규칙을 함께 적용하므로 전역 파일은 모드 override가 있어도 매 파견 전에 읽고 검증한다. 잘못된 전역 JSON을 무시해 제외 서비스를 다시 허용하지 않는다. 환경변수를 쓰면 같은 환경에서 시작한 Chef 세션의 기본값이 된다.
 
 ```powershell
 $env:CHEF_WORKERS_MODE = "native"
@@ -43,9 +43,36 @@ $env:CHEF_WORKERS_MODE = "native"
 export CHEF_WORKERS_MODE=native
 ```
 
-`auto`로 바꾸면 자동 배정을 다시 켠다. 환경변수 설정은 서비스 CLI를 시작하기 전에 한다. 단일 서비스 모드에서는 다른 서비스의 인증·역할 검사도 하지 않고, quota·도구 부족·인증 실패 때 다른 서비스로 넘어가지 않는다. 허용 서비스 안에서 실행할 수 없으면 이유를 보고한다. 응답의 `mode`로 적용값을 확인한다.
+`auto`로 바꾸면 자동 배정을 다시 켠다. 환경변수 설정은 서비스 CLI를 시작하기 전에 한다. 단일 서비스 모드에서는 다른 서비스의 인증·역할 검사도 하지 않고, quota·도구 부족·인증 실패 때 다른 서비스로 넘어가지 않는다. 허용 서비스 안에서 실행할 수 없으면 이유를 보고한다. 응답의 `mode`와 `allowedRuntimes`로 적용 모드와 해당 역할의 최종 후보 범위를 확인한다.
 
 모드는 작업 접수 시 저장되며 이미 접수한 작업을 취소하거나 재파견하지 않는다. 전역 파일 변경은 다음 파견부터 반영하며 기존 작업은 접수 당시 모드를 유지한다. 모드 변경 뒤 새 작업은 새 `requestId`를 사용한다. 실행 중 어댑터를 수정하면 기존 설정 동일성 검사로 워커가 멈출 수 있으므로, 진행 중 전환에는 전역 파일 또는 이후 요청의 `mode`·`--mode`를 사용한다. 미션별 자연어 선택은 코디네이터가 이후 요청에 전달하는 선택이며 별도 미션 상태 필드를 자동 수정하지 않는다.
+
+## 허용 서비스와 역할별 고정
+
+일부 서비스만 자동 배정에 쓰려면 `workers.runtimes`를 지정한다. 생략하면 세 서비스를 모두 허용한다. 비어 있는 목록·중복·지원하지 않는 서비스 이름은 오류다. 제외한 서비스는 역할·인증 확인과 rate-limit 대체 후보에서도 제외한다. 동시 실행 수를 제한하는 옵션은 아니다.
+
+역할별 고정은 `workers.roleRouting`에 정규 역할 이름과 `runtime`을 적는다. 예를 들어 아래 전역 설정은 Claude·Codex 안에서 조사·구현·검증을 자동 배정하고 첫 리뷰·재리뷰는 Claude로 고정한다.
+
+```json
+{
+  "workers": {
+    "mode": "auto",
+    "runtimes": ["claude", "codex"],
+    "roleRouting": {
+      "code-reviewer": {"runtime": "claude"},
+      "reviewer-small": {"runtime": "claude"}
+    }
+  }
+}
+```
+
+역할 키는 `researcher`, `dev-small`, `dev-medium`, `verifier`, `code-reviewer`, `reviewer-small`이다. 사용자 정의 native 역할 이름이 있어도 이 논리적 역할 키로 지정한다. 요청의 `review`·`audit`은 `code-reviewer`, `reviewSmall`은 `reviewer-small` 규칙을 사용한다. 고정할 서비스는 `claude`·`codex`·`grok`이며, `runtime: "auto"`는 상속한 해당 역할의 고정을 풀고 허용 서비스 안의 자동 선택으로 돌린다. 역할별 모델·effort 설정은 기존 역할 정의를 따른다.
+
+`runtimes`는 요청 > 프로젝트 어댑터 > 전역 설정 순으로 선택하며 상위 목록이 하위 목록 전체를 대체한다. `roleRouting`은 전역 → 프로젝트 → 요청 순으로 **역할별 항목을 덮어쓴다**. 지정하지 않은 역할의 전역 규칙은 유지한다. 요청에서 직접 지정할 때에는 `runtimes`와 `roleRouting`을 요청 최상위에 쓴다. 명시적 사용자 선택이 없으면 코디네이터가 전체 목록이나 빈 규칙을 임의로 주입하지 않는다.
+
+실행 범위는 허용 서비스와 모드, 역할별 고정의 교집합이다. 전체 설정의 역할 고정이 허용 목록 밖의 서비스를 가리키거나, `native`·단일 서비스 모드와 다른 서비스를 고정하면 어떤 역할도 파견하기 전에 설정 오류로 알린다. 예를 들어 Codex 세션에서 `native`와 Claude 리뷰 고정을 함께 쓰려면, 먼저 리뷰 규칙을 `runtime: "auto"`로 풀거나 모드를 `auto`로 바꿔야 한다. 상위 모드 옵션만으로 제외 서비스나 역할 고정을 조용히 무시하지 않는다.
+
+고정 리뷰가 quota·도구·인증 문제로 실행되지 않으면 다른 서비스에 넘기지 않고 실패 이유를 보고한다. 주기적인 모델 재호출로 기다리지 않는다. 독립 리뷰는 같은 서비스에서도 새 맥락을 유지한다. 선택된 정책과 최종 허용 목록은 접수 시 작업에 저장하며, 설정 변경이나 rate-limit 대체로 진행 중 작업의 범위를 넓히지 않는다. 후속 작업의 `previous` 런타임도 새 정책에서 허용될 때만 재개 후보가 된다.
 
 ## 파견 계약
 

@@ -293,6 +293,9 @@ def test_cli_death_leaves_worker_and_input_ownership_live(sample):
             cli.kill()
             cli.communicate(timeout=5)
     eventually(lambda: execution.read_record(path).get("status") == "completed")
+    # Completion is published just before the supervisor exits input_lease().
+    # Wait for that separate cleanup checkpoint before asserting write access.
+    eventually(lambda: not execution.has_input_leases())
     execution.require_mutation_allowed([root / "widget.py"])
 
 

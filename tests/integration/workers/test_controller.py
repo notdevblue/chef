@@ -20,7 +20,7 @@ from chef.workers.store import Store
 def project(tmp_path, monkeypatch):
     monkeypatch.delenv("CHEF_WORKERS_MODE", raising=False)
     global_config = tmp_path / "user preferences" / "config.json"
-    monkeypatch.setattr(controller.user_config, "path", lambda: global_config)
+    monkeypatch.setattr(controller.policy.user_config, "path", lambda: global_config)
     project = tmp_path / "fictional orchard"
     project.mkdir()
     (project / "source.txt").write_text("initial", encoding="utf-8")
@@ -160,7 +160,7 @@ def test_global_mode_applies_across_hosts_and_is_pinned_for_existing_work(projec
 
 
 @pytest.mark.parametrize("layer", ["request", "environment", "adapter"])
-def test_explicit_mode_overrides_even_broken_unused_global_config(project, monkeypatch, layer):
+def test_explicit_mode_cannot_bypass_broken_global_service_boundaries(project, monkeypatch, layer):
     project.global_config.parent.mkdir()
     project.global_config.write_text("{unfinished", encoding="utf-8")
     request = project.request()
@@ -170,8 +170,10 @@ def test_explicit_mode_overrides_even_broken_unused_global_config(project, monke
         monkeypatch.setenv("CHEF_WORKERS_MODE", "native")
     else:
         project.adapter["workers"] = {"mode": "native"}
-    choose(monkeypatch, "claude")
-    assert controller.dispatch(request, store=project.store)["request"]["mode"] == "native"
+    monkeypatch.setattr(controller.backends, "candidates", lambda *a, **k: pytest.fail("must not probe"))
+    with pytest.raises(ValueError, match="global configuration"):
+        controller.dispatch(request, store=project.store)
+    assert project.store.list() == []
 
 
 @pytest.mark.parametrize("configuration", ["{unfinished", "[]", '{"workers":[]}', '{"workers":{"mode":"off"}}'])
@@ -181,6 +183,110 @@ def test_invalid_selected_global_config_never_probes_or_admits_work(project, mon
     monkeypatch.setattr(controller.backends, "candidates", lambda *a, **k: pytest.fail("must not probe"))
     with pytest.raises(ValueError):
         controller.dispatch(project.request(), store=project.store)
+    assert project.store.list() == []
+
+
+@pytest.mark.parametrize("owner", controller.RUNTIMES)
+@pytest.mark.parametrize("role", ["review", "reviewSmall", "code-reviewer", "reviewer-small", "audit"])
+def test_global_review_pin_routes_native_or_external_as_needed(project, monkeypatch, owner, role):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text(json.dumps({"workers": {
+        "runtimes": ["claude", "codex"], "roleRouting": {
+            "code-reviewer": {"runtime": "claude"}, "reviewer-small": {"runtime": "claude"}}}}), encoding="utf-8")
+    calls = choose(monkeypatch, "claude")
+    job = controller.dispatch(project.request(owner=owner, role=role), store=project.store, launch=lambda *a: None)
+    assert job["route"]["runtime"] == "claude"
+    assert job["native"] is (owner == "claude")
+    assert calls[0]["allowed_runtimes"] == ["claude"]
+    assert cli.summary(job, project.store)["allowedRuntimes"] == ["claude"]
+
+
+def test_excluded_service_never_checks_authentication_even_with_explicit_auto(project, monkeypatch):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text('{"workers":{"runtimes":["claude","codex"]}}', encoding="utf-8")
+    authenticated = []
+    monkeypatch.setattr(controller.backends, "auth", lambda name, *a: authenticated.append(name))
+    job = controller.dispatch({**project.request(owner="grok"), "mode": "auto"},
+                              store=project.store, launch=lambda *a: None)
+    assert authenticated == ["claude", "codex"]
+    assert job["route"]["runtime"] in ("claude", "codex")
+
+
+def test_pinned_review_quota_does_not_switch_service_or_reread_global_policy(project, monkeypatch):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text('{"workers":{"roleRouting":{"code-reviewer":{"runtime":"claude"}}}}', encoding="utf-8")
+    quota_candidates(monkeypatch)
+    job = controller.dispatch(project.request(owner="codex", role="review"), store=project.store, launch=lambda *a: None)
+    project.global_config.write_text('{"workers":{"roleRouting":{"code-reviewer":{"runtime":"codex"}}}}', encoding="utf-8")
+    calls = []
+
+    def run(runtime, *a, **kw):
+        calls.append(runtime)
+        raise controller.backends.RateLimited(runtime, {"errorCode": "rate_limited", "error": "quota"})
+
+    monkeypatch.setattr(controller.backends, "run", run)
+    failed = controller.supervise(job["key"], job["token"], store=project.store)
+    assert calls == ["claude"]
+    assert failed["status"] == "failed" and failed["result"]["errorCode"] == "rate_limited"
+    next_job = controller.dispatch({**project.request(owner="codex", role="review"), "requestId": "new-review"}, store=project.store)
+    assert next_job["native"] and next_job["route"]["runtime"] == "codex"
+
+
+@pytest.mark.parametrize("previous_runtime,independent,resumes", [
+    ("claude", True, False), ("codex", True, False),
+    ("codex", False, False), ("claude", False, True)])
+def test_review_pin_respects_independence_and_previous_service_eligibility(
+        project, monkeypatch, previous_runtime, independent, resumes):
+    quota_candidates(monkeypatch)
+    request = project.request(owner="grok", role="review")
+    first = controller.dispatch({**request, "mode": previous_runtime}, store=project.store, launch=lambda *a: None)
+    project.store.finish(first["key"], first["token"], {"ok": True, "session_id": "prior-context"})
+    project.adapter["workers"] = {"roleRouting": {"code-reviewer": {"runtime": "claude"}}}
+    followup = controller.dispatch({**request, "requestId": "followup-review", "previous": first["key"], "independent": independent},
+                                   store=project.store, launch=lambda *a: None)
+    assert followup["route"]["runtime"] == "claude"
+    assert ("resumeSession" in followup["request"]) is resumes
+
+
+def test_subset_quota_fallback_never_escapes_to_third_available_service(project, monkeypatch):
+    project.adapter["workers"] = {"runtimes": ["claude", "codex"]}
+    monkeypatch.setattr(controller.backends, "candidates", lambda adapter, cwd, role, **kw: [
+        {"runtime": runtime, "available": True, "roles": [role], "tools": []}
+        for runtime in controller.RUNTIMES])
+    job = controller.dispatch(project.request(owner="grok"), store=project.store, launch=lambda *a: None)
+    calls = []
+
+    def run(runtime, *a, **kw):
+        calls.append(runtime)
+        raise controller.backends.RateLimited(runtime, {"errorCode": "rate_limited", "error": "quota"})
+
+    monkeypatch.setattr(controller.backends, "run", run)
+    failed = controller.supervise(job["key"], job["token"], store=project.store)
+    assert calls == ["claude", "codex"]
+    assert failed["status"] == "failed"
+
+
+def test_same_request_id_cannot_silently_adopt_changed_role_pin(project, monkeypatch):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text('{"workers":{"roleRouting":{"code-reviewer":{"runtime":"claude"}}}}', encoding="utf-8")
+    quota_candidates(monkeypatch)
+    request = project.request(role="review")
+    controller.dispatch(request, store=project.store)
+    project.global_config.write_text('{"workers":{"roleRouting":{"code-reviewer":{"runtime":"codex"}}}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="different intent"):
+        controller.dispatch(request, store=project.store)
+
+
+@pytest.mark.parametrize("workers", [
+    {"runtimes": []}, {"roleRouting": {"review": {"runtime": "claude"}}},
+    {"runtimes": ["codex"], "roleRouting": {"code-reviewer": {"runtime": "claude"}}},
+    {"mode": "native", "roleRouting": {"code-reviewer": {"runtime": "codex"}}},
+])
+def test_policy_conflicts_fail_before_candidate_auth_or_admission(project, monkeypatch, workers):
+    project.adapter["workers"] = workers
+    monkeypatch.setattr(controller.backends, "candidates", lambda *a, **kw: pytest.fail("must not probe"))
+    with pytest.raises(ValueError):
+        controller.dispatch(project.request(), store=project.store, launch=lambda *a: pytest.fail("must not launch"))
     assert project.store.list() == []
 
 

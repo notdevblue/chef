@@ -57,6 +57,8 @@ Claude·Codex·Grok 미션은 구현·검증·리뷰 역할을 공통 워커 라
 
 전역 설정 파일 `~/.chef/config.json`에서 `{"workers":{"mode":"native"}}`로 자동 배정을 끄고 현재 서비스만 사용할 수 있습니다. `"auto"`로 다시 켜며, `"claude"`·`"codex"`·`"grok"`으로 서비스를 고정할 수도 있습니다. 프로젝트의 `workers.mode`나 미션에서 “이번에는 Claude만 써”라는 요청, 실행별 `dispatch --mode native`로 덮어쓸 수 있습니다. [모드 설정·우선순위](plugins/chef/skills/mission/references/cross-runtime-workers.md#자동-배정-켜기끄기)
 
+`workers.runtimes: ["claude", "codex"]`로 Grok을 제외하거나, `workers.roleRouting.code-reviewer.runtime: "claude"`와 `reviewer-small.runtime: "claude"`로 리뷰만 Claude에 고정할 수 있습니다. 고정한 서비스가 실행되지 않으면 다른 서비스로 넘기지 않습니다. [조합 설정 예시](plugins/chef/skills/mission/references/cross-runtime-workers.md#허용-서비스와-역할별-고정)
+
 | 런타임 | 어댑터 만들기 | 작업 시작 |
 | --- | --- | --- |
 | Codex | `$chef:chef-adapter-init` | `$chef:chef-mission <작업>` |
