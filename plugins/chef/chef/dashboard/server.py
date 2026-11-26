@@ -16,6 +16,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from chef.dashboard import access as document_access
 from chef.dashboard import discovery as dashboard_discovery
 from chef.dashboard.assets import (
     DOCUMENT_VIEWER,
@@ -192,33 +193,31 @@ def mission_folders(allowed, raw, real):
     found = set()
     absolute = os.path.abspath(raw)
     for location in allowed:
-        try:
-            entries = list(os.scandir(location.state_dir))
-        except FileNotFoundError:
-            continue
-        for entry in entries:
-            if not entry.is_dir() or not mission_guard.valid_mission_id(entry.name):
+        state_real = infrastructure_paths.request_realpath(location.state_dir)
+        for state, requested in ((os.path.abspath(location.state_dir), absolute), (state_real, real)):
+            if not infrastructure_paths.inside_root(state, requested):
                 continue
-            folder = infrastructure_paths.request_realpath(entry.path)
-            requested_inside = infrastructure_paths.inside_root(os.path.abspath(entry.path), absolute)
-            if not requested_inside and not infrastructure_paths.inside_root(folder, real):
+            mission_id = os.path.relpath(requested, state).split(os.sep)[0]
+            if not mission_guard.valid_mission_id(mission_id):
                 continue
-            if not mission_folder_allowed(location, entry.name):
-                if requested_inside:
-                    raise mission_state.StateError("미션 폴더 경로가 잘못됨")
+            folder = os.path.join(location.state_dir, mission_id)
+            if not os.path.isdir(folder):
                 continue
-            found.add(os.path.abspath(entry.path))
+            if not mission_folder_allowed(location, mission_id):
+                raise mission_state.StateError("미션 폴더 경로가 잘못됨")
+            found.add(os.path.abspath(folder))
     return found
 
 
-def read_allowed(config, raw):
+def read_allowed(config, raw, allowed=None):
     try:
         real = ""
         if raw and os.path.isabs(raw):
             real = infrastructure_paths.request_realpath(raw)
     except ValueError:
         real = ""
-    allowed = locations(config)
+    if allowed is None:
+        allowed = document_access.workspaces(config)
     if not real or not any(
         infrastructure_paths.inside_root(infrastructure_paths.request_realpath(root), real)
         for location in allowed
@@ -231,7 +230,9 @@ def read_allowed(config, raw):
         folders = mission_folders(allowed, raw, real)
         if any(
             not document_visible(folder, raw, set())
-            and not document_visible(folder, raw, mission_state.shared_documents(folder))
+            and not document_visible(
+                folder, raw, {row["path"] for row in mission_state.shared_document_rows(folder)}
+            )
             for folder in folders
         ):
             return real, b"", message(404, "공유되지 않은 문서")
@@ -278,7 +279,8 @@ def raw_response(config, raw):
 
 @request_scoped
 def view_response(config, raw, embedded=False):
-    real, data, failure = read_allowed(config, raw)
+    allowed = document_access.workspaces(config)
+    real, data, failure = read_allowed(config, raw, allowed)
     if failure:
         return failure
     ext = os.path.splitext(real)[1].lower()
@@ -308,7 +310,7 @@ def view_response(config, raw, embedded=False):
             item.root
             if infrastructure_paths.inside_root(infrastructure_paths.request_realpath(item.root), real)
             else item.state_dir
-            for item in locations(config)
+            for item in allowed
         ]
         root = max(
             (
@@ -447,6 +449,8 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self, config, port):
         self.config = config
+        if hasattr(config, "runtime"):
+            document_access.workspaces(config)
         super().__init__(("127.0.0.1", port), Handler)
 
 

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from chef.dashboard import access as document_access
 from chef.dashboard import discovery as dashboard_discovery
 from chef.dashboard import server as dashboard
 from chef.guards import mission as mission_guard
@@ -128,6 +129,139 @@ def test_registry_and_new_missions_are_discovered_on_each_request(setup, tmp_pat
     assert {item.id for _, item in missions(cfg)} == {"first"}
     mission(external, "later")
     assert {item.id for _, item in missions(cfg)} == {"first", "later"}
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "grok", "hermes"])
+def test_document_requests_use_prepared_boundaries_without_discovery(setup, monkeypatch, runtime):
+    root, _, _ = setup
+    folder = mission(root, "requested")
+    question = folder / "ask-1.md"
+    question.write_text("# Fictional question\n\n[Related](details.md)", encoding="utf-8")
+    cfg = config(root, runtime)
+    document_access.workspaces(cfg)
+    original_scandir = os.scandir
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Document requests must not collect other workspaces or missions")
+
+    def scandir(path):
+        if Path(path) == folder.parent:
+            unexpected()
+        return original_scandir(path)
+
+    monkeypatch.setattr(dashboard_discovery, "discover", unexpected)
+    monkeypatch.setattr(dashboard_discovery, "workspace_config", unexpected)
+    monkeypatch.setattr(mission_guard, "read_active", unexpected)
+    monkeypatch.setattr(mission_guard, "staleness", unexpected)
+    monkeypatch.setattr(os, "scandir", scandir)
+    for url in (dashboard.view_url(question), dashboard.raw_url(question)):
+        status, _, body = dashboard.route(cfg, url)
+        assert status == 200 and b"Fictional question" in body
+    rendered = dashboard.route(cfg, dashboard.view_url(question))[2].decode("utf-8")
+    assert f'data-root="{dashboard.raw_url(root)}/"' in rendered
+    later = mission(root, "later")
+    assert dashboard.route(cfg, dashboard.view_url(later / "mission.md"))[0] == 200
+
+
+def test_cached_document_boundaries_follow_registry_additions_and_removals(setup, tmp_path):
+    root, registry, _ = setup
+    external = tmp_path / "external"
+    folder = mission(external)
+    cfg = config(root)
+    target = dashboard.view_url(folder / "mission.md")
+    assert dashboard.route(cfg, target)[0] == 403
+    register(registry, "external", [external])
+    assert dashboard.route(cfg, target)[0] == 200
+    write_json(registry / "projects.json", [])
+    assert dashboard.route(cfg, target)[0] == 403
+
+
+def test_cached_document_boundaries_follow_local_overrides_and_fail_closed(setup, tmp_path):
+    root, _, path = setup
+    first, second = tmp_path / "first-store", tmp_path / "second-store"
+    first_doc = mission(first, state="") / "mission.md"
+    second_doc = mission(second, state="") / "mission.md"
+    local = path.with_name("local.json")
+    write_json(local, {"paths": {"stateDir": str(first)}})
+    cfg = config(root)
+    assert dashboard.route(cfg, dashboard.raw_url(first_doc))[0] == 200
+    write_json(local, {"paths": {"stateDir": str(second)}})
+    assert dashboard.route(cfg, dashboard.raw_url(first_doc))[0] == 403
+    assert dashboard.route(cfg, dashboard.raw_url(second_doc))[0] == 200
+    path.write_text("invalid configuration", encoding="utf-8")
+    with pytest.raises(slots.UsageError):
+        dashboard.route(cfg, dashboard.raw_url(second_doc))
+    write_json(path, adapter())
+    assert dashboard.route(cfg, dashboard.raw_url(second_doc))[0] == 200
+    local.unlink()
+    assert dashboard.route(cfg, dashboard.raw_url(second_doc))[0] == 403
+
+
+def test_cached_glob_boundaries_follow_new_roots_and_mission_eligibility(setup, tmp_path):
+    root, registry, _ = setup
+    groups = tmp_path / "groups"
+    groups.mkdir()
+    register(registry, "external", [groups / "*"])
+    cfg = config(root)
+    external = groups / "added"
+    target = external / "missions/example-mission/mission.md"
+    assert dashboard.route(cfg, dashboard.raw_url(target))[0] == 403
+    folder = mission(external)
+    assert dashboard.route(cfg, dashboard.raw_url(target))[0] == 200
+    other = external / "guide.md"
+    other.write_text("Fictional guide", encoding="utf-8")
+    assert dashboard.route(cfg, dashboard.raw_url(other))[0] == 200
+    (folder / "mission.md").unlink()
+    assert dashboard.route(cfg, dashboard.raw_url(other))[0] == 403
+
+
+def test_cached_boundaries_preserve_live_sharing_and_check_only_requested_bytes(setup, monkeypatch):
+    root, _, _ = setup
+    folder = mission(root)
+    first, second = folder / "first.md", folder / "second.md"
+    first.write_text("Fictional first report", encoding="utf-8")
+    second.write_text("Fictional second report", encoding="utf-8")
+    state = dashboard.mission_state
+    rows = [{"path": path.name, "sha256": dashboard.digest(path.read_bytes()), "at": "2026-01-01T00:00:00+00:00"}
+            for path in (first, second)]
+    manifest = str(folder / state.SHARED_DOCUMENTS_FILE)
+    state.write_table(manifest, state.SHARED_DOCUMENTS_HEADER, rows)
+    cfg = config(root)
+    document_access.workspaces(cfg)
+    import builtins
+    original_open = builtins.open
+
+    def requested_only(path, *args, **kwargs):
+        assert Path(path) != second
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", requested_only)
+    assert dashboard.route(cfg, dashboard.raw_url(first))[0] == 200
+    first.write_text("Unreviewed edit", encoding="utf-8")
+    assert dashboard.route(cfg, dashboard.raw_url(first))[0] == 404
+    first.write_text("Fictional first report", encoding="utf-8")
+    state.write_table(manifest, state.SHARED_DOCUMENTS_HEADER, [])
+    assert dashboard.route(cfg, dashboard.raw_url(first))[0] == 404
+
+
+def test_cached_boundaries_reject_mission_directory_replacement(setup, monkeypatch):
+    root, _, _ = setup
+    folder = mission(root, "original")
+    cfg = config(root)
+    assert dashboard.route(cfg, dashboard.raw_url(folder / "mission.md"))[0] == 200
+    private = root / "private"
+    private.mkdir()
+    (private / "mission.md").write_text("# Fictional private document", encoding="utf-8")
+    (folder / "mission.md").unlink()
+    folder.rmdir()
+    directory_alias(folder, private)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Checking this mission must not require discovery")
+
+    monkeypatch.setattr(dashboard_discovery, "discover", unexpected)
+    for url in (dashboard.view_url(folder / "mission.md"), dashboard.raw_url(folder / "mission.md")):
+        assert dashboard.route(cfg, url)[0] == 404
 
 
 def test_duplicate_roots_keep_slot_links_and_colliding_labels_have_stable_keys(setup, tmp_path):

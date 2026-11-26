@@ -4,10 +4,13 @@ import os
 import re
 import stat
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from chef.guards import adapters as adapter_guard
 from chef.guards import mission as mission_guard
+from chef.guards import slot_binding
 from chef.infrastructure import configuration as infrastructure_configuration
 from chef.infrastructure import errors as infrastructure_errors
 from chef.infrastructure import paths as infrastructure_paths
@@ -16,6 +19,28 @@ from chef.slots import contracts as slots_contracts
 from chef.slots import storage as slots_storage
 
 LOCATE_LOCK = threading.Lock()
+DISCOVERY_INPUTS = threading.local()
+
+
+def watch(path, *, identity=False):
+    inputs = getattr(DISCOVERY_INPUTS, "current", None)
+    if inputs is not None:
+        inputs.add(path, identity=identity)
+
+
+@contextmanager
+def watching(inputs):
+    previous = getattr(DISCOVERY_INPUTS, "current", None)
+    DISCOVERY_INPUTS.current = inputs
+    try:
+        yield
+    finally:
+        DISCOVERY_INPUTS.current = previous
+
+
+def watch_adapter(path):
+    watch(path)
+    watch(os.path.join(os.path.dirname(path), "local.json"))
 
 
 class Config:
@@ -86,10 +111,13 @@ def mission_metadata_allowed(state_dir, mission_id):
 
 def mission_ids(state_dir):
     found = []
+    watch(state_dir)
     with os.scandir(state_dir) as entries:
         for entry in entries:
-            if entry.is_dir() and mission_metadata_allowed(state_dir, entry.name):
-                found.append(entry.name)
+            if entry.is_dir():
+                watch(os.path.join(entry.path, "mission.md"), identity=True)
+                if mission_metadata_allowed(state_dir, entry.name):
+                    found.append(entry.name)
     return found
 
 
@@ -100,6 +128,7 @@ def expand_root(root, problems):
         expanded = []
         for parent in candidates:
             if any(char in part for char in "*?["):
+                watch(parent)
                 try:
                     with os.scandir(parent) as entries:
                         for entry in entries:
@@ -118,6 +147,7 @@ def expand_root(root, problems):
                     problems.append(f"등록 경로 읽기 실패: {parent}: {error}")
             else:
                 child = os.path.join(parent, part)
+                watch(child, identity=True)
                 try:
                     if stat.S_ISDIR(os.stat(child).st_mode):
                         expanded.append(child)
@@ -130,6 +160,15 @@ def expand_root(root, problems):
 
 
 def workspace_config(root, runtime, problems, fallback=""):
+    if getattr(DISCOVERY_INPUTS, "current", None) is not None:
+        for ancestor in adapter_guard.ancestors(root):
+            for relative in adapter_guard.adapter_relatives(runtime):
+                watch_adapter(os.path.join(ancestor, *relative))
+            watch(os.path.join(ancestor, ".p4config"))
+            watch(slot_binding.binding_path(ancestor))
+            binding = slot_binding.read_slot_binding(ancestor)
+            if binding:
+                watch(os.path.join(binding["registry"], mission_guard.REGISTRY_FILE))
     with LOCATE_LOCK:
         saved = os.environ.pop("CLAUDE_PROJECT_DIR", None)
         try:
@@ -147,6 +186,7 @@ def workspace_config(root, runtime, problems, fallback=""):
         adapter_path = located.adapter_path
     if not adapter_path:
         raise infrastructure_errors.UsageError(f"어댑터를 찾지 못함: {root}")
+    watch_adapter(adapter_path)
     adapter = infrastructure_configuration.read_adapter(adapter_path, runtime)
     return Config(mission_guard.Located(root, adapter_path), adapter, runtime)
 
@@ -162,6 +202,7 @@ def selected_workspace(workspace, runtime, problems, fallback):
 def configured_workspaces(config, problems):
     result = [Workspace("main", config.main, config.state_dir, config.stages, config.stale_hours)]
     if config.root:
+        watch(config.rows_path)
         try:
             rows = slots_storage.Rows(config.rows_path).read()
         except FileNotFoundError:
@@ -192,6 +233,7 @@ def discover(config):
     runtime = config.runtime
     current = config
     if hasattr(config, "located"):
+        watch_adapter(config.located.adapter_path)
         current = Config(
             config.located,
             infrastructure_configuration.read_adapter(config.located.adapter_path, runtime),
@@ -231,6 +273,7 @@ def discover(config):
     try:
         registry = mission_guard.resolve_registry(runtime)
         if registry.path:
+            watch(os.path.join(registry.path, mission_guard.REGISTRY_FILE))
             if not stat.S_ISDIR(os.stat(registry.path).st_mode):
                 raise infrastructure_errors.UsageError(f"레지스트리 폴더 아님: {registry.path}")
             try:
@@ -240,6 +283,7 @@ def discover(config):
             entries = mission_guard.load_registry(registry.path)
             for entry in entries:
                 adapter_path = os.path.join(registry.path, entry["adapter"], "adapter.json")
+                watch_adapter(adapter_path)
                 try:
                     infrastructure_configuration.read_adapter(adapter_path, runtime)
                 except (

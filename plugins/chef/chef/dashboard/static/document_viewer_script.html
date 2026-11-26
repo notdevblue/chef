@@ -34,7 +34,7 @@
     frame.hidden = true;
     clearTimeout(loading);
     loading = setTimeout(() => {
-      status.textContent = "문서를 불러오지 못했습니다. 이전 문서로 돌아가거나 닫고 다시 열어 주세요.";
+      status.textContent = "응답이 지연되고 있습니다. 잠시 기다려 주세요.";
     }, 15000);
     const target = new URL(current.url);
     target.searchParams.set("embedded", "1");

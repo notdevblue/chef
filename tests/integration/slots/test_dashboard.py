@@ -1588,12 +1588,13 @@ document.getElementById = id => ids[id];
 document.querySelectorAll = () => [];
 let reloads = 0;
 let tick = () => {};
+let loading = () => {};
 const storage = {getItem() { return ''; }, setItem() {}};
 const opened = [];
 const window = {scrollY: 420, scrollTo() {}, open(...args) { opened.push(args); }};
 const context = {URL, document, window, localStorage: storage, sessionStorage: storage,
   location: {href: origin + '/', origin, reload() { reloads++; }},
-  setTimeout() { return 1; }, clearTimeout() {}, setInterval(callback) { tick = callback; },
+  setTimeout(callback) { loading = callback; return 1; }, clearTimeout() {}, setInterval(callback) { tick = callback; },
   MutationObserver: class { observe() {} }
 };
 vm.runInNewContext(input.viewer, context);
@@ -1618,6 +1619,9 @@ document.fire('click', click(question));
 assert.equal(viewer.open, true);
 assert.equal(new URL(frame.src).searchParams.get('embedded'), '1');
 assert.equal(ids['document-back'].disabled, true);
+loading();
+assert.match(ids['document-status'].textContent, /응답이 지연/);
+assert.equal(frame.hidden, true);
 tick();
 assert.equal(reloads, 0);
 assert.equal(ids.auto.checked, true);
@@ -1625,6 +1629,7 @@ frame.contentWindow.location.href = frame.src;
 frame.contentWindow.scrollY = 100;
 frame.fire('load');
 assert.equal(frame.hidden, false);
+assert.equal(ids['document-status'].textContent, '');
 assert.equal(frame.contentWindow.scrollY, 100);
 assert.equal(content.documentElement.dataset.theme, 'dark');
 const fragment = click(link(frame.src + '#section'));
