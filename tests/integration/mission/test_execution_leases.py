@@ -298,6 +298,7 @@ def test_corrupt_registry_fails_known_mutation_closed(project, registry, value):
     outcome = guard.decide({"tool_name": "Write", "cwd": str(root),
                             "tool_input": {"file_path": "src/main.txt", "content": "new"}})
     assert "execution input protection" in outcome.deny
+    assert "허용 파일:" not in outcome.deny
 
 
 def test_registry_bounds_and_permission_errors_are_explicit(project, registry, monkeypatch):

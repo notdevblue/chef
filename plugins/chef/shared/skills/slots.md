@@ -85,7 +85,8 @@ name	path	client	created	synced	state
   어떻게 처리할지 물은 뒤에만 `--main-keep-local`을 붙인다(메인의 `han main keep-local` 보관 pending CL에 `reconcile -e -c`로 열고 진행). sync 뒤
   `resolve -am`·`resolve -n`으로 충돌이 남으면 목록을 보이고 멈추며 슬롯은 갱신하지 않는다. 성공하면 `메인 sync: <이전 have> → <head> (파일 N개)`가 출력된다.
   `create`는 메인을 받지 않고 메인의 현재 have를 기준으로 한다.
-  `--discard-local`은 진짜 작업물을 버려도 될 때만 쓴다. 권한 검사가 이 옵션을 막으면 런타임 진입점에 따라 사용자가 직접 실행하도록 안내한다.
+  `--discard-local`은 진짜 작업물을 버려도 될 때만 쓴다. 런타임 자체 권한 검사가 이 옵션을 막으면 런타임 진입점에 따라 사용자가 직접 실행하도록 안내한다.
+  Chef 미션 가드의 명령 차단이면 [미션의 1회 허용 절차](mission.md#막힌-명령의-1회-허용)를 따른다.
 - `run <이름> <작업...> [--refresh] [--editor] [--keep-local | --discard-local] [--main-keep-local] [--dry-run]` — 슬롯 폴더에서
   설정된 터미널에서 선택한 런타임의 mission 스킬로 시작한다. 기본은 Windows Terminal, POSIX 대화형 foreground다. 슬롯이 `ready`이고 `ACTIVE`가 없어야
   한다(`--resume`은 반대). `--refresh`는 먼저 `refresh`를 하고(메인 선행 sync와 `--keep-local`·`--discard-local`·`--main-keep-local`이 그쪽에 적용된다; `--main-keep-local`은 `--refresh` 없이 못 쓴다), `--editor`는

@@ -230,13 +230,13 @@ def make_registry(folder, entries, adapters=None):
     return folder
 
 
-def run_raw(stdin, env_project=None, cwd=None, env=None):
+def run_raw(stdin, env_project=None, cwd=None, env=None, script=None):
     base = {k: v for k, v in os.environ.items() if k not in CLEARED_ENV}
     base["HAN_ADAPTERS_DIR"] = str(NO_REGISTRY)
     base.update(env or {})
     if env_project is not None:
         base["CLAUDE_PROJECT_DIR"] = str(env_project)
-    return subprocess.run([sys.executable, "-B", str(SCRIPT)], input=stdin, capture_output=True, env=base, cwd=cwd, timeout=30)
+    return subprocess.run([sys.executable, "-B", str(script or SCRIPT)], input=stdin, capture_output=True, env=base, cwd=cwd, timeout=30)
 
 
 def run_guard(project, command, tool="Bash", session="s1", start=None, env=None, **extra):
@@ -749,6 +749,7 @@ def test_marker_close_from_other_session_is_denied_until_resume(project):
     make_active(project, "m-1", session="s1")
     output = run_guard(project, "echo han-mission close m-1", session="s2")
     assert "resume 후 close" in denial(output)
+    assert "허용 파일:" not in denial(output)
     assert (project / STATE / "ACTIVE").exists()
     assert not is_denied(run_guard(project, "echo han-mission resume m-1", session="s2"))
     assert not is_denied(run_guard(project, "echo han-mission close m-1", session="s2"))
@@ -843,8 +844,10 @@ def test_corrupt_active_is_removed_by_close_of_any_id(project):
 def test_corrupt_active_blocks_open_and_resume(project):
     make_adapter(project)
     path = make_corrupt_active(project)
-    assert "ACTIVE 손상" in denial(run_guard(project, "echo han-mission open m-1"))
-    assert "ACTIVE 손상" in denial(run_guard(project, "echo han-mission resume m-1"))
+    for action in ("open", "resume"):
+        reason = denial(run_guard(project, f"echo han-mission {action} m-1"))
+        assert "ACTIVE 손상" in reason
+        assert "허용 파일:" not in reason
     assert path.exists()
 
 
@@ -868,6 +871,51 @@ def write_allow_once(project, mission_id, lines):
     path = folder / "allow-once"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "grok"])
+def test_allow_once_recovery_at_runtime_hook_boundary(project, runtime):
+    make_adapter(project)
+    make_active(project, "m-1")
+    command = 'p4 submit -c "123"'
+    script = PLUGIN_ROOT / "codex/mission_guard.py" if runtime == "codex" else SCRIPT
+    if runtime == "grok":
+        payload = {"hookEventName": "pre_tool_use", "sessionId": "s1", "cwd": str(project),
+                   "toolName": "run_terminal_command", "toolInput": {"command": command, "shell": "pwsh"}}
+    else:
+        payload = {"session_id": "s1", "cwd": str(project), "tool_name": "PowerShell" if runtime == "codex" else "Bash",
+                   "tool_input": {"command": command}}
+
+    def invoke():
+        result = run_raw(json.dumps(payload).encode("utf-8"), env_project=project, script=script)
+        assert result.returncode == 0, result.stderr.decode("utf-8")
+        return json.loads(result.stdout)
+
+    permit = project / STATE / "m-1" / "allow-once"
+    reason = denial(invoke())
+    assert reason.startswith("submit 금지 (미션 진행 중: m-1)")
+    assert f"허용 파일: {permit}" in reason
+    assert reason.endswith(f"명령:\n{command}")
+    assert "코디네이터가 파일 편집 도구로" in reason
+    assert "명시적으로 승인받았으면 재질문하지 않는다" in reason
+    assert "계획·리뷰 승인을 실행 승인으로 확대하지 않는다" in reason
+    assert "사용자에게 파일 작성이나 명령 실행을 맡기지 않는다" in reason
+    assert not permit.exists()
+    write_allow_once(project, "m-1", [command])
+    assert not is_denied(invoke())
+    assert not permit.exists()
+    assert f"허용 파일: {permit}" in denial(invoke())
+
+
+@pytest.mark.parametrize("command", ["p4 submit -c 123\np4 opened", "p4 submit -c 123 && p4 opened", "p4 submit -c 123; p4 opened"])
+def test_allow_once_guidance_requires_single_line_single_command(project, command):
+    make_adapter(project)
+    make_active(project, "m-1")
+    reason = denial(run_guard(project, command))
+    assert "한 줄의 단일 명령" in reason
+    assert "이 호출을 그대로 등록하지 말고" in reason
+    assert "허용 파일:" not in reason
+    assert not (project / STATE / "m-1" / "allow-once").exists()
 
 
 def test_allow_once_passes_exact_command_then_is_consumed(project):

@@ -14,6 +14,7 @@ from tests.paths import PLUGIN_ROOT
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
+    monkeypatch.setattr(mission_guard.execution, "registry_directory", lambda: tmp_path / "execution-registry")
     root = tmp_path / "sample-project"
     adapter_folder = root / ".claude" / "orchestrator"
     adapter_folder.mkdir(parents=True)
@@ -376,7 +377,9 @@ def test_allow_once_does_not_override_question_protection(project):
     (state / "ACTIVE").write_text('{"id":"mission","session":"owner"}', encoding="utf-8")
     command = "echo answer > state/mission/ask-1.md"
     (folder / "allow-once").write_text(command + "\n", encoding="utf-8")
-    assert outcome(project, "Bash", command=command).deny
+    reason = outcome(project, "Bash", command=command).deny
+    assert reason
+    assert "허용 파일:" not in reason
     assert (folder / "allow-once").read_text(encoding="utf-8") == command + "\n"
 
 
@@ -384,7 +387,9 @@ def test_coordinator_guard_still_runs(project):
     (project / "state").mkdir(exist_ok=True)
     (project / "state" / "ACTIVE").write_text('{"id":"mission","session":"owner"}', encoding="utf-8")
     payload = {"cwd": str(project), "session_id": "owner", "tool_name": "Write", "tool_input": {"file_path": "src/app.py"}}
-    assert "roles.implement" in mission_guard.decide(payload).deny
+    reason = mission_guard.decide(payload).deny
+    assert "roles.implement" in reason
+    assert "허용 파일:" not in reason
     payload["tool_input"]["file_path"] = "state/mission/report.md"
     assert not mission_guard.decide(payload).deny
 

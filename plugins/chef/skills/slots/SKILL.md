@@ -21,4 +21,5 @@ description: 미션을 동시에 여러 개 돌리기 위한 슬롯 워크스페
 - 슬롯 세션은 `.claude/settings.local.json`(MCP 승인 등)과 개인 `_My/CLAUDE.md`, 프로젝트 자동 메모리(메인의 메모리 폴더를
   가리키는 링크: Windows junction·POSIX symlink)를 메인과 같게 받는다(`adapter.md`의 "슬롯 준비"). 새 폴더에서 처음 `claude`를 띄우면 폴더 신뢰
   확인 창이 한 번 뜨니 사용자가 승인해야 한다. 이 스킬은 전역 설정 파일을 건드리지 않는다.
-- auto mode가 `--discard-local`을 막으면 사용자가 `!`로 직접 실행하도록 안내한다.
+- Claude 자체 권한 검사(auto mode)가 `--discard-local`을 막으면 사용자가 `!`로 직접 실행하도록 안내한다.
+  Chef 미션 가드의 명령 차단은 공통 절차의 1회 허용 규칙을 따른다.

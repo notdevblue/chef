@@ -525,6 +525,27 @@ def participates_in_mission(active, payload):
     )
 
 
+def allow_once_guidance(state_dir, mission_id, command, tool_name):
+    wanted = command.strip()
+    if len(wanted.splitlines()) != 1 or len(command_fragments(wanted, tool_name)) != 1:
+        return (
+            "1회 허용은 한 줄의 단일 명령으로 처리한다. 이 호출을 그대로 등록하지 말고, "
+            "승인 대상 명령을 단독 호출로 정리한 뒤 승인 범위와 가드 판정을 다시 확인한다."
+        )
+    path = os.path.abspath(allow_once_path(state_dir, mission_id))
+    return (
+        "이 명령은 사용자 승인 후 allow-once로 1회 실행할 수 있다. "
+        "현재 요청에서 이 실행을 명시적으로 승인받았으면 재질문하지 않는다. "
+        "계획·리뷰 승인을 실행 승인으로 확대하지 않는다.\n"
+        "승인 후 코디네이터가 파일 편집 도구로 아래 경로에 정확한 명령을 한 줄로 기록하고, "
+        "같은 명령을 단독 실행한다. 사용자에게 파일 작성이나 명령 실행을 맡기지 않는다.\n"
+        f"허용 파일: {path}\n"
+        "기존의 다른 허용 줄은 보존한다. 한 번 통과하면 실행 실패 여부와 무관하게 소모된다. "
+        "재실행 승인은 기존 미션·어댑터 정책을 따른다.\n"
+        f"명령:\n{wanted}"
+    )
+
+
 def judge_denied_command(
     payload, command, active, state_dir, reason, outcome, stale_hours=STALE_HOURS_DEFAULT
 ):
@@ -542,7 +563,8 @@ def judge_denied_command(
         elif consume_allow_once(state_dir, active.id, command):
             outcome.messages.append(f"1회 허용 사용: {command.strip()}")
         else:
-            outcome.deny = f"{reason} (미션 진행 중: {active.id})"
+            guidance = allow_once_guidance(state_dir, active.id, command, payload.get("tool_name", "Bash"))
+            outcome.deny = f"{reason} (미션 진행 중: {active.id})\n\n{guidance}"
     except Exception as e:  # 규칙에 걸린 뒤의 오류는 허용이 아니라 거부
         path = allow_once_path(state_dir, active.id)
         outcome.deny = f"{reason} (미션 진행 중: {active.id}; 1회 허용 확인 실패라 허용 안 함: {path} — {type(e).__name__}: {e})"
