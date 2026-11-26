@@ -129,8 +129,35 @@ SessionStart 훅이 이 경로를 도구 환경의 `HAN_ADAPTERS_DIR`로 전달�
    스킬 8개·훅 파일 1개와 실제 역할 6개의 원본 경로가 그 설치본 아래에 있어야 합니다.
    실행 중인 세션은 새로 열고 프로젝트 폴더의 훅 신뢰 상태와 실행을 확인합니다.
 
-되돌릴 때는 `grok plugin uninstall chef --confirm --keep-data`으로 마켓플레이스 설치를 제거하고 보관한 링크와
-이전 Chef 전용 등록을 복원합니다. 새 세션에서 `grok inspect --json`으로 복원된 경로를 확인합니다.
+### Claude Code와 함께 설치할 때
+
+Claude Code도 Chef를 설치한 환경에서는 Grok이 Claude 마켓플레이스 복사본을 먼저 발견할 수 있습니다.
+`grok inspect --json`의 선택 경로를 `grok plugin list --json`의 설치 경로와 비교합니다.
+Grok에서 자체 설치본을 우선하려면 `~/.grok/config.toml`의 기존 `[plugins]`에 아래 키를 넣습니다.
+
+```toml
+[plugins]
+install_dir = "~/.grok/plugins"
+```
+
+이 설정은 Grok 전체 마켓플레이스 설치 위치에 적용됩니다. 기존 설치가 있으면 변경 전에
+`grok plugin list --json`으로 버전과 출처를 기록하고 등록과 패키지를 백업합니다.
+새 위치에서 기존 항목을 다시 설치하고 버전과 활성 상태를 확인합니다.
+
+`chef` 마켓플레이스가 Claude 설정을 통해서만 보이는 경우, Grok 업데이트를 독립적으로 유지하려면
+Grok 사용자 설정에 다음 소스를 등록합니다.
+
+```toml
+[[marketplace.sources]]
+name = "chef"
+git = "https://github.com/notdevblue/chef.git"
+```
+
+### 원래 설치로 되돌리기
+
+`grok plugin uninstall chef --confirm --keep-data` 명령으로 Grok 마켓플레이스 설치를 제거합니다.
+설치 위치도 변경했다면 `[plugins].install_dir`을 원래 값으로 되돌리고 보관한 등록과 패키지를 복원합니다.
+이전 Chef 링크와 전용 등록을 복원한 뒤 새 프로세스에서 `grok inspect --json`으로 선택 경로를 확인합니다.
 
 ## Hermes 연결
 
