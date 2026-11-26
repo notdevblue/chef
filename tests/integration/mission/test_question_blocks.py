@@ -47,11 +47,12 @@ def test_structured_blocks_and_explicit_selected_render_without_body_rewriting(t
     assert "| A\\|B | line 1<br>line 2 |" in current
     assert "| Parent | string |  | palette.Id | Optional |" in current
     assert "### 1. Color" in current
-    assert "- Blue — Cool · Low contrast\n- Amber" in current
+    assert "- Blue  \n  설명 · Cool  \n  영향 · Low contrast" in current
+    assert "- Amber" in current
     assert "| id | 선택 |" not in current
     saved = questions.answer_document(tmp_path, "ask-palette.md", reply())
     rendered = questions.render_document(saved)
-    assert "## 현재 선택\n\n- Color · Blue — Cool · Low contrast" in rendered
+    assert "## 현재 선택\n\n### Color\n\n- Blue  \n  설명 · Cool  \n  영향 · Low contrast" in rendered
     assert "| 문항 | 선택 id |" not in rendered
     assert "amber" not in rendered and saved["blocks"] == original["blocks"] and saved["body"] == ""
     assert reply()["text"] not in rendered and saved["answers"] == [reply()]

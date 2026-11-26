@@ -8,6 +8,7 @@ import re
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 
 from chef.infrastructure.storage import atomic_write_bytes
@@ -35,6 +36,12 @@ ITEM_FIELDS = ("id", "title", "body", "status", "answer")
 UPDATE_FIELDS = ("id", "status", "answer")
 ANSWER_FIELDS = ("schema", "id", "revision", "at", "text", "updates")
 CHOICE_LEAD = re.compile(r"^\s*(?:[-*+]\s+)?\**(?:권장|대안)(?:\s+[\w-]+)?\**\s*[:：·—]")
+SENTENCE_BREAK = re.compile(r"(?<=[.!?。！？])([ \t]+)")
+MARKDOWN_LINK = re.compile(r"!?\[(?:\\.|[^\]])*\]\((?:\\.|[^)])*\)")
+HTML_TAG = re.compile(r"</?[^>\n]+?>")
+MARKDOWN_BLOCK_START = re.compile(
+    r"(?:#{1,6}\s|[-+*]\s+|\d+[.)]\s+|>|`{3,}|~{3,}|(?:-{3,}|_{3,}|\*{3,})\s*$)"
+)
 
 
 def validate_identifier(value, label, pattern=RECORD_ID):
@@ -253,6 +260,86 @@ def unmatched_options(item):
     ]
 
 
+def _protected_inline_spans(text):
+    spans = [match.span() for pattern in (MARKDOWN_LINK, HTML_TAG) for match in pattern.finditer(text)]
+
+    def escaped(position):
+        slashes = 0
+        position -= 1
+        while position >= 0 and text[position] == "\\":
+            slashes += 1
+            position -= 1
+        return slashes % 2 == 1
+
+    index = 0
+    while index < len(text):
+        if text[index] != "`" or escaped(index):
+            index += 1
+            continue
+        end = index + 1
+        while end < len(text) and text[end] == "`":
+            end += 1
+        delimiter = text[index:end]
+        closing = -1
+        cursor = end
+        while cursor < len(text):
+            candidate = text.find("`", cursor)
+            if candidate < 0:
+                break
+            run_end = candidate + 1
+            while run_end < len(text) and text[run_end] == "`":
+                run_end += 1
+            run = text[candidate:run_end]
+            if run == delimiter:
+                closing = run_end
+                break
+            cursor = run_end
+        if closing < 0:
+            index = end
+            continue
+        spans.append((index, closing))
+        index = closing
+    return sorted(spans)
+
+
+def _format_legacy_choice_prose(value):
+    """Add Markdown hard breaks at safe sentence boundaries without editing prose."""
+    if len(value) <= 120:
+        return value
+    spans = _protected_inline_spans(value)
+    breaks = []
+    span_index = 0
+    for match in SENTENCE_BREAK.finditer(value):
+        start, end = match.span(1)
+        while span_index < len(spans) and spans[span_index][1] <= start:
+            span_index += 1
+        if span_index < len(spans) and spans[span_index][0] < end:
+            continue
+        punctuation = value[start - 1]
+        following = value[end] if end < len(value) else ""
+        if punctuation == "." and start >= 2 and value[start - 2].isdigit():
+            continue
+        line_end = value.find("\n", end)
+        if line_end < 0:
+            line_end = len(value)
+        if MARKDOWN_BLOCK_START.match(value[end:line_end].lstrip()):
+            continue
+        breaks.append((start, end))
+    for start, end in reversed(breaks):
+        value = value[:start] + "  \n" + value[end:]
+    return value
+
+
+def render_legacy_choice(option):
+    """Render schema 1 option fields as separate Markdown prose."""
+    lines = [f"- {escape(option['label'], quote=False)}"]
+    for key, label in (("description", "설명"), ("impact", "영향")):
+        if option.get(key):
+            prose = _format_legacy_choice_prose(option[key]).replace("\n", "\n  ")
+            lines.append(f"  {label} · {escape(prose, quote=False)}")
+    return "  \n".join(lines)
+
+
 def decision_review_notes(record):
     """Flag review workload and overlapping choice prose without changing approval status."""
     pending = [item for item in record["items"] if item["status"] == "pending"]
@@ -271,7 +358,7 @@ def decision_review_notes(record):
     return notes
 
 
-def render_document(record, *, legacy_layout=False, tabular_choices=False):
+def _render_document(record, *, legacy_layout=False, tabular_choices=False, legacy_prose_choices=False):
     record = validate_document(record)
     old_choices = legacy_layout or tabular_choices
     number_items = all(not item["id"].isdecimal() and "heading" not in item for item in record["items"])
@@ -309,7 +396,15 @@ def render_document(record, *, legacy_layout=False, tabular_choices=False):
         elif record["schema"] == 2 and "options" in item:
             sections.extend(render_choice(option) for option in item["options"])
         elif "options" in item and (choices := unmatched_options(item)):
-            sections.append("\n".join(choices))
+            if legacy_prose_choices:
+                sections.append("\n".join(choices))
+            else:
+                unmatched = set(choices)
+                sections.extend(
+                    render_legacy_choice(option)
+                    for option in item["options"]
+                    if f"- {option_prose(option)}" in unmatched
+                )
         if old_choices or "options" not in item:
             sections.append(f"- 상태: {STATUS_LABELS[item['status']]}")
         if item["answer"] and record["schema"] == 1:
@@ -323,12 +418,18 @@ def render_document(record, *, legacy_layout=False, tabular_choices=False):
                 sections.extend(["### " + item["title"], render_choice(option)])
         elif old_choices:
             sections.extend(render_selection(item) for item in selected)
+        elif legacy_prose_choices:
+            sections.append(
+                "\n".join(
+                    f"- {item['title']} · "
+                    + option_prose(next(option for option in item["options"] if option["id"] == item["selected"]))
+                    for item in selected
+                )
+            )
         else:
-            choices = []
             for item in selected:
                 option = next(option for option in item["options"] if option["id"] == item["selected"])
-                choices.append(f"- {item['title']} · {option_prose(option)}")
-            sections.append("\n".join(choices))
+                sections.extend(["### " + item["title"], render_legacy_choice(option)])
     if "blocks" in record:
         sections.append(render_blocks(record["blocks"], record["schema"]))
     elif record["body"]:
@@ -339,6 +440,10 @@ def render_document(record, *, legacy_layout=False, tabular_choices=False):
     if legacy_layout or f"]({archive_target})" not in "\n\n".join(sections):
         sections.extend(["## 전체 이력", f"[질문·답 원문 전체 이력]({archive_target})"])
     return "\n\n".join(sections) + "\n"
+
+
+def render_document(record, *, legacy_layout=False, tabular_choices=False):
+    return _render_document(record, legacy_layout=legacy_layout, tabular_choices=tabular_choices)
 
 
 def history_path(folder, name):
@@ -501,6 +606,7 @@ def matches_current_render(record, text):
     text = normalize_markdown(text)
     return (
         text == normalize_markdown(render_document(record))
+        or text == normalize_markdown(_render_document(record, legacy_prose_choices=True))
         or text == normalize_markdown(render_document(record, tabular_choices=True))
         or text == normalize_markdown(render_document(record, legacy_layout=True))
     )

@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -115,6 +116,168 @@ def test_render_labels_separate_approval_request_without_changing_original_appro
     assert "별도 승인 요청: 없음" in render_document(saved)
     saved["approval"] = {"status": "pending", "reason": "추가 확인"}
     assert "별도 승인 요청: 승인 대기" in render_document(saved)
+
+
+def test_schema1_choices_render_as_markdown_fields_and_split_only_safe_sentence_boundaries(tmp_path):
+    record = document()
+    record["items"][1]["body"] = "- Existing — Match this line."
+    record["items"][1]["options"] = [
+        {
+            "id": "existing",
+            "label": "Existing",
+            "description": "Match this line.",
+        },
+        {
+            "id": "detailed",
+            "label": "Keep **bold** and `inline` Markdown",
+            "description": (
+                "Use 3.14 in `config.v2.json`. Then open [the guide. Continue here]"
+                "(https://example.org/docs/v2.0). The relative path is assets/icons.v2/logo.png. "
+                "Keep this final sentence."
+            ),
+            "impact": (
+                "A detailed impact sentence. A second impact sentence with **markup** and a longer "
+                "explanation that remains unchanged so the reader can compare each consequence clearly."
+            ),
+        },
+    ]
+    before = copy.deepcopy(record)
+
+    text = render_document(record)
+
+    assert text.count("- Existing — Match this line.") == 1
+    assert "- Keep **bold** and `inline` Markdown" in text
+    assert "- Keep **bold** and `inline` Markdown  \n  설명 · Use 3.14 in `config.v2.json`.  \n  Then open [the guide. Continue here](https://example.org/docs/v2.0).  \n  The relative path is assets/icons.v2/logo.png.  \n  Keep this final sentence." in text
+    assert (
+        "  영향 · A detailed impact sentence.  \n  A second impact sentence with **markup** and a longer "
+        "explanation that remains unchanged so the reader can compare each consequence clearly."
+    ) in text
+    assert "&lt;" not in text and "&amp;" not in text
+    assert record == before
+    if importlib.util.find_spec("markdown") is not None:
+        import markdown
+
+        rendered_html = markdown.markdown(text)
+        assert "Keep <strong>bold</strong> and <code>inline</code> Markdown<br />" in rendered_html
+        assert "<br />\n  설명 · Use 3.14" in rendered_html
+
+    saved = publish_document(tmp_path, record)
+    archive = question_records.history_path(tmp_path, "ask-1.md").read_text(encoding="utf-8")
+    assert "Use 3.14 in `config.v2.json`. Then open [the guide. Continue here]" in archive
+    assert "  \n" not in archive
+    assert saved == before
+
+
+def test_schema1_selected_choice_uses_separate_fields_while_legacy_layouts_stay_tabular():
+    record = document()
+    record["items"][0].update(
+        status="answered",
+        answer="Use the detailed choice.",
+        options=[
+            {
+                "id": "detailed",
+                "label": "Detailed **choice**",
+                "description": "A selected description with `Markdown`.",
+                "impact": "A selected impact.",
+            }
+        ],
+        selected="detailed",
+    )
+    record["items"][1]["options"] = [
+        {"id": "plain", "label": "A plain option", "description": "A description."}
+    ]
+
+    text = render_document(record)
+    assert "## 현재 선택\n\n### 제출할까요?\n\n- Detailed **choice**  \n  설명 · A selected description with `Markdown`.  \n  영향 · A selected impact." in text
+    assert "| id | 선택 | 설명 | 영향 |" in render_document(record, legacy_layout=True)
+    assert "| id | 선택 | 설명 | 영향 |" in render_document(record, tabular_choices=True)
+    assert "| 문항 | 선택 id | 현재 선택 | 설명 | 영향 |" in render_document(record, legacy_layout=True)
+
+
+def test_schema1_legacy_choice_keeps_raw_markup_literal_and_markdown_active():
+    choice = question_records.render_legacy_choice(
+        {
+            "id": "literal",
+            "label": "<default> **bold**",
+            "description": "Show <token> and &copy; while keeping `code` and [a link](https://example.org/?a=1&b=2).",
+        }
+    )
+
+    assert "- &lt;default&gt; **bold**" in choice
+    assert "&lt;token&gt; and &amp;copy;" in choice
+    assert "`code` and [a link](https://example.org/?a=1&amp;b=2)" in choice
+    if importlib.util.find_spec("markdown") is not None:
+        import markdown
+
+        rendered_html = markdown.markdown(choice)
+        assert "&lt;default&gt; <strong>bold</strong>" in rendered_html
+        assert "&lt;token&gt; and &amp;copy;" in rendered_html
+        assert '<code>code</code> and <a href="https://example.org/?a=1&amp;b=2">a link</a>' in rendered_html
+
+
+def test_long_schema1_choice_wrapping_avoids_markdown_blocks_and_respects_escaped_backticks():
+    prose = (
+        r"An escaped \` marker. Then `code. Keep literal` safely. First sentence. # Required heading. "
+        "Second sentence. 1. Keep ordered text. "
+        "Additional generic prose keeps this explanation long enough to exercise sentence wrapping safely."
+    )
+
+    formatted = question_records._format_legacy_choice_prose(prose)
+
+    assert r"An escaped \` marker." in formatted
+    assert "Then `code. Keep literal` safely." in formatted
+    assert "First sentence. # Required heading." in formatted
+    assert "Second sentence. 1. Keep ordered text." in formatted
+    assert "`code. Keep literal`" in formatted
+    assert ".  \n  # Required" not in formatted
+    assert ".  \n  1. Keep" not in formatted
+
+    escaped_close = (
+        r"Use `path\` then `code. Keep literal` after that. "
+        "Additional generic prose keeps the explanation long enough to exercise safe wrapping."
+    )
+    escaped_close_formatted = question_records._format_legacy_choice_prose(escaped_close)
+    assert r"`path\` then `code. Keep literal`" in escaped_close_formatted
+    assert "code.  \n  Keep" not in escaped_close_formatted
+    if importlib.util.find_spec("markdown") is not None:
+        import markdown
+
+        rendered_html = markdown.markdown(question_records.render_legacy_choice({"label": "Choice", "description": prose}))
+        assert "<h1>Required heading</h1>" not in rendered_html
+        assert "<ol>" not in rendered_html
+        assert "# Required heading" in rendered_html and "1. Keep ordered text." in rendered_html
+
+
+def test_baseline_schema1_prose_markdown_still_checks_and_answers(tmp_path):
+    record = document()
+    record["items"][0]["options"] = [
+        {"id": "preferred", "label": "Preferred", "description": "A clear choice."},
+        {"id": "alternate", "label": "Alternate", "impact": "A different result."},
+    ]
+    record["items"][1]["options"] = [
+        {"id": "selected", "label": "Selected", "description": "Already chosen."}
+    ]
+    publish_document(tmp_path, record)
+    saved = answer_document(
+        tmp_path,
+        "ask-1.md",
+        answer(updates=[{"id": "2", "status": "answered", "answer": "Keep the existing selection.", "selected": "selected"}]),
+    )
+    baseline_markdown = question_records._render_document(saved, legacy_prose_choices=True)
+    assert "- Preferred — A clear choice." in baseline_markdown
+    assert "- 후속 작업할까요? · Selected — Already chosen." in baseline_markdown
+    (tmp_path / "ask-1.md").write_text(baseline_markdown, encoding="utf-8")
+
+    assert question_records.checked_document(tmp_path, "ask-1.md", baseline_markdown) == saved
+    answered = answer_document(
+        tmp_path,
+        "ask-1.md",
+        answer("reply-2", updates=[{"id": "1", "status": "answered", "answer": "Preferred."}]),
+    )
+
+    assert read_document(tmp_path, "ask-1.md") == answered
+    assert (tmp_path / "ask-1.md").read_text(encoding="utf-8") == render_document(answered)
+    assert "- Selected" in render_document(answered)
 
 
 def test_current_view_keeps_pending_options_and_current_design_before_completed_results(tmp_path):
