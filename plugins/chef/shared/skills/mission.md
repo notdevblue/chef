@@ -136,6 +136,8 @@ python "<mission-state>" <mission-state-runtime> <명령> [인자]
 | `init [--tier S|M|L] [--force-tier] [--goal]` | §1 미션 폴더 만들기(S는 `--force-tier` 없이 거부, 티어 없으면 경고) |
 | `mission set [--stage] [--confirm A=승인]… [--state] [--poc <경로>]` | 단계·확인·상태·PoC 진입 파일 바꾸기 |
 | `unit add <id> --goal --files --done --verify --timebox --forbid [--human] [--after]` | §4 마일스톤 추가 |
+| `unit template [--id <id> ...]` | 어댑터 없이 JSON 입력 양식 출력. 빈 설명 칸을 채우고 timebox는 정수 분으로 유지 |
+| `unit add --input <json> [--dry-run]` | schema 1 `units` 배열 전체 검사 후 units.tsv 한 번 쓰기. after는 기존 단위 또는 배열 앞쪽 단위만 참조 |
 | `unit set <id> [--status] [--unit] [칸]` / `unit list` | §5 진행 상태·브리프. done은 complete만 허용. 브리프 계약이 바뀌면 버전을 올리고 재검증 필요를 표시 |
 | `ledger record <unit> --status --grade --evidence [--files] [--evidence-input <json>]` / `ledger audit [--unit <id>] [--limit 1..100]` | §5 판정·파일 증거 기록 / 출력 제한형 읽기 전용 감사(기본 한도 20) |
 | `decision add --what --chosen --why --affects [--fixes Dn]` | `[~]` 결정, 앞 기록 정정 |
@@ -364,7 +366,7 @@ PoC 명세와의 일치로 쓴다.
 7. **시범 후 조정** — `M1`에서 브리프 칸이나 검증 명령이 틀렸으면 남은 행을 고친다.
    승인된 목표·범위 안에서만 `unit set`으로 고치고, 고친 내용은 `decision add`로 남긴다.
 
-`complete` 응답에 상태가 포함되므로 뒤에 `status`를 다시 부르지 않는다. 실패·보류 때는 `context`를 본다. `걸린 것`에 timebox 넘김이 뜨면 멈춤 규칙의 마지막 경우다.
+`complete` 응답에 상태가 포함되므로 뒤에 `status`를 다시 부르지 않는다. 실패·보류 때는 `context`를 본다. 재개 때는 `context --json`의 현재 단위·승인 원문·증거 포인터부터 읽고 끝난 작업의 큰 로그는 다시 싣지 않는다. `brief`가 timebox 초과로 `needs-replan`을 반환하면 새 파견 전에 미해결 원인·충돌 참조·남은 범위를 진단한다. 상한을 늘려 같은 일을 반복하는 것으로 대신하지 않는다.
 
 "테스트 통과"는 완료가 아니다. `done` 조건 전부와 리뷰 통과(clean 또는 closed-low)가 완료다.
 

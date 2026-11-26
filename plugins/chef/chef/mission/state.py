@@ -112,6 +112,7 @@ from chef.mission.storage import (
 )
 from chef.mission import evidence as file_evidence
 from chef.mission import unit_contracts
+from chef.mission import unit_input
 from chef.mission import review_dispatch
 from chef.mission import review_worker
 from chef.questions import records as question_records
@@ -225,27 +226,25 @@ def cmd_unit_add(ctx, args):
     require_folder(ctx)
     path = ctx.path(UNITS_FILE)
     rows = read_table(path, UNIT_HEADER)
-    unit_id = clean(args.id)
-    if not UNIT_ID.fullmatch(unit_id):
-        raise StateError(f"마일스톤 id 형식 오류 (영문·숫자·._- 만, 쉼표·공백 불가): {args.id}")
-    if find_row(rows, "id", unit_id) is not None:
-        raise StateError(f"마일스톤 {unit_id} 가 이미 있음 (바꾸려면 unit set)")
-    brief = {name: clean(getattr(args, name)) for name in BRIEF_FIELDS}
-    empty = [name for name, value in brief.items() if not value]
-    if empty:
-        raise StateError(f"브리프 빈 칸: {', '.join(empty)}, 마일스톤을 다시 쪼갤 것")
-    row = {
-        "id": unit_id,
-        **brief,
-        "timebox": parse_timebox(brief["timebox"]),
-        "human": clean(args.human) or NONE_CELL,
-        "after": normalize_after(args.after, rows),
-        "unit": "?",
-        "started": "",
-        "status": "todo",
-    }
-    write_table(path, UNIT_HEADER, rows + [row])
-    return [f"{unit_id} 추가 (todo, timebox {row['timebox']}분, after {row['after']})"]
+    if getattr(args, "input", None):
+        if args.id or any(getattr(args, name) for name in BRIEF_FIELDS) or args.human != NONE_CELL or args.after != NONE_CELL:
+            raise StateError("--input cannot be combined with unit id or brief flags")
+        items = unit_input.load(args.input)
+    else:
+        items = [{"id": args.id or "", **{name: getattr(args, name) for name in BRIEF_FIELDS},
+                  "human": args.human, "after": args.after}]
+    additions = unit_input.prepare(items, rows)
+    if not getattr(args, "dry_run", False):
+        write_table(path, UNIT_HEADER, rows + additions)
+    if getattr(args, "input", None) or getattr(args, "dry_run", False):
+        return [json.dumps({"schema": 1, "status": "valid" if args.dry_run else "added",
+                            "units": additions}, ensure_ascii=False)]
+    row = additions[0]
+    return [f"{row['id']} 추가 (todo, timebox {row['timebox']}분, after {row['after']})"]
+
+
+def cmd_unit_template(ctx, args):
+    return [json.dumps(unit_input.template(args.id), ensure_ascii=False, indent=2)]
 
 
 def cmd_unit_set(ctx, args):
@@ -519,6 +518,20 @@ def cmd_context(ctx, args):
     if len(active + ready) > 6:
         lines.append(f"다음 단위 외 {len(active + ready) - 6}개: unit list")
     decisions = read_table(ctx.path(DECISIONS_FILE), DECISIONS_HEADER)
+    if getattr(args, "json", False):
+        overdue = [row["id"] for row in active if is_overdue(row)]
+        return [json.dumps({
+            "schema": 1, "mission": ctx.mission_id,
+            "status": "needs-replan" if overdue else "current",
+            "active": [row["id"] for row in active], "ready": [row["id"] for row in ready],
+            "overdue": overdue, "summary": lines[:3],
+            "approvalSources": [ctx.path("mission.md"), *[
+                str(question_records.source_path(ctx.folder, name))
+                for name in question_records.document_names(ctx.folder)]],
+            "unitSource": ctx.path(UNITS_FILE), "decisionSource": ctx.path(DECISIONS_FILE),
+            "recentDecisions": [{"id": row["id"], "what": row["what"][:120]} for row in decisions[-4:]],
+            "semanticApproval": "read_original_sources",
+        }, ensure_ascii=False)]
     for row in decisions[-4:]:
         lines.append(f"{row['id']}: {row['what'][:120]} → {row['chosen'][:180]}")
     lines.append(f"승인·명세·지시 원본: {ctx.path('mission.md')} (필요한 절만 읽기)")
@@ -643,6 +656,13 @@ def cmd_brief(ctx, args):
         bundle = reference_bundle.require_current(ctx.project, args.references)
         result["references"] = bundle["sources"]
         result["readSources"] = reference_bundle.read_sources(bundle)
+    if is_overdue(row):
+        result["dispatch"] = {
+            "status": "needs-replan", "reason": "timebox_exceeded", "elapsedMinutes": elapsed_minutes(row),
+            "timeboxMinutes": int(row["timebox"]),
+            "next": "Return unresolved causes, conflicting references and remaining scope before reassigning this unit.",
+        }
+        args.exit_code = FAILED
     return [json.dumps(result, ensure_ascii=False)]
 
 
@@ -921,7 +941,7 @@ def main(argv=None, runtime="claude"):
             args = build_parser().parse_args(argv)
         except SystemExit:
             return OK
-        if args.handler in (cmd_inspect, cmd_question_patch, cmd_review_worker):
+        if args.handler in (cmd_inspect, cmd_question_patch, cmd_review_worker, cmd_unit_template):
             for line in args.handler({}, args):
                 print(line)
             return OK
@@ -975,6 +995,7 @@ def main(argv=None, runtime="claude"):
             cmd_reference_show,
             cmd_reference_check,
         )
+        readonly = readonly or (args.handler == cmd_unit_add and getattr(args, "dry_run", False))
         lock_name = mission_id
         if args.handler == cmd_verify:
             if not UNIT_ID.fullmatch(args.id):

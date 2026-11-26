@@ -414,7 +414,8 @@ def test_unit_add_flattens_tabs_and_newlines(opened):
 
 def test_unit_add_rejects_empty_brief_fields(opened):
     err = opened.fail("unit", "add", "M1", "--goal", "목표", "--timebox", "60")
-    assert err == "오류: 브리프 빈 칸: files, done, verify, forbid, 마일스톤을 다시 쪼갤 것"
+    assert "브리프 빈 칸: files, done, verify, forbid" in err
+    assert "no units written" in err
     assert len(opened.table("units.tsv")) == 1
 
 

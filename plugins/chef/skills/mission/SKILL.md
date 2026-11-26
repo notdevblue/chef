@@ -21,6 +21,17 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 - 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium, `chef:verifier`는 Sonnet 5.5 / low, `chef:dev-medium`은 high다. 첫 심층 리뷰·기록 감사·설계 판단은 Opus / high다.
 - 편집·리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고 ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속·검색이 미확인이면 검증 가능으로 보고하지 않는다. 도구 축소의 사용량 효과는 측정 전 미확인이다.
 
+### 긴 대기 작업의 캐시 프로필
+
+기본 역할의 5분 캐시는 유지한다. 최초 파견 때 같은 작성자에게 리뷰 후 수정을 돌리거나 한 검증에서 연속 API 요청의 시작 시각 간격이 5~60분일 것으로 예상할 때만
+`chef:dev-small-long`, `chef:dev-medium-long`, `chef:verifier-long` 중 원래 역할과 같은 프로필을 선택할 수 있다.
+이들은 원본 역할에서 생성하며 모델·effort·도구·책임·상한은 같고 Claude의 `experimental.cacheTtl: 1h`만 추가한다.
+`rolePolicy`도 원래 역할 그대로 적용한다. 어댑터가 다른 역할을 지정했다면 이 프로필로 대체하지 않는다.
+짧은 조사·일회성 리뷰, 계속 응답하는 긴 작업에는 기본 역할을 쓴다. 전체 `subagentPromptCacheTtl`은 변경하지 않는다.
+1시간 캐시 쓰기는 단가가 높으므로 실제 요청의 `promptCacheRequested`와 `usage.cache_creation`을 확인하고,
+재개 후 읽기·쓰기와 완료 품질을 비교한다. 설정 존재나 요청 TTL만으로 절감·유효 TTL을 확정하지 않는다.
+이 프로필은 Claude Code 2.1.248 이상용이며 Codex·Grok·Hermes의 기본 역할에는 캐시 설정을 추가하지 않는다.
+
 **역할 정책** — 어댑터 최상위 `rolePolicy`(`references/adapter-schema.md`)는 이 스킬이 역할을 파견할 때만 적용한다.
 없거나 키가 없으면 `model: "definition"`, `subagents: true`다. 스킬 밖 직접 호출과 역할 정의 파일의 모델 값은 바꾸지 않는다.
 - `model: "inherit"` — 이 스킬의 모든 역할 파견에서 Agent 호출 `model` 인자에 내 모델의 별칭(`sonnet`·`opus`·`haiku`·`fable`)을 넘긴다.

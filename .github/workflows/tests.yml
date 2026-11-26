@@ -77,6 +77,8 @@ jobs:
         run: python tools/check_architecture.py
       - name: Check generated runtime entry points
         run: python tools/generate_entrypoints.py
+      - name: Check generated Claude cache profiles
+        run: python tools/generate_claude_profiles.py
       - name: Run full synthetic suite
         if: ${{ !cancelled() }}
         id: pytest

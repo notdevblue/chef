@@ -46,7 +46,8 @@ def build_parser(handlers=None):
     init.add_argument("--tier", help="S|M|L. S 는 --force-tier 없이는 거부, 없으면 경고")
     init.add_argument("--force-tier", action="store_true", help="S 티어도 미션으로 연다(사용자가 원할 때만)")
     leaf(sub, "status", handlers.cmd_status)
-    leaf(sub, "context", handlers.cmd_context)
+    context = leaf(sub, "context", handlers.cmd_context)
+    context.add_argument("--json", action="store_true", help="compact current-state pointers for a resumed coordinator")
     leaf(sub, "schema", handlers.cmd_schema)
     inspect = leaf(sub, "inspect", handlers.cmd_inspect)
     source = inspect.add_mutually_exclusive_group(required=True)
@@ -167,8 +168,12 @@ def build_parser(handlers=None):
     mission_set.add_argument("--poc", metavar="PATH")
 
     unit = sub.add_parser("unit").add_subparsers(dest="action", required=True)
+    template = leaf(unit, "template", handlers.cmd_unit_template)
+    template.add_argument("--id", action="append", default=[], help="template unit id; repeat for a batch")
     add = leaf(unit, "add", handlers.cmd_unit_add)
-    add.add_argument("id")
+    add.add_argument("id", nargs="?")
+    add.add_argument("--input", help="schema 1 units JSON; all rows validate before one atomic write")
+    add.add_argument("--dry-run", action="store_true", help="validate without writing mission state")
     for name in BRIEF_FIELDS:
         add.add_argument(f"--{name}", default="")
     add.add_argument("--human", default=NONE_CELL)

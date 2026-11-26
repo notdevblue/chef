@@ -35,6 +35,7 @@ python -m pip install -r requirements-dev.txt
 python tools/check_architecture.py
 python tools/check_shared.py
 python tools/generate_entrypoints.py
+python tools/generate_claude_profiles.py
 python -m pytest -q -p no:cacheprovider
 ```
 
@@ -52,7 +53,9 @@ python plugins/chef/skills/adapter-init/scripts/check_guard.py <어댑터 이름
 ```
 
 `tools/check_shared.py`는 공통 스킬·런타임 링크·참조 포인터를 검사합니다.
-`--write`는 Codex 참조 포인터를 갱신합니다. 공통 절차의 사본을 런타임 폴더에 추가하지 않습니다.
+이 도구의 `--write`는 Codex 참조 포인터를 갱신합니다. 공통 절차의 사본을 런타임 폴더에 추가하지 않습니다.
+`tools/generate_claude_profiles.py`는 Claude 장기 대기용 역할의 캐시 설정만 원본 역할에 덧붙입니다.
+원본 역할을 바꿨으면 `--write`로 프로필을 다시 생성하며, 검사 모드는 다른 모델·effort·도구·본문으로의 drift를 거부합니다.
 호환 스크립트의 정본 목록은 `tools/entrypoints.json`입니다. 경로·대상·기본 런타임을 바꿀 때는
 이 목록을 수정하고 `python tools/generate_entrypoints.py --write`로 생성합니다.
 인자 없이 실행하면 생성 결과와 실제 파일의 일치를 검사합니다.
