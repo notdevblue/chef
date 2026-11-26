@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 
 from chef.infrastructure import paths as infrastructure_paths
 from chef.mission.contracts import FAILED, SHARED_DOCUMENTS_FILE, StateError
@@ -16,11 +17,14 @@ from chef.mission.documents import (
 )
 from chef.mission.storage import require_folder
 from chef.questions import records as question_records
+from chef.questions import readability
 from chef.verification import runner as verification
 
 
 def cmd_question_preview(ctx, args):
     record = question_records.validate_document(verification.read_json(args.input))
+    for message in readability.messages(record):
+        print(message, file=sys.stderr)
     return [question_records.render_document(record).rstrip("\n")]
 
 
@@ -31,6 +35,8 @@ def cmd_question_patch(ctx, args):
         verification.read_json(args.changes),
         editorial=args.editorial,
     )
+    for message in readability.messages(record):
+        print(message, file=sys.stderr)
     return [json.dumps(record, ensure_ascii=False, indent=2)]
 
 
@@ -46,6 +52,7 @@ def cmd_question_preflight(ctx, args):
     return [
         f"질문 발행 검사 통과: {record['id']}.md (revision {record['revision']})",
         *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record)),
+        *readability.messages(record),
     ]
 
 
@@ -60,6 +67,7 @@ def cmd_question_publish(ctx, args):
     return [
         f"질문 저장: {record['id']}.md (revision {record['revision']})",
         *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record)),
+        *readability.messages(record),
     ]
 
 

@@ -58,19 +58,12 @@ def test_structured_input_publishes_and_renders_separate_choices_and_steps(tmp_p
 
 
 @pytest.mark.parametrize("mutate,path", [
-    (lambda d: d.update(intro="x" * 161), "intro"),
     (lambda d: d.update(title="x" * 81), "title"),
     (lambda d: d.update(body="x"), "body"),
-    (lambda d: d["approval"].update(reason="x" * 161), "approval.reason"),
-    (lambda d: d["items"][0].update(body="x" * 161), "items[0].body"),
-    (lambda d: d["items"][0]["options"][0].update(impact="x" * 161), "impact"),
-    (lambda d: d["blocks"][0]["items"][0].update(result="x" * 161), "result"),
-    (lambda d: d["blocks"][4]["rows"][0].__setitem__(0, "x" * 161), "rows[0][0]"),
-    (lambda d: d["blocks"][3]["fields"][0].update(description="x" * 161), "description"),
     (lambda d: d["blocks"][0]["items"][0].update(result="short\n" * 30), "result"),
     (lambda d: d["blocks"][0]["items"][0].update(result="<div>hidden</div>"), "result"),
     (lambda d: d["blocks"][0]["items"][0].update(result="[hidden](https://example.org)"), "result"),
-    (lambda d: d["blocks"][0].update(type="paragraph", text="long"), "type"),
+    (lambda d: d["blocks"][0].update(type="paragraph", text="long"), "sentences"),
 ])
 def test_all_authored_prose_paths_reject_oversize_or_embedded_blocks_without_writes(tmp_path, mutate, path):
     record = draft()
@@ -86,8 +79,8 @@ def test_all_authored_prose_paths_reject_oversize_or_embedded_blocks_without_wri
 
 def test_batch_reports_all_errors_and_repairs_one_entry_without_rewriting_block(tmp_path):
     record = draft()
-    changes = {"set": {"intro": "x" * 161}, "upsert_entries": [
-        {"block": "rules", "entry": {"id": "unique", "label": "Unique", "result": "y" * 161}}]}
+    changes = {"set": {"intro": "<div>invalid</div>"}, "upsert_entries": [
+        {"block": "rules", "entry": {"id": "unique", "label": "Unique", "result": "<div>invalid</div>"}}]}
     with pytest.raises(questions.QuestionRecordError) as error:
         questions.patch_document(record, changes)
     assert "intro" in str(error.value) and "blocks[0].items[0].result" in str(error.value)
@@ -225,8 +218,8 @@ def test_runtime_cli_previews_the_same_template_and_batch_errors(tmp_path, runti
     assert result.returncode == 0 and result.stderr == "", result.stderr
     assert 'id="rules.unique"' in result.stdout and "All devices use it." in result.stdout
     bad = draft()
-    bad["intro"] = "x" * 161
-    bad["blocks"][0]["items"][0]["result"] = "x" * 161
+    bad["intro"] = "<div>invalid</div>"
+    bad["blocks"][0]["items"][0]["result"] = "<div>invalid</div>"
     source.write_text(json.dumps(bad), encoding="utf-8")
     result = subprocess.run(argv, cwd=tmp_path, env=environment, capture_output=True, encoding="utf-8", timeout=30)
     assert result.stdout == "" and "intro" in result.stderr and "blocks[0].items[0].result" in result.stderr

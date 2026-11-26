@@ -162,7 +162,12 @@ def validate_answer(value):
 
 
 def validate_document(record):
-    validate_fields(record, DOCUMENT_FIELDS, ("legacy_markdown", "blocks", "detail_blocks"), "질문")
+    validate_fields(record, DOCUMENT_FIELDS, ("legacy_markdown", "blocks", "detail_blocks", "presentation"), "질문")
+    if "presentation" in record:
+        if record["presentation"] != "decision" or not isinstance(record.get("id"), str) or not re.fullmatch(r"confirm-A[0-9]*", record["id"]):
+            raise QuestionRecordError("presentation decision은 확인 A 문서에만 사용할 수 있음")
+        if not record.get("blocks"):
+            raise QuestionRecordError("presentation decision에는 현재 전체 설계 blocks가 필요함")
     if type(record.get("schema")) is not int or record["schema"] not in (1, 2):
         raise QuestionRecordError("질문 schema는 1 또는 2이어야 함")
     if record["schema"] == 2:
@@ -330,8 +335,11 @@ def _format_legacy_choice_prose(value):
     return value
 
 
-def render_legacy_choice(option):
+def render_legacy_choice(option, compact=False):
     """Render schema 1 option fields as separate Markdown prose."""
+    if compact:
+        parts = [escape(option[key], quote=False) for key in ("description", "impact") if option.get(key)]
+        return "**" + escape(option['label'], quote=False) + "**" + (" — " + " ".join(parts) if parts else "")
     lines = [f"- {escape(option['label'], quote=False)}"]
     for key, label in (("description", "설명"), ("impact", "영향")):
         if option.get(key):
@@ -361,6 +369,7 @@ def decision_review_notes(record):
 def _render_document(record, *, legacy_layout=False, tabular_choices=False, legacy_prose_choices=False):
     record = validate_document(record)
     old_choices = legacy_layout or tabular_choices
+    decision_view = record.get("presentation") == "decision" and not (old_choices or legacy_prose_choices)
     number_items = all(not item["id"].isdecimal() and "heading" not in item for item in record["items"])
     summary = summarize_document(record)
     approval = record["approval"]
@@ -394,14 +403,14 @@ def _render_document(record, *, legacy_layout=False, tabular_choices=False, lega
         if old_choices and "options" in item:
             sections.append(render_options(item["options"]))
         elif record["schema"] == 2 and "options" in item:
-            sections.extend(render_choice(option) for option in item["options"])
+            sections.extend(render_choice(option, compact=decision_view) for option in item["options"])
         elif "options" in item and (choices := unmatched_options(item)):
             if legacy_prose_choices:
                 sections.append("\n".join(choices))
             else:
                 unmatched = set(choices)
                 sections.extend(
-                    render_legacy_choice(option)
+                    render_legacy_choice(option, compact=decision_view)
                     for option in item["options"]
                     if f"- {option_prose(option)}" in unmatched
                 )
@@ -410,7 +419,7 @@ def _render_document(record, *, legacy_layout=False, tabular_choices=False, lega
         if item["answer"] and record["schema"] == 1:
             sections.extend(["답 내용:", item["answer"]])
     selected = [item for item in record["items"] if "selected" in item]
-    if selected:
+    if selected and not decision_view:
         sections.append("## 현재 선택")
         if record["schema"] == 2:
             for item in selected:
@@ -1205,7 +1214,7 @@ def patch_document(record, changes, editorial=False):
         "patch",
     )
     if "set" in changes:
-        validate_fields(changes["set"], (), ("schema", "revision", "title", "intro", "body"), "patch set")
+        validate_fields(changes["set"], (), ("schema", "revision", "title", "intro", "body", "presentation"), "patch set")
         if record["schema"] == 2 and changes["set"].get("schema", 2) != 2:
             raise QuestionRecordError("schema 2 문서는 schema 1로 되돌릴 수 없음")
         record.update(copy.deepcopy(changes["set"]))

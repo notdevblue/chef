@@ -8,6 +8,7 @@ from pathlib import Path
 
 from chef.locations import PLUGIN_ROOT
 from chef.questions import records as question_records
+from chef.questions import readability
 from chef.questions.summary import (
     answer_recorded,
     is_answer_section,
@@ -248,6 +249,7 @@ def check(path, source_path="", archive_path=""):
         "prose_characters": prose_length(text),
         "issues": issues,
         "decision_review": question_records.decision_review_notes(record) if record else [],
+        "readability": readability.analyze(record) if record else readability.analyze_markdown(text),
         "semantic_review_required": True,
     }
 

@@ -11,7 +11,7 @@ TITLE_LIMIT = 80
 LABEL_LIMIT = 40
 PROSE_LIMIT = 160
 ITEM_LIMIT = 320
-BLOCK_TYPES = {"list", "rules", "steps", "table", "fields", "literal"}
+BLOCK_TYPES = {"paragraph", "list", "rules", "steps", "table", "fields", "literal"}
 ANCHOR = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 BLOCK_MARKUP = re.compile(
     r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```|~~~|\|)"
@@ -45,14 +45,14 @@ class AuthoringInput:
             self.problem(f"{path}.{key}", "지원하지 않는 필드입니다")
         return True
 
-    def short(self, value, path, limit=PROSE_LIMIT, required=True):
+    def short(self, value, path, limit=None, required=True):
         if not isinstance(value, str):
             self.problem(path, "문자열이 필요합니다")
             return
         if required and not value.strip():
             self.problem(path, "빈 문자열을 사용할 수 없습니다")
-        if len(value) > limit:
-            self.problem(path, f"{len(value)}자 / 최대 {limit}자. 별도 항목으로 나누세요")
+        if limit is not None and len(value) > limit:
+            self.problem(path, f"{len(value)}자 / 최대 {limit}자")
         if any(ord(char) < 32 for char in value) or BLOCK_MARKUP.search(value):
             self.problem(path, "한 줄의 산문만 사용하세요. 목록·표·코드·링크는 정형 블록으로 작성하세요")
 
@@ -94,12 +94,9 @@ class AuthoringInput:
             ordered.append(target)
             self.short(entry.get("label"), f"{ep}.label", LABEL_LIMIT)
             self.short(entry.get(content), f"{ep}.{content}")
-            total = len(entry.get(content, "")) if isinstance(entry.get(content), str) else 0
             for key in ("when", "failure"):
                 if key in entry:
                     self.short(entry[key], f"{ep}.{key}")
-                    if isinstance(entry[key], str):
-                        total += len(entry[key])
             if "conditions" in entry:
                 conditions = entry["conditions"]
                 if self.shape(conditions, f"{ep}.conditions", ("mode", "items")):
@@ -109,8 +106,6 @@ class AuthoringInput:
                         self.short(condition, f"{ep}.conditions.items[{ci}]")
                 if "when" in entry:
                     self.problem(ep, "when과 conditions 중 하나를 사용하세요")
-            if total > ITEM_LIMIT:
-                self.problem(ep, f"설명 합계 {total}자 / 최대 {ITEM_LIMIT}자")
             if "exception_of" in entry:
                 self.reference(entry["exception_of"], f"{ep}.exception_of")
                 if isinstance(entry["exception_of"], str):
@@ -131,7 +126,25 @@ class AuthoringInput:
             return
         kind = block.get("type")
         if not isinstance(kind, str) or kind not in BLOCK_TYPES:
-            self.problem(f"{path}.type", "list/rules/steps/table/fields/literal 중 하나를 사용하세요")
+            self.problem(f"{path}.type", "paragraph/list/rules/steps/table/fields/literal 중 하나를 사용하세요")
+            return
+        if kind == "paragraph":
+            if self.shape(block, path, ("id", "type", "sentences"), ("title",)):
+                self.target(block.get("id"), f"{path}.id")
+                if "title" in block:
+                    self.short(block["title"], f"{path}.title", TITLE_LIMIT)
+                for index, sentence in enumerate(self.array(block.get("sentences"), f"{path}.sentences")):
+                    self.short(sentence, f"{path}.sentences[{index}]")
+                    if isinstance(sentence, str) and (
+                        re.fullmatch(r"\s*(?:-\s*){3,}|\s*(?:\*\s*){3,}|\s*(?:_\s*){3,}", sentence)
+                        or sentence.startswith('    ')
+                    ):
+                        self.problem(f"{path}.sentences[{index}]", "문단에 블록 Markdown을 사용할 수 없습니다")
+                sentences = block.get('sentences')
+                if isinstance(sentences, list) and all(isinstance(value, str) for value in sentences):
+                    paragraph = ' '.join(sentences)
+                    if BLOCK_MARKUP.search(paragraph) or re.fullmatch(r"\s*(?:-\s*){3,}|\s*(?:\*\s*){3,}|\s*(?:_\s*){3,}", paragraph):
+                        self.problem(f"{path}.sentences", "문단에 블록 Markdown을 사용할 수 없습니다")
             return
         content = {"table": ("columns", "rows"), "fields": ("fields",), "literal": ("format", "value")}.get(kind, ("items",))
         optional = BLOCK_OPTIONAL.get(kind, ())
@@ -269,8 +282,12 @@ def anchor(target):
 
 def render_authored_block(block):
     kind = block["type"]
-    parts = [anchor(block["id"]), "## " + escape(block["title"])]
-    if kind == "table":
+    parts = [anchor(block["id"])]
+    if "title" in block:
+        parts.append("## " + escape(block["title"]))
+    if kind == "paragraph":
+        parts.append(" ".join(escape(sentence) for sentence in block["sentences"]))
+    elif kind == "table":
         rows = block["rows"]
         if "row_ids" in block:
             # Anchors are renderer-owned markup, added after escaping the user cells.
@@ -321,7 +338,10 @@ def render_authored_block(block):
     return "\n\n".join(parts)
 
 
-def render_choice(option):
+def render_choice(option, compact=False):
+    if compact:
+        parts = [escape(option[key]) for key in ("description", "impact") if option.get(key)]
+        return "**" + escape(option["label"]) + "**" + (" — " + " ".join(parts) if parts else "")
     lines = ["- **" + escape(option["label"]) + "**"]
     for key, label in (("description", "설명"), ("impact", "영향")):
         if option.get(key):

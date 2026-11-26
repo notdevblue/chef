@@ -31,14 +31,10 @@
   "blocks": [
     {
       "id": "scope",
-      "type": "list",
+      "type": "paragraph",
       "title": "적용 범위",
-      "items": [
-        {
-          "id": "palette",
-          "label": "팔레트",
-          "text": "가상 표시 도구의 색조에 적용합니다."
-        }
+      "sentences": [
+        "가상 표시 도구의 색조에 적용합니다."
       ]
     },
     {
@@ -114,5 +110,6 @@
     "status": "pending",
     "reason": "독서 목록 저장 설계 전체를 확인해 주세요."
   },
-  "answers": []
+  "answers": [],
+  "presentation": "decision"
 }
