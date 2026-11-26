@@ -843,7 +843,14 @@ def complete_unit(ctx, args):
         )
     row["status"] = "done"
     write_table(ctx.path(UNITS_FILE), UNIT_HEADER, rows)
-    return [f"{args.id} 완료 {receipt['grade']}", *cmd_context(ctx, args)]
+    messages = [f"{args.id} 완료 {receipt['grade']}", *cmd_context(ctx, args)]
+    from chef.workers.outcomes import record_completed_unit
+
+    try:
+        record_completed_unit(ctx, args.id, receipt["snapshot"])
+    except (OSError, ValueError, RuntimeError) as error:
+        messages.append(f"worker quality evidence was not recorded: {error}")
+    return messages
 
 
 def search_claude(session, home, require_unique=False):

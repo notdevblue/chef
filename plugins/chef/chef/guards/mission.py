@@ -777,6 +777,12 @@ def execution_write_reason(payload):
 
 def decide(payload):
     payload = normalize_payload(payload)
+    if payload.get("han_worker"):
+        from chef.workers.context import denial
+
+        denied = denial(payload)
+        if denied:
+            return Outcome(deny=denied)
     if payload.get("han_hermes_worker"):
         from chef.runtimes.hermes.workers import project_denial, worker_denial
         denied = worker_denial(payload) or project_denial(payload)
@@ -948,14 +954,20 @@ def main(runtime=""):
         payload = normalize_payload(payload, runtime)
         log_payload(payload)
         outcome = decide(payload)
+        if payload.get("han_worker"):
+            from chef.workers.context import acknowledge
+
+            acknowledge(payload, outcome.deny)
         if payload.get("han_hermes_worker"):
             from chef.runtimes.hermes.workers import acknowledge_guard
             acknowledge_guard(payload, outcome.deny)
     except GuardOff as e:
-        outcome = Outcome(deny=f"Codex 워커 가드 확인 실패: {e}") if os.environ.get("CHEF_HERMES_WORKER") else Outcome(messages=[f"미션 가드 꺼짐: {e}"])
+        outcome = Outcome(deny=f"Codex 워커 가드 확인 실패: {e}") if os.environ.get("CHEF_HERMES_WORKER") or os.environ.get("CHEF_WORKER_CONTEXT") else Outcome(messages=[f"미션 가드 꺼짐: {e}"])
     except Exception as e:  # 가드 오류로 도구를 막지 않음
-        outcome = Outcome(deny=f"Codex 워커 가드 확인 실패: {e}") if os.environ.get("CHEF_HERMES_WORKER") else Outcome(messages=[f"미션 가드 꺼짐: 내부 오류 ({e})"])
+        outcome = Outcome(deny=f"Codex 워커 가드 확인 실패: {e}") if os.environ.get("CHEF_HERMES_WORKER") or os.environ.get("CHEF_WORKER_CONTEXT") else Outcome(messages=[f"미션 가드 꺼짐: 내부 오류 ({e})"])
     output = render_output(outcome)
+    if os.environ.get("CHEF_WORKER_CONTEXT") and outcome.deny:
+        output.update(decision="deny", reason=outcome.deny)
     if output:
         sys.stdout.write(json.dumps(output, ensure_ascii=True))
         sys.stdout.flush()

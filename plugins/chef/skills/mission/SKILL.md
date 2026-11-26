@@ -16,8 +16,9 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 - `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/skills/mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/skills/distill/SKILL.md`. 슬롯은 `/chef:slots`, 어댑터는 `/chef:adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Claude 절을 따른다. `${CLAUDE_PLUGIN_ROOT}`를 실제 루트로 쓸 수 있다.
+- 역할을 파견하기 전에 모든 Claude·Codex·Grok 미션과 같이 [공통 워커 계약](references/cross-runtime-workers.md)의 dispatcher를 호출한다. `native: true`일 때만 현재 Claude Agent 도구를 사용하고, 외부 런타임이 선택되면 Claude Agent를 중복 실행하지 않는다. 아래 Claude 전용 모델·역할 설정은 Claude가 선택된 native 파견에만 적용한다.
 - 조사·구현·검증 파견은 실제 등록된 Agent 역할과 도구를 쓴다. 검증은 `roles.verify`(없으면 `chef:verifier`), 심층 리뷰는 `roles.review`(없으면 `chef:code-reviewer`), 작은 리뷰는 `roles.reviewSmall`(없으면 `chef:reviewer-small`), 감사는 `roles.audit` 또는 `roles.review`다.
-- 지정된 역할·모델을 사용할 수 없거나 파견이 실패하면 대체하지 않고 근거·미완료 범위를 반환한다.
+- Claude가 선택된 뒤 native 역할을 사용할 수 없으면 그 후보를 사용하지 않고 공통 dispatcher의 오류·복구 절차를 따른다. 다른 런타임을 직접 골라 우회하지 않는다.
 - 기존 Sonnet 모델을 유지하고 `chef:dev-small`·`chef:reviewer-small`·`chef:researcher`는 medium, `chef:verifier`는 Sonnet 5.5 / low, `chef:dev-medium`은 high다. 첫 심층 리뷰·기록 감사·설계 판단은 Opus / high다.
 - 편집·리뷰 역할은 역할별 builtin 도구만 명시한다. verifier는 부모 MCP 연결을 유지하고 ToolSearch가 있으면 필요한 검증 도구만 찾는다. MCP 상속·검색이 미확인이면 검증 가능으로 보고하지 않는다. 도구 축소의 사용량 효과는 측정 전 미확인이다.
 

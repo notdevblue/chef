@@ -1,4 +1,7 @@
 {
+  "worker.py": {
+    "module": "chef.workers.cli"
+  },
   "codex/mission_guard.py": {
     "module": "chef.guards.mission",
     "runtime": "codex"

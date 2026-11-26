@@ -53,6 +53,7 @@ Codex CLI, Claude Code, 또는 사용자가 구성한 JSONL 브리지를 선택�
 ## 시작하기
 
 프로젝트의 경로·도구·검증 방법을 담는 **어댑터**를 만든 뒤 미션을 시작합니다.
+Claude·Codex·Grok 미션은 구현·검증·리뷰 역할을 공통 워커 라우터가 도구 역량·작업 관계·검증된 품질·진행 중 작업량에 따라 자동 배정합니다. 사용자가 런타임을 직접 고르지 않아도 되며, 별도 동시 실행 상한은 없습니다. 같은 CLI가 선택되면 native 역할 도구를 쓰고, 다른 CLI가 선택되면 각자의 로그인 상태로 별도 워커를 실행합니다. [라우팅·요청·복구 계약](docs/cross-runtime-workers.md)을 참고하세요.
 
 | 런타임 | 어댑터 만들기 | 작업 시작 |
 | --- | --- | --- |
@@ -72,4 +73,5 @@ Hermes는 macOS·Linux의 로컬 terminal backend에서 `chef_slot`으로 현재
 - [설치·설정·업데이트](docs/install.md)
 - [개발·검증](docs/development.md)
 - [개발 구조와 호환성 계약](docs/architecture.md)
+- [Claude·Codex·Grok 역할 워커](docs/cross-runtime-workers.md)
 - [실행 통계·작업 대기열·모델 선택 추천](docs/autonomous-lab.md)

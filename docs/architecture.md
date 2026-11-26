@@ -16,6 +16,7 @@ Claude·Codex·Grok·Hermes의 등록 형식과 도구 차이는 런타임 경�
 | `plugins/chef/chef/infrastructure/` | 설정 검색, 파일 저장, 경로, 잠금과 버전 관리 |
 | `plugins/chef/chef/guards/` | 어댑터 계약, 셸 명령 분석과 미션 쓰기 정책 |
 | `plugins/chef/chef/runtimes/` | 런타임별 로그와 도구 연결 |
+| `plugins/chef/chef/workers/` | Claude·Codex·Grok 공통 역할 라우팅, 작업 기록과 runtime backend |
 | `plugins/chef/chef/cli/` | 명령과 훅의 입력을 공통 구현에 연결 |
 | `plugins/chef/shared/` | 공통 스킬 절차 |
 | `plugins/chef/skills/`, `hooks/`, `codex/`, `grok/` | 런타임 등록, 역할, 참조 문서와 호환 진입점 |
@@ -34,6 +35,22 @@ Claude·Codex·Grok·Hermes의 등록 형식과 도구 차이는 런타임 경�
 - 파일은 변경 이유가 같은 기능끼리 묶는다. 줄 수를 맞추기 위한 분할이나 모든 기능을 모으는 `utils.py`는 피한다.
 - 호환 진입점은 `tools/entrypoints.json`과 `tools/generate_entrypoints.py`에서 생성한다. 등록 파일마다 기능을 따로 구현하지 않는다.
 
+## Claude·Codex·Grok 공통 워커
+
+세 런타임의 미션 코디네이터는 `plugins/chef/worker.py`와 `chef.workers` 공통 구현을 통해 각 역할을 라우팅한다. 이 CLI는 Python 3.11 이상에서 Windows·macOS·Linux를 지원한다. 저장소는 기본 `~/.chef/workers` 또는 `CHEF_WORKERS_HOME` 아래 로컬 JSON registry와 파일 잠금으로 작업·라우팅 이력·품질 집계를 보관한다. `worker.py --home <path>`는 사용자별 별도 registry를 지정한다.
+
+후보는 현재 사용 가능한 런타임 CLI·로그인, 역할 정의와 도구 역량을 충족해야 한다. 수정 후속 작업은 요청의 `previous` job key를 통해 이전 역할과 같은 런타임·세션을 이어가며, 독립 검토는 새 맥락을 선택한다. 동일 역할·조건의 독립 검증 품질 기록이 후보마다 최소 5건 있고 성공률 차이가 20%p 이상이거나 재작업률 차이가 0.5회/건 이상일 때만 품질 차이를 선택에 반영한다. 그 밖에는 진행 중 작업이 적은 후보를 고르고 동률은 순환한다. 활성 작업 수는 admission cap이 아니며 별도 동시 실행 상한을 두지 않는다.
+
+품질 기록은 워커의 자기 보고로 만들지 않는다. `complete_unit`이 기존 검증 receipt·최신성·독립 리뷰 조건을 통과할 때만 고려한다. 출력 파일 해시가 검증 snapshot과 일치하고 결과가 성공·완료 상태이며 실제 관찰 모델·effort가 선택 경로와 일치해야 한다. 실제 실행 정보가 없거나 검증이 부족하면 품질 표본으로 세지 않는다.
+
+외부 worker의 작업 전 probe가 rate limit을 명확히 반환하고 파일 snapshot이 그대로이며 프로세스가 정리됐을 때만 남은 후보로 자동 전환한다. 한 파견 안에서 각 후보를 한 번 시도하고, 미완료 후속 요청에는 공유 로컬 상태의 60~900초 backoff를 적용한다. 이 간격은 서비스 reset 시각·잔여 quota를 추정하지 않는다. 작업 중 오류나 이미 발생한 변경은 자동 재전달하지 않는다. 전환 결과가 current native host면 `wait`가 native handoff를 반환하고, 코디네이터가 native 역할을 직접 완료한다.
+
+`dispatch`는 등록 프로젝트 root, 초기화된 미션·단위 계약과 현재 ACTIVE 소유권에 요청을 결부한다. native 선택은 현재 세션의 역할 도구를 사용하며, 외부 선택은 분리 supervisor가 각 런타임 CLI를 실행한다. 결과는 근거 파일·입력 snapshot과 함께 기록되며 미션 단위의 승인·완료 상태를 직접 바꾸지 않는다. `status`, `wait`, 취소, 소유권 복구와 미완료 실행 정리는 토큰으로 fence된 특정 작업에 한정된다. 설치·요청 JSON·대기·복구 절차는 [공통 워커 계약](cross-runtime-workers.md)에 있다.
+
+작업 입력과 수정 파일은 프로젝트 상대 경로로 검사하고, 링크 경유와 미션 제어 파일 쓰기를 막는다. Claude·Codex backend는 runtime hook과 승인된 도구로 역할 작업을 가드한다. 외부 Grok은 read-only 도구로만 일하고 shell·MCP 호출 없이 JSON 변경안을 반환한다. trusted applier는 변경 전체의 지정 경로·사전 SHA-256·쓰기 권한·미션 가드를 검사한 뒤 적용 직전 재검사하여 원자적으로 기록하며, 제한된 파일 삭제도 이 경로로 처리한다. supervisor는 Windows Job Object 또는 POSIX 프로세스 그룹으로 자식 프로세스를 관리한다. backend 도구 정책과 협력형 guard는 일반 OS 파일시스템 sandbox가 아니며 임의 셸 명령·미계측 도구의 쓰기를 완전히 차단한다고 주장하지 않는다. 결과를 통합하기 전에 diff와 증거를 확인하고, `needs-inspection`은 프로세스 종료와 부분 변경 정리·증거 기록을 확인한 뒤에만 새 시도를 허용한다.
+
+## Hermes 전용 워커
+
 Hermes 연결은 macOS·Linux의 로컬 terminal backend를 대상으로 하며 native 세션·작업 식별자를 사용한다.
 모델이 도구 인자로 넘긴 세션이나 작업 폴더를 신뢰한 실행 문맥으로 사용하지 않는다. 현재 작업의 슬롯 연결을
 사용하고 프로세스 전역 `cwd`나 세션 환경변수를 변경하지 않는다. 준비와 미션 진입은 별개이며 슬롯 선택만으로 ACTIVE를 만들지 않는다.
@@ -48,7 +65,7 @@ Hermes native 워커는 역할별 effort를 지정하지 않고 호스트의 rea
 외부 워커는 명명된 `workers.attachments` 항목으로 실행한다. 각 항목은 절대 경로 실행 파일과 인자 배열만 받으며,
 bridge는 제한된 JSONL 프로토콜로 역할과 도구를 요청한다. 모든 도구 호출은 현재 native 작업의 같은 가드와 권한을 통과한다.
 bridge 실행 파일과 그 자식은 관리자가 신뢰해야 한다. 이 연결은 OS 파일시스템 sandbox가 아니다. Claude CLI 연결은
-별도의 내장 backend가 제공한다. Grok Build CLI의 내장 backend는 없다.
+별도의 내장 backend가 제공한다. 공통 Claude·Codex·Grok 워커 라우터와 Hermes native의 worker 설정·실행 경로는 별개이며 서로의 설정을 상속하지 않는다. Hermes 경로는 Grok ACP를 실행하지 않는다.
 작업 대기열의 새 Hermes 세션 생성, Hermes SQLite 대화 기록의 암묵적 변환, 서비스별 인증·채널 설정은 이 연결의 책임이 아니다.
 
 ## 유지하는 외부 계약

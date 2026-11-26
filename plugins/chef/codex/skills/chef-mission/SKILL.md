@@ -11,9 +11,10 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 
 ## Codex 실행 계약
 
+- 역할을 파견하기 전에 항상 [공통 워커 계약](../../../skills/mission/references/cross-runtime-workers.md)의 dispatcher를 호출한다. `native: true`이면 현재 Codex의 native subagent 도구를 쓰고, Claude나 Grok이 선택되면 Codex subagent를 추가로 띄우지 않는다. 아래 Codex 역할·모델 정책은 Codex가 선택된 native 파견에만 적용한다.
 
 - `references/codex-roles.md`를 읽고 사용 가능한 서브에이전트 도구로 역할별 생성·결과 수집·후속 지시를 한다.
-  등록되지 않은 역할 이름을 도구에 넘기지 않고 다른 에이전트로 대신하지도 않는다. 등록이 없으면 사용자에게 알린다. research와 심층 review는 부모 설정을 상속한다.
+  등록되지 않은 역할 이름을 도구에 넘기지 않는다. Codex가 해당 역할을 제공하지 않으면 후보에서 빠지며 다른 런타임을 임의 지정하지 않는다. research와 심층 review는 부모 설정을 상속한다.
   implement는 GPT-6.1 Sol / high, implementSmall과 verify는 GPT-6 Luna / high, 작은 리뷰(`chef:reviewer-small`)는 GPT-6.1 Terra / high로 고정하며 세부는 `codex-roles.md`를 따른다.
 - 어댑터 `rolePolicy`(`runtimes.codex.rolePolicy`가 최상위 값을 덮는다)는 이 스킬이 역할을 파견할 때만 적용한다. 없으면 `model: "definition"`, `subagents: true`다.
   `model: "inherit"`여도 등록된 역할은 정의의 모델이 적용되므로 그 사실을 보고한다. `definition`이면 위 고정을 따른다.

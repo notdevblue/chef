@@ -23,7 +23,7 @@ python "<repo>/plugins/chef/skills/mission/scripts/mission_state.py" --runtime g
 ```
 
 3. 진행 중인 미션이 있거나 M(여러 파일·검증 게이트)·L(여러 계층·PoC·사람 확인)이면 같은 플러그인의 `chef-mission/SKILL.md`를 읽고 전체 공통 절차를 적용한다.
-   이 세션은 코디네이터이며 구현·검증·독립 리뷰를 native Grok 4.7 역할에 맡긴다. 상태 CLI만 실행하거나 직접 구현으로 끝내지 않는다.
+   이 세션은 코디네이터이며 구현·검증·독립 리뷰를 공통 워커 dispatcher에 맡긴다. dispatcher가 Grok을 선택하면 native Grok 역할 도구를 쓰고, Claude나 Codex를 선택하면 그 외부 워커 결과를 기다린다. 한 역할을 현재 세션과 외부 워커에 중복 파견하지 않는다. 상태 CLI만 실행하거나 직접 구현으로 끝내지 않는다.
    비용이 큰 파견 전에는 실제 대상 경로, 파일·자원 소유와 허용된 편집 범위, 문서화된 명령·API 사용법,
    변경 파일·계약을 덮는 검증 명령을 확인해 근거를 브리프에 넣는다. 확인은 찾을 수 있는 자료에 한정하고 추측하지 않는다.
 4. S(한두 파일·단일 수정)이고 미션이 없으면 미션 없이 직접 처리한다. 확정된 범위·경로·계약을 따르고 필요한 타깃 검증과 실제 결과를 보고한다.
@@ -31,4 +31,4 @@ python "<repo>/plugins/chef/skills/mission/scripts/mission_state.py" --runtime g
 5. 이미 승인된 범위·경로는 그 승인으로 진행한다. 미승인 설계·범위 변경은 확인받고, 기존 승인 범위를 재질문하지 않는다.
    Perforce submit·push·배포·외부 전송은 사용자가 명시한 범위에서만 실행한다. 계획·리뷰 승인을 해당 행동의 승인으로 확대하지 않는다.
 6. 미션 기록은 `mission_state.py`와 `slots.py`로만 갱신한다. `ACTIVE`, `mission.md` 머리 필드, 상태 TSV·질문 정본·생성 문서를 손으로 고치지 않는다.
-   모델·effort·도구 파견은 `chef-mission/references/grok-roles.md`를 따르고, 실제 적용 증거 없이 역할 설정만으로 적용됐다고 보고하지 않는다.
+   Grok이 선택된 native 파견의 모델·effort·도구는 `chef-mission/references/grok-roles.md`를 따른다. 다른 런타임은 공통 worker backend의 역할 설정을 적용하며, 실제 적용 증거 없이 설정만으로 적용됐다고 보고하지 않는다.

@@ -13,13 +13,14 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 
 공통 참조 정본은 `<plugin-root>/skills/mission/references/`다.
 
+- 역할을 파견하기 전에 항상 [공통 워커 계약](../../../skills/mission/references/cross-runtime-workers.md)의 dispatcher를 호출한다. `native: true`이면 현재 Grok native 역할 도구를 쓰고, Claude나 Codex가 선택되면 Grok 역할을 추가로 띄우지 않는다. 아래 Grok 모델·역할 계약은 Grok이 선택된 native 파견에만 적용한다.
 
 - 어댑터 검색은 `.grok/orchestrator` → `.claude/orchestrator` → `.codex/orchestrator` → `HAN_ADAPTERS_DIR` → 저장소 `adapters`다. 검색·병합의 정본은 [공통 어댑터 계약](../../../skills/mission/references/adapter-schema.md)의 Grok 절과 `--runtime grok` 실행 결과다.
   `adapter → adapter.runtimes.grok → local → local.runtimes.grok` 순으로 적용한다. 잘못 설정된 경로를 다른 어댑터로 우회하지 않는다.
 - `check_human_doc.py` 등 공통 스크립트는 `<plugin-root>/skills/mission/scripts/` 아래 실제 경로로 호출한다.
   공통 문서의 p4 래퍼 경로는 `<plugin-root>/grok/skills/chef-mission/scripts/p4c.py`로 대체한다. 이 래퍼가 `runtime="grok"`을 공유 코드에 전달한다.
   `guard.p4Client.require`가 켜져 있으면 p4 쓰기는 이 Grok 래퍼로 한다. 런타임을 받는 다른 CLI도 `--runtime grok`을 쓴다.
-- 파견·수집은 [Grok 역할](references/grok-roles.md)의 native 도구만 쓴다. 현재 선택된 native Grok 4.7 모델을 상속하고 코디네이터의 effort는 바꾸지 않는다. 도구가 없으면 미확인으로 반환하며 직접 구현·외부 봇 인계로 우회하지 않는다. 역할·모델·depth 1과 작은 리뷰 라우팅은 이 역할 계약을 따른다.
+- Grok이 선택된 파견·수집은 [Grok 역할](references/grok-roles.md)의 native 도구를 쓴다. 현재 선택된 native Grok 4.7 모델을 상속하고 코디네이터의 effort는 바꾸지 않는다. Grok이 역할 도구를 제공하지 않으면 후보에서 빠진다. 역할·모델·depth 1과 작은 리뷰 라우팅은 이 역할 계약을 따른다.
 - `/chef:adapter-init`·Codex adapter-init 호출은 Grok `chef-adapter-init`, 슬롯 호출은 `chef-slots`, `../distill/SKILL.md`는 `<plugin-root>/grok/skills/chef-distill/SKILL.md`로 대체한다.
   어댑터의 프로젝트 스킬은 실제 설치 파일과 도구를 읽고 적용한다. 필요한 스킬·Unity 연결이 없으면 해당 단계를 미확인으로 남긴다.
   Claude JSONL 전용 사용량 집계기는 Grok 로그에 적용하지 않는다. 실제 모델·effort 증거와 미확인 한계만 기록한다.

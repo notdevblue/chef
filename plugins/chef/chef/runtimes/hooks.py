@@ -46,6 +46,11 @@ def normalize_payload(payload, runtime=""):
     tool = result.get("tool_name")
     if runtime == "grok":
         tool = {
+            "read_file": "Read",
+            "list_dir": "Glob",
+            "grep": "Grep",
+            "glob": "Glob",
+            "web_search": "WebSearch",
             "run_terminal_command": "Bash",
             "Shell": "Bash",
             "search_replace": "Edit",
@@ -84,6 +89,10 @@ def normalize_payload(payload, runtime=""):
             from chef.runtimes.hermes.claude import validate_payload
 
             result = validate_payload(result)
+    if os.environ.get("CHEF_WORKER_CONTEXT"):
+        from chef.workers.context import normalize
+
+        result = normalize(result, runtime)
     return result
 
 
