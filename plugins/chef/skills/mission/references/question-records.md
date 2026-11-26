@@ -350,9 +350,11 @@ patch·preview·preflight·publish는 동일한 작성 입력 규격을 사용�
 
 기존 표시는 이전 선택지 배치를 유지한다. 명시적인 decision 표시는 선택 이름·이유·영향을 한 문단으로 출력하고 완료 선택 원문은 이력에서 연다. 표의 긴 조건은 본문 rules/list 항목으로 옮기고 `refs`와 표의 `row_ids` 또는 fields 이름으로 연결한다. 명세·승인에 필요한 조건과 예외는 현재 본문에 둔다. 표·필드·literal은 editorial 개정에서 원문을 보호하며 목록 산문 수정은 기존 독립 의미 검토를 따른다.
 
-## 간결한 확인 A 표시와 작성 진단
+## 간결한 질문·확인 표시와 작성 진단
 
-선택 필드 `presentation: "decision"`은 schema 1·2의 확인 A(`confirm-A`, `confirm-A1` 등)에서 현재 전체 `blocks`를 가진 문서에만 사용한다. 최신 답·조건을 현재 명세에 반영해 독립 검토한 뒤 명시한다. 미답 질문과 선택지는 먼저 표시하고 완료 선택 원문은 이력에서 열며 현재 명세는 접지 않고 그대로 표시한다. 생략하면 기존 표시를 유지한다. `question patch`의 `set.presentation`으로 적용하며 답·selected·approval·이력을 변경하지 않는다. 기존 CLI는 이 필드를 모르므로 공통 도구와 실행 세션을 먼저 갱신한다.
+`presentation: "decision"`은 schema 1·2의 안전한 질문·확인 문서 ID(`ask-*`, `confirm-*`)와 현재 전체 `blocks`가 필요하다. 최신 답·조건을 현재 blocks에 반영하고 독립 의미 검토를 마친 뒤 명시한다. `decision-pending`은 실제 답 원문 이력이 필요하며 전체 `blocks`나 body 없이도 사용할 수 있다. 두 모드 모두 문서 서두와 미답 질문을 표시하지 않고, `decision-pending`에는 갱신 필요 안내·정본 JSON·전체 이력 링크와 최신 답 갱신분의 문항 제목·실제 선택 문구 또는 자유답 원문 링크만 표시한다. 갱신 전 서두·승인 사유·미답 질문 본문과 선택지·`body`·`blocks`·`detail_blocks`는 현재 본문에서 감춘다. 이전 명세와 모든 원문은 질문 JSON·전체 이력에서 보존하고 연결한다. 새 답으로 기존 `decision`은 `decision-pending`으로 전환하고, 기존 `decision-pending`은 유지한다. 최신 답·조건을 blocks에 반영해 독립 의미 검토를 마친 뒤에만 `decision`을 다시 명시한다. 동일 답 기록의 재생은 정본 값과 표시 모드를 바꾸지 않는다. `question patch`의 `set.presentation`으로 적용하며 답·selected·approval·이력을 변경하지 않는다. 기존 CLI는 이 필드를 모르므로 공통 도구와 실행 세션을 먼저 갱신한다.
+
+`presentation: "superseded"`와 비어 있지 않은 `successors: ["ask-next"]`는 사람이 문서 전체가 대체되었음을 확인한 경우에만 쓴다. successor ID는 안전한 질문·확인 ID여야 하며 중복·자기 참조·연결 순환과 미답 문항·approval 대기는 거부한다. `intro`에 대체 안내를 쓰고 현재 출력에는 그 안내, successor 문서 링크, JSON·전체 이력 링크만 표시한다. 이전 intro·질문·선택·명세는 정본과 검증된 전체 이력에 남긴다. table·fields editorial 보호를 완화하지 않는다. 실제 새 답이 오면 successors를 제거하고 항상 `decision-pending`으로 전환한다.
 
 schema 2 일반 설명은 `{"id":"context","type":"paragraph","sentences":["첫 설명.","연결된 설명."]}`로 작성한다. `title`은 선택이다. 문장들은 공백으로 연결되며 제목·라벨·불릿을 강제하지 않는다. 문장에는 산문만 넣고 조건·실패·예외는 해당 rules/steps에 둔다.
 

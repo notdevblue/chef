@@ -162,12 +162,30 @@ def validate_answer(value):
 
 
 def validate_document(record):
-    validate_fields(record, DOCUMENT_FIELDS, ("legacy_markdown", "blocks", "detail_blocks", "presentation"), "질문")
+    validate_fields(
+        record, DOCUMENT_FIELDS, ("legacy_markdown", "blocks", "detail_blocks", "presentation", "successors"), "질문"
+    )
+    presentation = record.get("presentation")
     if "presentation" in record:
-        if record["presentation"] != "decision" or not isinstance(record.get("id"), str) or not re.fullmatch(r"confirm-A[0-9]*", record["id"]):
-            raise QuestionRecordError("presentation decision은 확인 A 문서에만 사용할 수 있음")
-        if not record.get("blocks"):
-            raise QuestionRecordError("presentation decision에는 현재 전체 설계 blocks가 필요함")
+        if presentation not in ("decision", "decision-pending", "superseded"):
+            raise QuestionRecordError("presentation 값 오류: decision, decision-pending 또는 superseded만 사용할 수 있음")
+        validate_identifier(record.get("id"), "문서 id", DOCUMENT_ID)
+        if presentation == "decision" and not record.get("blocks"):
+            raise QuestionRecordError("presentation decision에는 현재 전체 질문·확인 blocks가 필요함")
+    if presentation == "superseded":
+        successors = record.get("successors")
+        if not isinstance(successors, list) or not successors:
+            raise QuestionRecordError("presentation superseded에는 비어 있지 않은 successors 배열이 필요함")
+        seen_successors = set()
+        for successor in successors:
+            validate_identifier(successor, "successor 문서 id", DOCUMENT_ID)
+            if successor == record.get("id"):
+                raise QuestionRecordError("superseded successor는 자기 자신을 가리킬 수 없음")
+            if successor in seen_successors:
+                raise QuestionRecordError(f"superseded successor 중복: {successor}")
+            seen_successors.add(successor)
+    elif "successors" in record:
+        raise QuestionRecordError("successors는 presentation superseded에서만 사용할 수 있음")
     if type(record.get("schema")) is not int or record["schema"] not in (1, 2):
         raise QuestionRecordError("질문 schema는 1 또는 2이어야 함")
     if record["schema"] == 2:
@@ -197,6 +215,12 @@ def validate_document(record):
         if item["id"] in identifiers:
             raise QuestionRecordError(f"문항 id 중복: {item['id']}")
         identifiers.add(item["id"])
+    if presentation == "superseded":
+        required_text(record.get("intro"), "superseded intro", True)
+        if any(item["status"] == "pending" for item in items):
+            raise QuestionRecordError("미답 문항이 있는 문서는 superseded로 표시할 수 없음")
+        if record["approval"]["status"] == "pending":
+            raise QuestionRecordError("approval 대기 문서는 superseded로 표시할 수 없음")
     answers = record.get("answers")
     if not isinstance(answers, list):
         raise QuestionRecordError("answers 배열이 필요함")
@@ -216,6 +240,8 @@ def validate_document(record):
                     if update["selected"] not in {option["id"] for option in item.get("options", [])}:
                         raise QuestionRecordError("answer selected must name an existing option id")
         operations.add(answer["id"])
+    if presentation == "decision-pending" and not answers:
+        raise QuestionRecordError("decision-pending에는 실제 답 원문 이력이 필요함")
     if "legacy_markdown" in record:
         required_text(record["legacy_markdown"], "legacy_markdown")
     return copy.deepcopy(record)
@@ -233,6 +259,31 @@ def read_document(folder, name):
     if record["id"] != document_id(name):
         raise QuestionRecordError(f"질문 문서 id와 파일 이름 불일치: {name}")
     return record
+
+
+def validate_successor_documents(folder, record):
+    root_id = record["id"]
+    visiting = set()
+    visited = set()
+
+    def visit(identifier):
+        if identifier == root_id or identifier in visiting:
+            raise QuestionRecordError(f"superseded successor 순환: {identifier}")
+        if identifier in visited:
+            return
+        try:
+            successor = read_document(folder, f"{identifier}.md")
+        except QuestionRecordError as error:
+            raise QuestionRecordError(f"successor 질문 문서를 확인할 수 없음: {identifier}: {error}") from error
+        visiting.add(identifier)
+        if successor.get("presentation") == "superseded":
+            for following in successor["successors"]:
+                visit(following)
+        visiting.remove(identifier)
+        visited.add(identifier)
+
+    for identifier in record["successors"]:
+        visit(identifier)
 
 
 def summarize_document(record):
@@ -366,10 +417,67 @@ def decision_review_notes(record):
     return notes
 
 
+def _render_decision_pending(record):
+    summary = summarize_document(record)
+    approval = record["approval"]
+    archive_target = f"details/history/{record['id']}.md"
+    sections = [
+        f"# {record['title']}",
+        f"문서: `{record['id']}` · 개정: {record['revision']}",
+        f"상태: {'답변 대기' if summary.pending else '답변 완료'} · 미답 {summary.pending_count}/{len(summary.items)}",
+        f"별도 승인 요청: {APPROVAL_LABELS[approval['status']]}",
+        "명세 갱신 필요: 새 답을 현재 명세에 반영해야 합니다.",
+        f"[질문 정본 JSON](questions/{record['id']}.json) · [이전 명세·답 원문 전체 이력]({archive_target})",
+    ]
+    latest = record["answers"][-1] if record["answers"] else {"updates": []}
+    items = {item["id"]: item for item in record["items"]}
+    updates = [update for update in latest["updates"] if update["id"] in items]
+    if updates:
+        sections.append("## 최신 답")
+    for update in updates:
+        item = items[update["id"]]
+        sections.append(f"### {item['title']}")
+        if "selected" in update:
+            option = next(
+                (option for option in item.get("options", []) if option["id"] == update["selected"]), None
+            )
+            if option is None:
+                sections.append(f"[최신 답 원문]({archive_target})")
+            elif record["schema"] == 2:
+                sections.append(render_choice(option, compact=True))
+            else:
+                sections.append(render_legacy_choice(option, compact=True))
+        elif update["status"] == "answered":
+            sections.append(f"[최신 답 원문]({archive_target})")
+        else:
+            sections.append(f"- 상태: {STATUS_LABELS[update['status']]}")
+    return "\n\n".join(sections) + "\n"
+
+
+def _render_superseded(record):
+    archive_target = f"details/history/{record['id']}.md"
+    sections = [
+        f"# {record['title']}",
+        f"문서: `{record['id']}` · 개정: {record['revision']}",
+        "## 대체 안내",
+        record["intro"],
+        "## 현재 문서",
+        *(f"- [{successor}]({successor}.md)" for successor in record["successors"]),
+        "## 정본과 이력",
+        f"[질문 정본 JSON](questions/{record['id']}.json) · [이전 명세·답 원문 전체 이력]({archive_target})",
+    ]
+    return "\n\n".join(sections) + "\n"
+
+
 def _render_document(record, *, legacy_layout=False, tabular_choices=False, legacy_prose_choices=False):
     record = validate_document(record)
+    if record.get("presentation") == "superseded":
+        return _render_superseded(record)
+    if record.get("presentation") == "decision-pending":
+        return _render_decision_pending(record)
     old_choices = legacy_layout or tabular_choices
-    decision_view = record.get("presentation") == "decision" and not (old_choices or legacy_prose_choices)
+    presentation = record.get("presentation")
+    decision_view = presentation == "decision" and not (old_choices or legacy_prose_choices)
     number_items = all(not item["id"].isdecimal() and "heading" not in item for item in record["items"])
     summary = summarize_document(record)
     approval = record["approval"]
@@ -382,6 +490,7 @@ def _render_document(record, *, legacy_layout=False, tabular_choices=False, lega
         f"상태: {status} · 미답 {summary.pending_count}/{len(summary.items)}",
         f"별도 승인 요청: {APPROVAL_LABELS[approval['status']]}",
     ]
+    archive_target = f"details/history/{record['id']}.md"
     if approval["reason"]:
         if record["schema"] == 2 and approval_from_answer(record):
             sections.append(f"[현재 승인 조건 원문](details/history/{record['id']}.md)")
@@ -445,7 +554,6 @@ def _render_document(record, *, legacy_layout=False, tabular_choices=False, lega
         sections.append(record["body"])
     if record.get("detail_blocks"):
         sections.append(f"[상세](details/{record['id']}.md)")
-    archive_target = f"details/history/{record['id']}.md"
     if legacy_layout or f"]({archive_target})" not in "\n\n".join(sections):
         sections.extend(["## 전체 이력", f"[질문·답 원문 전체 이력]({archive_target})"])
     return "\n\n".join(sections) + "\n"
@@ -1090,6 +1198,8 @@ def publication_plan(folder, record, expected_revision="", editorial=False):
     if type(editorial) is not bool:
         raise QuestionRecordError("editorial은 bool이어야 함")
     record = validate_document(record)
+    if record.get("presentation") == "superseded":
+        validate_successor_documents(folder, record)
     name = f"{record['id']}.md"
     path = source_path(folder, name)
     markdown_path = contained_path(folder, name)
@@ -1173,6 +1283,11 @@ def answer_document(folder, name, payload):
             return render_saved_document(folder, name)
     if payload["revision"] != record["revision"]:
         raise QuestionRecordError("답 기록 revision이 현재 질문 revision과 다름")
+    if record.get("presentation") == "superseded":
+        record.pop("successors", None)
+        record["presentation"] = "decision-pending"
+    elif record.get("presentation") in ("decision", "decision-pending"):
+        record["presentation"] = "decision-pending"
     items = {item["id"]: item for item in record["items"]}
     for update in payload["updates"]:
         if update["id"] not in items:
@@ -1214,7 +1329,9 @@ def patch_document(record, changes, editorial=False):
         "patch",
     )
     if "set" in changes:
-        validate_fields(changes["set"], (), ("schema", "revision", "title", "intro", "body", "presentation"), "patch set")
+        validate_fields(
+            changes["set"], (), ("schema", "revision", "title", "intro", "body", "presentation", "successors"), "patch set"
+        )
         if record["schema"] == 2 and changes["set"].get("schema", 2) != 2:
             raise QuestionRecordError("schema 2 문서는 schema 1로 되돌릴 수 없음")
         record.update(copy.deepcopy(changes["set"]))

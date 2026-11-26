@@ -135,6 +135,24 @@ def current_field_blocks(record):
     return [block for block in record.get("blocks", []) if block["type"] == "fields"]
 
 
+def protected_hidden_blocks(record, field):
+    return [
+        {key: value for key, value in block.items() if key != "title"}
+        for block in record.get(field, [])
+        if block["type"] in ("table", "fields", "literal")
+    ]
+
+
+def check_hidden_contract(record, source_record, issues):
+    if record.get("presentation") not in ("decision-pending", "superseded"):
+        return
+    if record.get("body") != source_record.get("body"):
+        issues.append("숨김 표시 문서가 source body 원문을 변경했습니다")
+    for field in ("blocks", "detail_blocks"):
+        if protected_hidden_blocks(record, field) != protected_hidden_blocks(source_record, field):
+            issues.append(f"숨김 표시 문서의 {field} table/fields/literal 정본이 source 원문과 다릅니다")
+
+
 def legacy_table_preserved_by_fields(table, blocks):
     """Prove known legacy columns from actual definitions, without guessing schema headers."""
     names = {
@@ -214,6 +232,7 @@ def check(path, source_path="", archive_path=""):
             if path.suffix.lower() == ".json":
                 if source_path.suffix.lower() == ".json":
                     check_record_history(record, source_record, issues)
+                    check_hidden_contract(record, source_record, issues)
                 else:
                     check_migration(record, text, source_path, issues)
             elif source_path.suffix.lower() == ".json":
@@ -226,19 +245,24 @@ def check(path, source_path="", archive_path=""):
             current_tables = schema_tables(text)
             current_fields = current_field_blocks(record)
             current_contract = bool(current_tables or current_fields)
+            hidden_contract = bool(
+                record and record.get("presentation") in ("decision-pending", "superseded")
+            )
+            if hidden_contract and not archived:
+                issues.append("숨김 표시 문서는 원본 정본과 일치하는 전체 이력이 필요합니다")
             source_tables = source
             if source_record:
                 source_tables = question_records.render_record_history({**source_record, "detail_blocks": []})
             for number, table in enumerate(schema_tables(source_tables), 1):
                 preserved = table in current_tables or legacy_table_preserved_by_fields(table, current_fields)
-                if not preserved and (not archived or not current_contract):
+                if not preserved and not (hidden_contract and archived) and (not archived or not current_contract):
                     issues.append(f"원문 설계 표 {number}의 컬럼·타입·조건이 빠지거나 달라졌습니다")
             for block in current_field_blocks(source_record):
                 preserved = any(
                     candidate["id"] == block["id"] and candidate["fields"] == block["fields"]
                     for candidate in current_fields
                 )
-                if not preserved and (not archived or not current_contract):
+                if not preserved and not (hidden_contract and archived) and (not archived or not current_contract):
                     issues.append(f"원문 필드 정의 {block['id']}의 컬럼·타입·조건이 빠지거나 달라졌습니다")
         elif archive_path:
             issues.append("전체 이력 보존 검사에는 --source가 필요합니다")
