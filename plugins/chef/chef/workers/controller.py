@@ -25,6 +25,7 @@ from chef.workers.store import Store, request_identity
 from chef.verification.execution import process_owner_alive, process_start
 
 RUNTIMES = ("claude", "codex", "grok")
+MODES = ("auto", "native", *RUNTIMES)
 READ_ONLY = {"research", "researcher", "review", "reviewSmall", "audit", "code-reviewer", "reviewer-small"}
 ROLE_KEYS = {"researcher": "research", "dev-small": "implementSmall", "dev-medium": "implement",
              "verifier": "verify", "code-reviewer": "review", "reviewer-small": "reviewSmall"}
@@ -140,6 +141,14 @@ def prepare(value):
     requested_role = request["role"].removeprefix("chef:")
     request["role"] = role_name(request["role"])
     adapter, owner = ownership(request)
+    settings = adapter.get("workers", {})
+    if not isinstance(settings, dict):
+        raise ValueError("workers must be an object")
+    mode = request.get("mode", os.environ.get("CHEF_WORKERS_MODE", settings.get("mode", "auto")))
+    if not isinstance(mode, str) or mode not in MODES:
+        raise ValueError("worker mode must be auto, native, claude, codex or grok")
+    request["mode"] = mode
+    request["allowedRuntimes"] = list(RUNTIMES) if mode == "auto" else [owner["runtime"] if mode == "native" else mode]
     request["unitContract"] = owner["unitContract"]
     role_key = requested_role if requested_role in ("audit", "research", "implement", "implementSmall", "verify", "review", "reviewSmall") else ROLE_KEYS[request["role"]]
     roles = adapter.get("roles", {})
@@ -179,9 +188,12 @@ def effective_roles(adapter, request):
 
 
 def available_candidates(adapter, request, owner):
+    allowed = request.get("allowedRuntimes", list(RUNTIMES))
     candidates = backends.candidates({**adapter, "roles": effective_roles(adapter, request)},
                                     request["project"], request["role"],
-                                    native=owner["runtime"], host_tools=request["hostTools"])
+                                    native=owner["runtime"], host_tools=request["hostTools"],
+                                    allowed_runtimes=allowed)
+    candidates = [candidate for candidate in candidates if candidate["runtime"] in allowed]
     for candidate in candidates:
         candidate.setdefault("roles", [request["role"]])
         candidate.setdefault("tools", candidate.get("capabilities", []))

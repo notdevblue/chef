@@ -12,6 +12,7 @@ def summary(value, store):
     """Keep polling output small while preserving complete local evidence."""
     fields = ("key", "token", "status", "native", "actualRole", "route", "created", "cancellationRequested", "cancelNative", "instruction")
     output = {name: value[name] for name in fields if name in value}
+    output["mode"] = value["request"].get("mode", "auto")
     directory = controller.attempt_directory(store, value)
     output["details"] = str(directory)
     if value.get("native") and value.get("status") in ("reserved", "running"):
@@ -45,6 +46,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     dispatch = sub.add_parser("dispatch")
     dispatch.add_argument("--request", required=True)
+    dispatch.add_argument("--mode", choices=controller.MODES,
+                          help="override request, environment and project worker routing mode")
     for name in ("status", "wait", "cancel", "native-result", "recover-owner", "reconcile", "supervise"):
         command = sub.add_parser(name)
         command.add_argument("--key", required=True)
@@ -64,7 +67,10 @@ def main():
     try:
         store = Store(args.home)
         if args.command == "dispatch":
-            value = controller.dispatch(controller.read_json(args.request), store=store)
+            request = controller.read_json(args.request)
+            if args.mode is not None:
+                request["mode"] = args.mode
+            value = controller.dispatch(request, store=store)
         elif args.command == "status":
             value = controller.status(args.key, store=store)
         elif args.command == "cancel":

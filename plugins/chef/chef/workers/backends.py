@@ -146,10 +146,12 @@ def tools_for(role):
     return tools
 
 
-def candidates(adapter, cwd, role, *, native=None, host_tools=()):
+def candidates(adapter, cwd, role, *, native=None, host_tools=(), allowed_runtimes=RUNTIMES):
     settings = {**adapter.get("workers", {}), "projectRoles": adapter.get("roles", {})}
     result = []
     for runtime in RUNTIMES:
+        if runtime not in allowed_runtimes:
+            continue
         item = {"runtime": runtime, "available": False, "roles": [role, role_name(role), "chef:" + role_name(role)],
                 "tools": tools_for(role), "capabilities": tools_for(role), "model": "", "effort": ""}
         try:

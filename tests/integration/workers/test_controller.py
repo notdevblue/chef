@@ -18,6 +18,7 @@ from chef.workers.store import Store
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
+    monkeypatch.delenv("CHEF_WORKERS_MODE", raising=False)
     project = tmp_path / "fictional orchard"
     project.mkdir()
     (project / "source.txt").write_text("initial", encoding="utf-8")
@@ -70,7 +71,8 @@ def test_all_nine_owner_target_routes_are_idempotent(project, monkeypatch, owner
     assert second["created"] is False
     assert first["native"] is (owner == target)
     assert len(launches) == (0 if owner == target else 1)
-    assert calls[0] == {"native": owner, "host_tools": ["Read", "Write"]}
+    assert calls[0] == {"native": owner, "host_tools": ["Read", "Write"],
+                        "allowed_runtimes": list(controller.RUNTIMES)}
 
 
 def test_native_unregistered_role_cannot_create_unusable_dispatch(project, monkeypatch):
@@ -79,6 +81,115 @@ def test_native_unregistered_role_cannot_create_unusable_dispatch(project, monke
     with pytest.raises(ValueError, match="no available worker"):
         controller.dispatch(request, store=project.store)
     assert project.store.list() == []
+
+
+@pytest.mark.parametrize("owner,mode", list(itertools.product(controller.RUNTIMES, controller.MODES)))
+def test_mode_limits_candidates_before_launch(project, monkeypatch, owner, mode):
+    target = owner if mode in ("auto", "native") else mode
+    calls = choose(monkeypatch, target)
+    job = controller.dispatch({**project.request(owner), "mode": mode}, store=project.store,
+                              launch=lambda *args: None)
+    allowed = list(controller.RUNTIMES) if mode == "auto" else [target]
+    assert calls[0]["allowed_runtimes"] == allowed
+    assert job["route"]["runtime"] == target
+    assert job["native"] is (owner == target)
+    assert cli.summary(job, project.store)["mode"] == mode
+
+
+@pytest.mark.parametrize("configured,environment,requested,expected", [
+    (None, None, None, "auto"), ("native", None, None, "native"),
+    ("native", "claude", None, "claude"), ("native", "claude", "auto", "auto"),
+])
+def test_mode_precedence_and_durable_pin(project, monkeypatch, configured, environment, requested, expected):
+    if configured is not None:
+        project.adapter["workers"] = {"mode": configured}
+    if environment is not None:
+        monkeypatch.setenv("CHEF_WORKERS_MODE", environment)
+    request = project.request()
+    if requested is not None:
+        request["mode"] = requested
+    prepared, adapter, owner = controller.prepare(request)
+    assert prepared["mode"] == expected
+    monkeypatch.setenv("CHEF_WORKERS_MODE", "grok")
+    calls = choose(monkeypatch, "claude")
+    controller.available_candidates(adapter, prepared, owner)
+    assert calls[0]["allowed_runtimes"] == prepared["allowedRuntimes"]
+
+
+@pytest.mark.parametrize("source,invalid", [(source, value)
+    for source in ("request", "environment", "adapter")
+    for value in ("off", "", None, 1, [], {}) if source != "environment" or isinstance(value, str)])
+def test_invalid_mode_fails_before_candidates_or_admission(project, monkeypatch, source, invalid):
+    request = project.request()
+    if source == "environment":
+        monkeypatch.setenv("CHEF_WORKERS_MODE", invalid)
+    elif source == "adapter":
+        project.adapter["workers"] = {"mode": invalid}
+    else:
+        request["mode"] = invalid
+    monkeypatch.setattr(controller.backends, "candidates", lambda *a, **k: pytest.fail("must not probe"))
+    with pytest.raises(ValueError, match="worker mode"):
+        controller.dispatch(request, store=project.store)
+    assert project.store.list() == []
+
+
+def test_mode_change_cannot_reuse_submitted_request_id(project, monkeypatch):
+    choose(monkeypatch, "claude")
+    request = project.request()
+    controller.dispatch({**request, "mode": "auto"}, store=project.store)
+    with pytest.raises(ValueError, match="different intent"):
+        controller.dispatch({**request, "mode": "native"}, store=project.store)
+
+
+def test_unavailable_selected_service_does_not_use_available_alternative(project, monkeypatch):
+    choose(monkeypatch, "codex")
+    with pytest.raises(ValueError, match="no available worker"):
+        controller.dispatch({**project.request(), "mode": "claude",
+                             "allowedRuntimes": list(controller.RUNTIMES)}, store=project.store,
+                            launch=lambda *args: pytest.fail("must not launch"))
+    assert project.store.list() == []
+
+
+def test_changed_mode_overrides_previous_service_continuity(project, monkeypatch):
+    quota_candidates(monkeypatch)
+    request = project.request(owner="grok")
+    original = controller.dispatch({**request, "mode": "claude"}, store=project.store, launch=lambda *args: None)
+    project.store.finish(original["key"], original["token"], {"ok": True, "session_id": "prior-claude-session"})
+    followup = controller.dispatch({**request, "requestId": "followup", "mode": "codex", "previous": original["key"]},
+                                   store=project.store, launch=lambda *args: None)
+    assert followup["route"]["runtime"] == "codex"
+    assert "resumeSession" not in followup["request"]
+
+
+def test_single_service_mode_cannot_escape_to_available_host_after_quota(project, monkeypatch):
+    quota_candidates(monkeypatch)
+    request = {**project.request(owner="codex"), "mode": "claude"}
+    job = controller.dispatch(request, store=project.store, launch=lambda *args: None)
+    calls = []
+
+    def run(runtime, *args, **kwargs):
+        calls.append(runtime)
+        raise controller.backends.RateLimited(runtime, {"errorCode": "rate_limited", "error": "quota"})
+
+    monkeypatch.setattr(controller.backends, "run", run)
+    monkeypatch.setenv("CHEF_WORKERS_MODE", "auto")
+    failed = controller.supervise(job["key"], job["token"], store=project.store)
+    assert failed["status"] == "failed"
+    assert failed["result"]["errorCode"] == "rate_limited"
+    assert calls == ["claude"]
+
+
+def test_cli_mode_overrides_request_without_modifying_file(project, monkeypatch, capsys):
+    choose(monkeypatch, "claude")
+    path = project.root / "request.json"
+    path.write_text(json.dumps({**project.request(), "mode": "grok"}), encoding="utf-8")
+    original = path.read_bytes()
+    monkeypatch.setattr("sys.argv", ["worker.py", "--home", str(project.store.root),
+                                    "dispatch", "--request", str(path), "--mode", "native"])
+    assert cli.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["native"] and result["mode"] == "native"
+    assert path.read_bytes() == original
 
 
 def test_project_audit_role_is_preserved_for_native_spawn(project, monkeypatch):

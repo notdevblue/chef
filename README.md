@@ -55,6 +55,8 @@ Codex CLI, Claude Code, 또는 사용자가 구성한 JSONL 브리지를 선택�
 프로젝트의 경로·도구·검증 방법을 담는 **어댑터**를 만든 뒤 미션을 시작합니다.
 Claude·Codex·Grok 미션은 구현·검증·리뷰 역할을 공통 워커 라우터가 도구 역량·작업 관계·검증된 품질·진행 중 작업량에 따라 자동 배정합니다. 사용자가 런타임을 직접 고르지 않아도 되며, 별도 동시 실행 상한은 없습니다. 같은 CLI가 선택되면 native 역할 도구를 쓰고, 다른 CLI가 선택되면 각자의 로그인 상태로 별도 워커를 실행합니다. [라우팅·요청·복구 계약](docs/cross-runtime-workers.md)을 참고하세요.
 
+자동 배정을 끄고 현재 서비스만 쓰려면 `workers.mode: "native"`, 다시 켜려면 `"auto"`를 설정합니다. `"claude"`·`"codex"`·`"grok"`으로 서비스를 고정할 수도 있습니다. 미션에서 “이번에는 Claude만 써”라고 요청하거나 실행별 `dispatch --mode native`를 쓸 수도 있습니다. [모드 설정·우선순위](plugins/chef/skills/mission/references/cross-runtime-workers.md#자동-배정-켜기끄기)
+
 | 런타임 | 어댑터 만들기 | 작업 시작 |
 | --- | --- | --- |
 | Codex | `$chef:chef-adapter-init` | `$chef:chef-mission <작업>` |

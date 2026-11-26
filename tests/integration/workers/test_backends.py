@@ -38,6 +38,26 @@ def test_native_candidate_never_authenticates_host(monkeypatch, tmp_path, runtim
     assert host["policy"]
 
 
+@pytest.mark.parametrize("owner,target", [(owner, target) for owner in backends.RUNTIMES
+                                          for target in backends.RUNTIMES])
+def test_restricted_candidate_never_checks_other_service_config_or_auth(monkeypatch, tmp_path, owner, target):
+    authenticated = []
+    configured = []
+    original = backends.role_config
+
+    def config(runtime, *args):
+        configured.append(runtime)
+        return original(runtime, *args)
+
+    monkeypatch.setattr(backends, "role_config", config)
+    monkeypatch.setattr(backends, "auth", lambda runtime, *args: authenticated.append(runtime))
+    rows = backends.candidates({}, str(tmp_path), "implement", native=owner,
+                               host_tools=["Read"], allowed_runtimes=[target])
+    assert [row["runtime"] for row in rows] == [target]
+    assert configured == [target]
+    assert authenticated == ([] if owner == target else [target])
+
+
 @pytest.mark.parametrize("runtime", backends.RUNTIMES)
 def test_missing_custom_role_is_not_silently_replaced(tmp_path, runtime):
     with pytest.raises(ValueError, match="custom"):
