@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from chef.guards import mission
-from chef.infrastructure import configuration, paths
+from chef.infrastructure import configuration, paths, user_config
 from chef.infrastructure.fingerprints import implementation_digest
 from chef.infrastructure.locking import FileLock
 from chef.infrastructure.process import child_env
@@ -117,6 +117,23 @@ def ownership(request):
                      "mission": active.id, "state": state, "unitContract": binding}
 
 
+def routing_mode(request, settings):
+    if "mode" in request:
+        mode = request["mode"]
+    elif "CHEF_WORKERS_MODE" in os.environ:
+        mode = os.environ["CHEF_WORKERS_MODE"]
+    elif "mode" in settings:
+        mode = settings["mode"]
+    else:
+        workers = user_config.read().get("workers", {})
+        if not isinstance(workers, dict):
+            raise ValueError("global workers must be an object")
+        mode = workers.get("mode", "auto")
+    if not isinstance(mode, str) or mode not in MODES:
+        raise ValueError("worker mode must be auto, native, claude, codex or grok")
+    return mode
+
+
 def prepare(value):
     if not isinstance(value, dict):
         raise ValueError("worker request must be an object")
@@ -144,9 +161,7 @@ def prepare(value):
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
         raise ValueError("workers must be an object")
-    mode = request.get("mode", os.environ.get("CHEF_WORKERS_MODE", settings.get("mode", "auto")))
-    if not isinstance(mode, str) or mode not in MODES:
-        raise ValueError("worker mode must be auto, native, claude, codex or grok")
+    mode = routing_mode(request, settings)
     request["mode"] = mode
     request["allowedRuntimes"] = list(RUNTIMES) if mode == "auto" else [owner["runtime"] if mode == "native" else mode]
     request["unitContract"] = owner["unitContract"]

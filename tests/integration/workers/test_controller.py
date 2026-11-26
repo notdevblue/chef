@@ -19,6 +19,8 @@ from chef.workers.store import Store
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     monkeypatch.delenv("CHEF_WORKERS_MODE", raising=False)
+    global_config = tmp_path / "user preferences" / "config.json"
+    monkeypatch.setattr(controller.user_config, "path", lambda: global_config)
     project = tmp_path / "fictional orchard"
     project.mkdir()
     (project / "source.txt").write_text("initial", encoding="utf-8")
@@ -45,7 +47,7 @@ def project(tmp_path, monkeypatch):
                 "hostRoles": ["chef:" + name for name in controller.ROLE_KEYS]}
 
     return SimpleNamespace(root=project, state=state, request=request,
-                           store=Store(tmp_path / "worker state"), adapter=adapter)
+                           store=Store(tmp_path / "worker state"), adapter=adapter, global_config=global_config)
 
 
 def choose(monkeypatch, target):
@@ -139,6 +141,47 @@ def test_mode_change_cannot_reuse_submitted_request_id(project, monkeypatch):
     controller.dispatch({**request, "mode": "auto"}, store=project.store)
     with pytest.raises(ValueError, match="different intent"):
         controller.dispatch({**request, "mode": "native"}, store=project.store)
+
+
+@pytest.mark.parametrize("owner", controller.RUNTIMES)
+def test_global_mode_applies_across_hosts_and_is_pinned_for_existing_work(project, monkeypatch, owner):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text('{"workers":{"mode":"native"}}', encoding="utf-8")
+    choose(monkeypatch, owner)
+    request = project.request(owner=owner)
+    job = controller.dispatch(request, store=project.store)
+    assert job["native"] and job["request"]["allowedRuntimes"] == [owner]
+    project.global_config.write_text('{"workers":{"mode":"auto"}}', encoding="utf-8")
+    assert controller.status(job["key"], store=project.store)["request"]["mode"] == "native"
+    project.store.finish(job["key"], job["token"], {"ok": True})
+    next_job = controller.dispatch({**request, "requestId": "next-work"}, store=project.store)
+    assert next_job["request"]["mode"] == "auto"
+    assert next_job["request"]["allowedRuntimes"] == list(controller.RUNTIMES)
+
+
+@pytest.mark.parametrize("layer", ["request", "environment", "adapter"])
+def test_explicit_mode_overrides_even_broken_unused_global_config(project, monkeypatch, layer):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text("{unfinished", encoding="utf-8")
+    request = project.request()
+    if layer == "request":
+        request["mode"] = "native"
+    elif layer == "environment":
+        monkeypatch.setenv("CHEF_WORKERS_MODE", "native")
+    else:
+        project.adapter["workers"] = {"mode": "native"}
+    choose(monkeypatch, "claude")
+    assert controller.dispatch(request, store=project.store)["request"]["mode"] == "native"
+
+
+@pytest.mark.parametrize("configuration", ["{unfinished", "[]", '{"workers":[]}', '{"workers":{"mode":"off"}}'])
+def test_invalid_selected_global_config_never_probes_or_admits_work(project, monkeypatch, configuration):
+    project.global_config.parent.mkdir()
+    project.global_config.write_text(configuration, encoding="utf-8")
+    monkeypatch.setattr(controller.backends, "candidates", lambda *a, **k: pytest.fail("must not probe"))
+    with pytest.raises(ValueError):
+        controller.dispatch(project.request(), store=project.store)
+    assert project.store.list() == []
 
 
 def test_unavailable_selected_service_does_not_use_available_alternative(project, monkeypatch):

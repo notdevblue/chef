@@ -47,7 +47,7 @@ def main():
     dispatch = sub.add_parser("dispatch")
     dispatch.add_argument("--request", required=True)
     dispatch.add_argument("--mode", choices=controller.MODES,
-                          help="override request, environment and project worker routing mode")
+                          help="override request, environment, project and global worker routing mode")
     for name in ("status", "wait", "cancel", "native-result", "recover-owner", "reconcile", "supervise"):
         command = sub.add_parser(name)
         command.add_argument("--key", required=True)
