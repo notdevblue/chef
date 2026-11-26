@@ -219,6 +219,12 @@ def status(adapter, research=None, native=None, cwd=None):
             if host is None:
                 raise ValueError("Hermes native worker lifecycle is unavailable in this plugin host")
             host.check_available()
+            if cwd is not None:
+                from chef.runtimes.hermes.contracts import preflight
+
+                preflight(adapter.get("workers", {}), cwd, permitted_roles(adapter, backend))
+            elif adapter.get("workers", {}).get("readOnlySources") or adapter.get("workers", {}).get("roleContracts"):
+                raise ValueError("project role/source preflight requires the workspace directory")
             if native is None:
                 result["roles"] = [role for role in roles if role == "chef:researcher"]
                 if not result["roles"]:

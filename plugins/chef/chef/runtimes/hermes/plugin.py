@@ -201,6 +201,16 @@ class Bridge:
                 return block("only the assigned Hermes research worker can use this tool")
             if not isinstance(args, dict) or args.get(ERROR_ARGUMENT):
                 return block("cannot resolve tool context; execution was blocked")
+            if tool_name == "chef_mission":
+                from chef.runtimes.hermes.operations import prepare
+
+                try:
+                    prepare(self, args, session_id, task_id)
+                    return None
+                except Exception as exc:
+                    return block(str(exc))
+            if tool_name == "terminal" and mission.contains_marker(args.get("command", ""), "Bash"):
+                return block("use chef_mission(action=open|resume|close, mission=...) instead of shell markers in Hermes")
             origin = cwd = self.cwd(session_id, task_id)
             if tool_name == "terminal" and args.get("workdir"):
                 cwd = absolute_path(args["workdir"], cwd)
@@ -301,9 +311,10 @@ class Bridge:
     def restore_slot_bindings(self, session_id, released):
         failed = False
         with self.lock:
-            self.released_slots[session_id] = released
+            if released.get("external"):
+                self.released_slots[session_id] = released
             for key, binding in list(self.bindings.items()):
-                if (key[0] == session_id and binding.get("external")
+                if (key[0] == session_id and bool(binding.get("external")) == bool(released.get("external"))
                         and same_path(binding["cwd"], released["cwd"])):
                     try:
                         bind_native_cwd(key[1], binding["return_cwd"])
@@ -346,6 +357,14 @@ class Bridge:
                     if context.get("external"):
                         self.released_slots.pop(session_id, None)
             return json.dumps(context, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+
+    def mission(self, args, session_id="", task_id="", **_):
+        try:
+            from chef.runtimes.hermes.operations import execute
+
+            return json.dumps(execute(self, args, session_id, task_id), ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
@@ -404,7 +423,7 @@ class Bridge:
             return {"context": (
                 python_context + "Chef Hermes: load skill_view(name='chef:mission') for mission work. "
                 "Use chef_slot to select a ready slot in this existing session. "
-                "Check chef_worker_status before opening the mission; use chef_delegate for role workers. "
+                "Check chef_worker_status before opening the mission; use chef_mission for open/resume/close/status and chef_delegate for role workers. Never use shell mission markers in Hermes. "
                 "Preserve question/approval records and actual verification evidence. "
                 "Current task working directory: " + cwd
             )}
@@ -458,6 +477,14 @@ WORKER_STATUS_SCHEMA = {
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 
+MISSION_SCHEMA = {
+    "name": "chef_mission", "description": "Inspect or transition the selected task's mission after all tool guards accept it.",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["status", "open", "resume", "close"]},
+        "mission": {"type": "string", "description": "Required mission ID for a transition; omit for status."},
+    }, "required": ["action"], "additionalProperties": False},
+}
+
 
 def register(ctx):
     if sys.platform not in ("darwin", "linux"):
@@ -471,6 +498,7 @@ def register(ctx):
     ctx.register_hook("pre_llm_call", bridge.context)
     ctx.register_hook("pre_verify", bridge.verify)
     ctx.register_tool("chef_slot", "chef", SLOT_SCHEMA, bridge.slot)
+    ctx.register_tool("chef_mission", "chef", MISSION_SCHEMA, bridge.mission)
     ctx.register_tool("chef_delegate", "chef", DELEGATE_SCHEMA, bridge.delegate)
     ctx.register_tool("chef_worker_status", "chef", WORKER_STATUS_SCHEMA, bridge.worker_status)
     if lifecycle is not None:

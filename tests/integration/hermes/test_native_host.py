@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
     manager._load_plugin(manifest)
     loaded = manager._plugins["chef"]
     assert loaded.enabled and not loaded.error, loaded.error
-    assert set(loaded.tools_registered) == {"chef_slot", "chef_delegate", "chef_worker_status", "chef_research_read",
+    assert set(loaded.tools_registered) == {"chef_slot", "chef_mission", "chef_delegate", "chef_worker_status", "chef_research_read",
                                            "chef_worker_read", "chef_worker_write", "chef_worker_shell"}
     assert set(loaded.hooks_registered) == {"pre_tool_call", "pre_llm_call", "pre_verify", "subagent_start", "subagent_stop"}
     assert loaded.middleware_registered == ["tool_request"]
@@ -93,7 +93,8 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
         assert rewritten.payload["workdir"] == str(slot)
         rewritten_file = apply_tool_request_middleware("write_file", {"path": "note.txt", "content": "fictional"}, task_id=task, session_id=session)
         assert rewritten_file.payload["path"] == str(slot / "note.txt")
-        assert plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission open native-mission"}, task_id=task, session_id=session) is None
+        assert plugins.resolve_pre_tool_block("chef_mission", {"action": "open", "mission": "native-mission"}, task_id=task, session_id=session) is None
+        assert json.loads(registry.dispatch("chef_mission", {"action": "open", "mission": "native-mission"}, task_id=task, session_id=session))["ok"]
         active = mission.read_active(str(slot / "state"))
         assert active.session == session and active.runtime == "hermes"
         denied = plugins.resolve_pre_tool_block("terminal", {"command": "dangerous-operation"}, task_id=task, session_id=session)
@@ -129,7 +130,8 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
         assert str(_resolve_path_for_task(".", request["task_id"])) == str(project)
         result = json.loads(registry.dispatch("chef_slot", args, **request))
         assert result.get("cwd") == str(slot), result
-        assert plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission open routed-mission"}, **request) is None
+        assert plugins.resolve_pre_tool_block("chef_mission", {"action": "open", "mission": "routed-mission"}, **request) is None
+        assert json.loads(registry.dispatch("chef_mission", {"action": "open", "mission": "routed-mission"}, **request))["ok"]
         assert mission.read_active(str(slot / "state")).session == request["session_id"]
         denied = plugins.resolve_pre_tool_block("terminal", {"command": "dangerous-operation"}, **request)
         assert denied and "fictional operation denied" in denied, denied

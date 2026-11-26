@@ -134,6 +134,9 @@ class NativeJob(research.ResearchJob):
             paths.extend(literal + trees)
         for path in paths:
             target = Path(os.path.abspath(os.path.join(self.cwd, path)))
+            if tool == READ and self.sources.contains(target):
+                self.sources.bytes(target)
+                continue
             if not target.is_relative_to(self.cwd):
                 raise ValueError("worker target escaped the assigned workspace")
             self.parts(target.relative_to(self.cwd).as_posix(), writable=tool != READ)
@@ -189,7 +192,11 @@ class NativeJob(research.ResearchJob):
         offset = args.get("offset", 0)
         if type(offset) is not int or offset < 0 or offset > (1 << 63) - 1 or ("offset" in args and operation != "read"):
             raise ValueError("offset must be a nonnegative byte offset for read")
-        parts = self.parts(args.get("path", "."))
+        path = args.get("path", ".")
+        if operation == "read" and self.sources.contains(path):
+            self.guard(READ, {"operation": operation, "path": path, "offset": offset}, task_id)
+            return self.sources.read(path, offset)
+        parts = self.parts(path)
         if operation == "head" and "path" in args:
             raise ValueError("head takes no path")
         if operation == "read" and not parts:
@@ -398,10 +405,10 @@ class NativeWorkers(research.ResearchWorkers):
 
     def run(self, role, prompt, timeout, cwd, state, active, checker, slot, config=None):
         self.check_available()
-        config = {} if config is None else config
-        if not isinstance(config, dict) or set(config) - {"provider", "model"} or any(
-                not isinstance(value, str) or not value.strip() or "\x00" in value for value in config.values()):
-            raise ValueError("native role routing accepts nonempty model and provider strings only")
+        from chef.runtimes.hermes.contracts import native_routing, role_contract, settings_for
+
+        config = native_routing(config)
+        config, instructions = role_contract(settings_for(cwd), cwd, role, config)
         with self.assignment(role, cwd, state, active, checker, slot) as job:
             call = uuid.uuid4().hex
             goal = f"Chef {role} assignment {call}\n{prompt}"
@@ -414,7 +421,8 @@ class NativeWorkers(research.ResearchWorkers):
                        "You are a fresh Chef leaf worker. Use only chef_worker_read, chef_worker_write and "
                        "chef_worker_shell as permitted by this role. Paths are relative to the assigned workspace; "
                        "commands run at its root. Do not delegate, change mission state/ownership or configuration. "
-                       "Return observed evidence and unverified work. Assigned workspace: " + str(job.cwd))
+                       "Return observed evidence and unverified work. Assigned workspace: " + str(job.cwd)
+                       + ("\nProject role instructions:\n" + instructions if instructions else ""))
             with self.lock:
                 self.pending[goal] = job
             handle = None
@@ -427,6 +435,8 @@ class NativeWorkers(research.ResearchWorkers):
                     raise ValueError("Hermes did not confirm the worker's session identity")
                 if research.field(handle, "role") != "leaf":
                     raise ValueError("Hermes did not launch the worker as a leaf")
+                if config.get("model") and research.field(handle, "model") != config["model"]:
+                    raise ValueError("Hermes did not apply the required role model")
                 terminal = self.lifecycle.wait(handle, timeout_seconds=timeout)
                 completed = research.field(terminal, "completed") is True
                 if not completed:

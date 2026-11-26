@@ -62,6 +62,13 @@ class ResearchJob:
         self.revoked = threading.Event()
         self.child_session = None
         self.child_id = None
+        from chef.runtimes.hermes.contracts import ReadSources, settings_for
+
+        self.sources = ReadSources(settings_for(self.cwd).get("readOnlySources"))
+        for path in self.sources.files:
+            source = Path(path)
+            if source.is_relative_to(self.cwd) or source.is_relative_to(self.state.resolve()):
+                raise ValueError("readOnlySources must name external references, never workspace or mission state files")
 
     def check(self):
         if self.revoked.is_set() or mission.read_active(str(self.state)) != self.active:
@@ -85,6 +92,21 @@ class ResearchJob:
             raise ValueError("choose list, read or head")
         if operation == "head" and "path" in args:
             raise ValueError("head takes no path")
+        if operation == "read" and self.sources.contains(path):
+            with self.lock:
+                self.check()
+                if self.slot is not None:
+                    self.slot.check(self.active.session, self.active.id)
+                denied = project_denial({
+                    "han_runtime": "hermes", "session_id": self.active.session, "cwd": str(self.cwd),
+                    "task_id": task_id, "tool_name": TOOL, "tool_input": {"operation": operation, "path": path},
+                    "han_hermes_worker": {"guard": self.checker},
+                })
+                if denied:
+                    raise ValueError(denied)
+                result = self.sources.read(path)
+                self.check()
+                return result
         parts = tuple(path.split("/")) if path != "." else ()
         if any(part in ("", ".", "..") for part in parts) or "\x00" in path or "\\" in path:
             raise ValueError("use a relative path inside the assigned workspace")

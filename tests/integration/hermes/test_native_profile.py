@@ -189,6 +189,14 @@ elif sys.argv[1] == "list":
                     return {"blocked": deny}
                 return json.loads(registry.dispatch("terminal", rewritten, **request))
 
+            def transition(action):
+                args = {"action": action, "mission": "seed"}
+                denied = plugins.resolve_pre_tool_block("chef_mission", args, **request)
+                assert denied is None, denied
+                result = json.loads(registry.dispatch("chef_mission", args, **request))
+                assert result.get("ok"), result
+                return result
+
             args = {"project": str(manager), "name": "fern"}
             dry_run = json.loads(registry.dispatch("chef_slot", {**args, "dry_run": True}, **request))
             print(json.dumps({"case": label, "process_home": os.environ["HERMES_HOME"],
@@ -212,15 +220,15 @@ elif sys.argv[1] == "list":
                     "id": "fern-entry", "roots": [str(slot)], "trusted": True,
                     "command": [sys.executable, str(entry)], "watchFiles": [str(entry)],
                 }]})
-                denied = plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission open seed"}, **request)
+                denied = plugins.resolve_pre_tool_block("chef_mission", {"action": "open", "mission": "seed"}, **request)
                 assert denied and "mission-entry-receipts" in denied, denied
                 assert not active.exists() and not reservation.exists()
                 receipt = mission_entry.enter(str(slot), "hermes", "new", request["session_id"], "seed", "Fictional mission")
                 assert Path(receipt["receipt"]).is_relative_to(adapter_dir)
                 print(json.dumps({"case": label, "missing_receipt_blocked": True,
                                   "acquired_before_receipt": reservation.exists()}), flush=True)
-            opened = terminal("echo han-mission open seed")
-            assert opened.get("exit_code") == 0, opened
+            opened = transition("open")
+            assert opened.get("ok"), opened
             assert json.loads(active.read_text())["session"] == request["session_id"]
             scope = home / "chef" / "external-slots"
             journals = [p for p in (gateway / "chef" / "external-slots").glob("*.json")]
@@ -229,21 +237,22 @@ elif sys.argv[1] == "list":
             assert len(journals) == 1, journals
             journal = journals[0]
             if home != gateway:
-                denied = plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission resume seed"}, **request)
+                denied = plugins.resolve_pre_tool_block("chef_mission", {"action": "resume", "mission": "seed"}, **request)
                 assert denied and "mission-entry-receipts" in denied, denied
                 mission_entry.enter(str(slot), "hermes", "resume", request["session_id"], "seed", "Fictional mission")
-                resumed = plugins.resolve_pre_tool_block("terminal", {"command": "echo han-mission resume seed"}, **request)
+                resumed = plugins.resolve_pre_tool_block("chef_mission", {"action": "resume", "mission": "seed"}, **request)
                 assert resumed is None, resumed
+                transition("resume")
                 print(json.dumps({"case": label, "resume_requires_separate_receipt": True}), flush=True)
                 run_research(slot, request)
             clear_session_vars(session)
             session = set_session_vars(session_id=request["session_id"], message_id=label + "-close", profile=home.name)
-            closed = terminal("echo han-mission close seed")
-            assert closed.get("exit_code") == 0, closed
+            closed = transition("close")
+            assert closed.get("ok"), closed
             events = [json.loads(line) for line in log.read_text().splitlines()]
             transitions = [event for event in events if event[0] in ("acquire", "release")]
             print(json.dumps({"case": label, "journal": str(journal), "acquire_release": transitions,
-                              "open_exit": opened["exit_code"], "close_exit": closed["exit_code"],
+                              "open_ok": opened["ok"], "close_ok": closed["ok"],
                               "active_after_close": active.exists(), "journal_after_close": journal.exists(),
                               "lock_gate": str(journal.with_suffix(".lock.gate")),
                               "reservation_after_close": json.loads(reservation.read_text())}), flush=True)

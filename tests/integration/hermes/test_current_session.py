@@ -135,9 +135,7 @@ def test_native_slot_and_mission_resolve_registry_in_request_profile(registry_wo
         assert not (slot / "state" / "ACTIVE").exists()
         result = json.loads(bridge.slot(args, "owner", "task"))
         assert result.get("cwd") == str(slot.resolve()), result
-        assert bridge.before_tool(
-            "terminal", {"command": "echo han-mission open orchard-mission"}, "owner", "task"
-        ) is None
+        assert json.loads(bridge.mission({"action": "open", "mission": "orchard-mission"}, "owner", "task"))["ok"]
         assert guard.read_active(str(slot / "state")).session == "owner"
         directive = bridge.before_tool("terminal", {"command": "garden-probe"}, "owner", "task")
         assert directive and "fictional restriction" in directive["message"]

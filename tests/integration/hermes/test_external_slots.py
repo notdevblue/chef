@@ -54,6 +54,14 @@ def select(bridge, manager, *, name="one", session="owner", dry_run=False, resum
 
 
 def terminal(bridge, command, session="owner", **extra):
+    marker = mission.MARKER.fullmatch(command)
+    if marker and not extra:
+        args = {"action": marker[1], "mission": marker[2]}
+        denied = bridge.before_tool("chef_mission", args, session_id=session, task_id=session)
+        if denied:
+            return denied
+        result = json.loads(bridge.mission(args, session_id=session, task_id=session))
+        return {"action": "block", "message": result["error"]} if "error" in result else None
     return bridge.before_tool("terminal", {"command": command, **extra}, session_id=session, task_id=session)
 
 

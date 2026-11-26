@@ -226,5 +226,5 @@ def test_native_registration_wires_guards_middleware_tools_and_skills(monkeypatc
     plugin.register(ctx)
     assert set(ctx.hooks) == {"pre_tool_call", "pre_llm_call", "pre_verify"}
     assert set(ctx.middleware) == {"tool_request"}
-    assert set(ctx.tools) == {"chef_slot", "chef_delegate", "chef_worker_status"}
+    assert set(ctx.tools) == {"chef_slot", "chef_mission", "chef_delegate", "chef_worker_status"}
     assert set(ctx.skills) == set(plugin.SKILLS)

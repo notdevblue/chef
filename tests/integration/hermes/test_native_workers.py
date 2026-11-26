@@ -47,7 +47,8 @@ def host(workspace, monkeypatch):
                 child_subagent_id="wrong", child_goal=request["goal"])
             bridge.native.started(parent_session_id="parent", child_session_id="child-session",
                 child_subagent_id="child", child_goal=request["goal"])
-            return {"subagent_id": "child", "role": "leaf", "model": "invented-model", "provider": "invented-provider"}
+            return {"subagent_id": "child", "role": "leaf", "model": request.get("model", "invented-model"),
+                    "provider": request.get("provider", "invented-provider")}
 
         def wait(self, handle, timeout_seconds):
             self.observe()
@@ -146,6 +147,31 @@ def test_paged_read_and_path_denials(workspace, host, tmp_path):
     host.lifecycle.observe = observe
     host.run()
     assert outside.read_text() == "private invented text"
+
+
+def test_project_role_and_external_read_sources_are_bound_to_the_job(workspace, host, tmp_path):
+    import hashlib
+
+    guide = tmp_path.resolve() / "selected-guide.md"
+    guide.write_text("Approved selected reference.")
+    role = workspace.root / ".codex/agents/sample.toml"
+    role.parent.mkdir(parents=True)
+    role.write_text('model = "chosen"\ndeveloper_instructions = "Read the selected guide and review sample.py."\n')
+    adapter_path = workspace.root / ".hermes/orchestrator/adapter.json"
+    adapter = json.loads(adapter_path.read_text())
+    adapter["workers"] = {"readOnlySources": {str(guide): hashlib.sha256(guide.read_bytes()).hexdigest()},
+        "roleContracts": {"code-reviewer": {"path": ".codex/agents/sample.toml",
+            "sha256": hashlib.sha256(role.read_bytes()).hexdigest(), "modelPolicy": "definition"}}}
+    adapter_path.write_text(json.dumps(adapter))
+    def observe():
+        assert host.call(native.READ, {"operation": "read", "path": str(guide)})["text"] == guide.read_text()
+        assert "error" in host.call(native.WRITE, {"operation": "write", "path": str(guide), "content": "wrong"})
+        guide.write_text("Unapproved change.")
+        assert "error" in host.call(native.READ, {"operation": "read", "path": str(guide)})
+    host.lifecycle.observe = observe
+    assert host.run("code-reviewer")["ok"]
+    assert host.lifecycle.request["model"] == "chosen"
+    assert "Read the selected guide and review sample.py." in host.lifecycle.request["context"]
 
 
 def test_readonly_and_concurrently_modified_files_are_preserved(workspace, monkeypatch):

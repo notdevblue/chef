@@ -23,7 +23,7 @@ If the CLI or gateway uses a restricted toolset list, include the `chef` toolset
 for the intended surface. Registration does not override a disabled toolset.
 Plugin-disabled/safe-mode sessions are not guarded Chef sessions.
 
-The native plugin registers `chef_slot`, `chef_worker_status`, `chef_delegate`,
+The native plugin registers `chef_slot`, `chef_mission`, `chef_worker_status`, `chef_delegate`,
 request middleware and mission hooks. Hermes builds with the public subagent
 lifecycle API also get `chef_research_read` and the child lifecycle hooks. Its five
 skills are `chef:mission`, `chef:slots`, `chef:adapter-init`, `chef:doctor`,
@@ -57,8 +57,8 @@ older system Python even when Hermes itself uses a supported virtual environment
    registry roots, with the same stateDir. Entry is rejected if its guards would
    have no project context.
 4. Call `chef_worker_status` before opening the mission. Follow the configured
-   mission-entry checks and run the standalone `open` marker. For external slots,
-   that marker acquires the reservation before initialization or workspace commands.
+   mission-entry checks and call `chef_mission(action="open", mission="<id>")`. For external slots,
+   the handler acquires the reservation before initialization or workspace commands.
    Every tool invocation uses explicit task context.
 5. For the same persisted Hermes session, call `chef_slot(..., resume=true)`
    after restart. Another live session cannot take over ACTIVE through this tool.
@@ -97,8 +97,8 @@ with exit 0 for success. The `status` action confirms that the slot is unreserve
 ownership check. Providers should avoid logging identities or returning them in responses.
 
 `chef_slot` checks availability and binds the task cwd. The native mission guard acquires the
-reservation on the standalone `open` marker, using the gateway's originating message ID and Hermes
-session. The `close` marker returns the original reservation after worker completion, detaches that
+reservation in the `chef_mission(action="open", mission="<id>")` handler, using the gateway's originating message ID and Hermes
+session. The `chef_mission(action="close", mission="<id>")` handler returns the original reservation after worker completion, detaches that
 session's tasks from the released slot and restores their prior working directories.
 `chef_slot(..., dry_run=true)` reports `reservation: "UNLOCKED"` when the provider confirms availability.
 Guard state is
@@ -322,3 +322,31 @@ CI runs the synthetic integration suite on macOS, Linux and Windows. Native
 PluginManager loading and hook dispatch can additionally be tested against an
 installed Hermes source in an isolated Hermes home. These checks do not prove
 live provider behavior or an external chat platform's delivery/approval flow.
+
+## Mission transitions and project contracts
+
+Hermes uses `chef_mission` with `open`, `resume`, `close` and a mission ID. Use
+`chef_mission(action="status")` to inspect the selected workspace's ACTIVE and
+whether it belongs to this session. Shell mission markers are rejected in the
+native Hermes bridge. Claude, Codex and Grok keep their existing marker contract.
+Pre-tool hooks only validate native operations; the handler rechecks ownership
+under the mission lock and then changes state, after every plugin has accepted
+the call. A blocked close never removes ACTIVE. An absent ACTIVE alone does not
+authorize another close or prove that an external reservation was released.
+
+A trusted project can publish `workers.readOnlySources` as an object from
+canonical absolute file paths to SHA-256 hashes. Only exact listed files are
+readable outside the workspace; reads check the hash and reject symlinks,
+non-text files and files above 2 MiB. There are no directory grants or external
+write grants. These entries are project configuration, not model tool arguments.
+
+`workers.roleContracts` maps a Chef role to `{path, sha256, modelPolicy}`. `path`
+is a workspace-relative TOML with `developer_instructions`; `modelPolicy` is
+`definition` or `inherit`. Native dispatch loads the pinned body into the child
+context and applies a fixed model at launch, then verifies the returned model.
+Inherited definitions must not retain fixed model/effort fields. The current
+public Hermes lifecycle has no per-launch reasoning-effort field: a fixed
+`model_reasoning_effort` is reported as unsupported during worker preflight,
+never silently inherited or weakened. Existing configured backends remain
+explicit choices. Source hashes and role contracts are checked by
+`chef_worker_status` before opening a mission.
