@@ -229,6 +229,9 @@ def test_all_runtime_and_marketplace_versions_match():
     for folder in (".codex-plugin", ".grok-plugin"):
         runtime = json.loads((HOOKS_DIR.parent / folder / "plugin.json").read_text(encoding="utf-8"))
         assert runtime["version"] == manifest["version"]
+    hermes = (HOOKS_DIR.parent / "hermes" / "plugin.yaml").read_text(encoding="utf-8")
+    version = next(line.removeprefix("version:").strip() for line in hermes.splitlines() if line.startswith("version:"))
+    assert version == manifest["version"]
 
 
 def test_plugin_json_declares_adapters_dir_user_config():
