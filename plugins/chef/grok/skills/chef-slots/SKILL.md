@@ -7,13 +7,14 @@ description: "Grok CLI에서 슬롯 워크스페이스를 조회·생성·갱신
 
 실행 전에 [공통 절차](../../../shared/skills/slots.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
-`<plugin-root>`는 이 SKILL.md에서 세 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+`<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
+경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
 
 ## 실행 계약
 
 - `<slots-script>`: `<plugin-root>/skills/slots/scripts/slots.py`, `<slots-runtime>`: `--runtime grok`.
 - `<dashboard-script>`: `<plugin-root>/skills/slots/scripts/dashboard.py`, `<dashboard-runtime>`: `--runtime grok`.
-- `<repo>`는 `HAN_REPO` 또는 실제 체크아웃이며 `<plugin-root>`를 포함한다. 공통 [어댑터 계약](../../../skills/mission/references/adapter-schema.md)의 Grok 검색·병합을 쓴다.
+- 공통 [어댑터 계약](../../../skills/mission/references/adapter-schema.md)의 Grok 검색·병합을 쓴다.
 - `slots.beforeRun`의 Grok 명령은 `runtimes.grok.slots.beforeRun`에 둔다.
 - `create`·`refresh`는 `--dry-run`으로 기준·거부 사유를 보여 주고 사용자가 그 실행을 승인한 뒤 본명령을 돌린다. 로컬 변경 처리 플래그는 해당 처리를 승인받은 뒤에만 쓴다.
 
@@ -24,16 +25,16 @@ description: "Grok CLI에서 슬롯 워크스페이스를 조회·생성·갱신
 Grok CLI가 이미 등록된 슬롯 경로에서 실행 중이면 `chef-run`으로 구현한다. 별도 CLI 세션이 필요할 때 사용자가 요청하면 아래 `run --runtime grok`을 쓴다.
 
 `slots.py run`은 선택한 런타임 세션을 설정된 터미널에서 실행한다. 기본은 Windows Terminal·POSIX foreground이며 GUI 창·tmux는 `slots.terminal`로 명시한다. Claude는 `--runtime` 없이, Grok은 `--runtime grok`으로 호출한다. 두 경우 모두 슬롯이 `ready`이고 ACTIVE가 없어야 한다. 스크립트가 확인하는 소유권·상태 조건을 우회하지 않는다.
-Codex 세션은 사용자가 그 런타임을 지정할 때만 `<repo>/plugins/chef/codex/skills/chef-slots/scripts/slots.py`의 `run`이다.
+Codex 세션은 사용자가 그 런타임을 지정할 때만 `<plugin-root>/codex/skills/chef-slots/scripts/slots.py`의 `run`이다.
 
-대시보드가 필요하면 `<repo>/plugins/chef/skills/slots/scripts/dashboard.py`를 읽기 전용으로 띄운다. 답과 승인은 대시보드에 쓰지 않는다.
+대시보드가 필요하면 `<plugin-root>/skills/slots/scripts/dashboard.py`를 읽기 전용으로 띄운다. 답과 승인은 대시보드에 쓰지 않는다.
 
 ## 답 넣기 (inject)
 
 슬롯 Grok 세션에 사용자 답을 넣을 때는 `inject`만 쓴다. `grok -r -p`를 손으로 부르지 않는다.
 
 ```text
-python "<repo>/plugins/chef/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" inject <이름> --file <답.txt> [--session <id>] [--wait]
+python "<plugin-root>/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" inject <이름> --file <답.txt> [--session <id>] [--wait]
 ```
 
 - `inject <이름> (--text <답> | --file <파일>) [--session <id>] [--wait [--timeout 초] [--poll 초]] [--dry-run]` — Grok 슬롯 세션에

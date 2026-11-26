@@ -293,6 +293,18 @@ def test_grok_hook_registration_accepts_native_and_compat_paths(target):
     assert not doctor.grok_han_hook({"target": "/example/plugins/other/hooks/hooks.json"})
 
 
+def test_grok_hook_registration_accepts_marketplace_source():
+    path = "/example/.grok/installed-plugins/chef-a4b5c6"
+    hook = {
+        "event": "(plugin)",
+        "target": f"{path}/hooks/hooks.json",
+        "source": {"type": "plugin", "plugin_name": "chef", "path": path},
+    }
+    assert doctor.grok_han_hook(hook)
+    hook["source"]["plugin_name"] = "other"
+    assert not doctor.grok_han_hook(hook)
+
+
 @pytest.mark.parametrize("output,code", [("not JSON", 0), ("[]", 0), ("{}", 1)])
 def test_grok_doctor_inspection_failures_are_explicit(monkeypatch, output, code):
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/example/grok")

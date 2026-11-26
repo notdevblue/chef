@@ -13,13 +13,17 @@ Bot과 CLI가 같은 티어별 절차를 쓴다. 상태 조회는 `chef-status`,
 프로젝트의 `AGENTS.md`·`CLAUDE.md`와 `.claude/rules/`, 그 문서가 가리키는 workflow·도메인 규약을 읽는다.
 전역 실행 규칙은 `~/.grok/rules/`에 두고 실제 로드는 `grok inspect`로 확인한다. 프로젝트·전역 규칙을 이 스킬에 복제하지 않는다.
 
+`<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
+경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
+별도 스킬 라이브러리를 사용하고 Grok CLI에 접근할 수 없는 Bot은 설정된 `HAN_REPO/plugins/chef`를 사용한다.
+
 1. 명시적인 미션 시작·재개 요청이면 같은 플러그인의 `chef-mission/SKILL.md` 진입 CLI부터 실행한다. 등록 이벤트가 어댑터를 준비하거나 등록 슬롯으로 넘길 수 있다.
    `continue` 뒤 현재 경로가 메인 프로젝트인지 등록된 슬롯인지 확인한다. 하위 폴더면 그 루트를 찾는다. 어느 쪽도 아니면 사용자에게 묻고 임의 경로를 만들지 않는다.
-2. 기존 미션을 먼저 확인한다. `<repo>`는 `HAN_REPO` 또는 실제 체크아웃이다. 출력에 없는 미션 id·단계·목표를 만들지 않는다.
+2. 기존 미션을 먼저 확인한다. 출력에 없는 미션 id·단계·목표를 만들지 않는다.
 
 ```text
-python "<repo>/plugins/chef/grok/scripts/han_state.py" snapshot --project "<작업 루트>"
-python "<repo>/plugins/chef/skills/mission/scripts/mission_state.py" --runtime grok --project "<작업 루트>" active
+python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<작업 루트>"
+python "<plugin-root>/skills/mission/scripts/mission_state.py" --runtime grok --project "<작업 루트>" active
 ```
 
 3. 진행 중인 미션이 있거나 M(여러 파일·검증 게이트)·L(여러 계층·PoC·사람 확인)이면 같은 플러그인의 `chef-mission/SKILL.md`를 읽고 전체 공통 절차를 적용한다.

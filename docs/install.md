@@ -2,6 +2,7 @@
 
 [README](../README.md)의 런타임별 설치를 마친 뒤 프로젝트를 연결합니다.
 `<repo>`는 Chef 체크아웃의 절대 경로, `<project>`는 작업할 프로젝트 경로입니다.
+예제 어댑터나 개발 명령이 필요하면 [기준 저장소](https://github.com/notdevblue/chef)를 체크아웃합니다.
 
 ## 필요 조건
 
@@ -113,13 +114,23 @@ SessionStart 훅이 이 경로를 도구 환경의 `HAN_ADAPTERS_DIR`로 전달�
 
 ## Grok 등록
 
-[기존 Grok 등록 안내](../plugins/chef/grok/README.md#grok-cli에-native-chef-등록)를 따릅니다.
-Windows에서는 junction, POSIX에서는 symlink로 `~/.grok/plugins/chef`를 체크아웃의 `plugins/chef`에 연결합니다.
-기존 링크가 있으면 실제 대상을 확인하고 덮어쓰지 않습니다.
+최초 설치는 [README의 Grok 명령](../README.md#grok)을 실행합니다. `grok plugin marketplace list`에
+`chef`가 이미 공개 기준 저장소를 가리키면 바로 설치할 수 있습니다. Grok 스킬은 설치본에 포함된
+스크립트를 실행합니다. 개인 레지스트리를 사용하면 시작 셸에 `HAN_ADAPTERS_DIR`을 설정합니다.
+기존 `HAN_REPO`는 그 아래 `adapters/`를 찾는 데 사용할 수 있습니다.
 
-이전 `han` 등록이나 별도의 Chef skills 경로가 있으면 먼저 백업하고 해당 등록만 정리합니다.
-`grok inspect`에서 native Chef의 선택 경로, 스킬 8개·훅 1개와 실제 역할 6개의 이름·원본 경로를 확인합니다.
-`provides.agents`는 역할 수가 아닙니다. 실행 중인 Grok 세션은 새로 엽니다.
+기존 링크에서 전환할 때는 다음 순서로 진행합니다.
+
+1. 마켓플레이스에서 `chef@chef`를 설치합니다.
+2. `~/.grok/plugins/chef`가 기존 Chef 체크아웃을 가리키는 심볼릭 링크 또는 junction인지 확인한 뒤,
+   링크 자체를 Grok 플러그인 디렉터리 밖으로 옮겨 보관합니다. 이전 이름인 `han` 등록이나 Chef 전용
+   스킬 링크·`[skills].paths` 항목이 남아 있다면 해당 등록도 백업하고 정리합니다.
+3. `grok inspect --json`에서 선택된 `chef` 경로가 마켓플레이스 설치본인지 확인합니다.
+   스킬 8개·훅 파일 1개와 실제 역할 6개의 원본 경로가 그 설치본 아래에 있어야 합니다.
+   실행 중인 세션은 새로 열고 프로젝트 폴더의 훅 신뢰 상태와 실행을 확인합니다.
+
+되돌릴 때는 `grok plugin uninstall chef --confirm --keep-data`으로 마켓플레이스 설치를 제거하고 보관한 링크와
+이전 Chef 전용 등록을 복원합니다. 새 세션에서 `grok inspect --json`으로 복원된 경로를 확인합니다.
 
 ## Hermes 연결
 
@@ -159,7 +170,14 @@ claude plugin marketplace update chef
 claude plugin update chef@chef
 ```
 
-Grok은 체크아웃을 갱신하고 `grok inspect`로 선택된 native 경로를 확인합니다.
+Grok:
+
+```bash
+grok plugin marketplace update chef
+grok plugin update chef
+grok inspect
+```
+
 Claude·Codex·Grok은 새 세션에서 스킬과 훅을 확인합니다. Hermes도 체크아웃을 갱신한 뒤 프로세스를 재시작합니다.
 Hermes의 Codex 역할 워커는 설치된 Chef 코드와 실행 중인 Hermes의 코드가 일치해야 합니다.
 개인 어댑터는 설치 캐시 밖에 보관합니다.

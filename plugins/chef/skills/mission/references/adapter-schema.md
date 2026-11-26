@@ -99,7 +99,7 @@ Grok의 검색은 아래 순서를 쓴다. Claude·Codex의 검색 순서는 그
 3. 없으면 `HAN_REPO/adapters`. `HAN_REPO`는 이 저장소를 받은 폴더다. 폴더를 지정했는데 `adapters`가 없으면 조회가 오류로 끝난다.
 4. 그것도 없으면 이 저장소에서 스크립트를 직접 실행할 때 `<저장소>/adapters`.
 
-Claude 플러그인 설정과 Codex `config.toml`은 읽지 않는다. Grok은 `~/.grok/plugins/chef`에 native 등록하고, 선택 경로와 manifest는 `grok inspect`로 확인한다.
+Claude 플러그인 설정과 Codex `config.toml`은 읽지 않는다. Grok은 마켓플레이스에서 `chef@chef`를 설치하고, 선택 경로는 `grok inspect`로 확인한다.
 Grok 전용 값은 `runtimes.grok` 객체에 두며 위 OS·런타임 병합을 쓴다. 조회·미션·가드·doctor·슬롯이 같은 병합을 사용한다.
 
 역할을 명시할 때는 아래처럼 native 이름을 쓴다. 기본 역할의 호환 이름과 파견 규칙은 [Grok 역할 계약](../../../grok/skills/chef-mission/references/grok-roles.md)에 있다.

@@ -436,6 +436,8 @@ def grok_han_hook(entry):
     source = entry.get("source")
     source_path = ""
     if isinstance(source, dict):
+        if source.get("type") == "plugin" and source.get("plugin_name") == "chef":
+            return True
         source_path = source.get("path", "")
     paths = [str(entry.get("target") or ""), str(source_path)]
     for path in paths:

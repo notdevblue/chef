@@ -21,7 +21,7 @@
 
 ## 완료 절차
 
-이 플러그인 저장소의 수정 작업은 **공개 반영 전 점검 → 검증 → 커밋 → push → Claude·Codex 플러그인 업데이트·Grok 경로 확인 → 반영 확인**까지 기본으로 수행한다. 별도 push·업데이트 요청을 기다리지 않는다. 사용자가 보류하거나 범위를 제한하면 그 지시를 따른다.
+이 플러그인 저장소의 수정 작업은 **공개 반영 전 점검 → 검증 → 커밋 → push → Claude·Codex·Grok 플러그인 업데이트 → 반영 확인**까지 기본으로 수행한다. 별도 push·업데이트 요청을 기다리지 않는다. 사용자가 보류하거나 범위를 제한하면 그 지시를 따른다.
 
 - 현재 브랜치와 설정된 원격을 확인하고 이번 작업의 변경만 커밋한다. 다른 작업의 미커밋 변경을 포함하거나 되돌리지 않는다.
 - 검증은 `README.md`의 관련 절차를 따른다. 변경 없는 입력의 유효한 검증 결과는 재사용한다.
@@ -29,12 +29,12 @@
 - 커밋을 push하고 원격 브랜치의 SHA가 일치하는지 확인한다. force push는 하지 않는다.
 - Claude는 `claude plugin marketplace update chef`와 `claude plugin update chef@chef`를 실행한다.
 - Codex는 `codex plugin marketplace upgrade chef-codex` 뒤 `codex plugin add chef@chef-codex`로 설치본을 갱신한다. add만 실행하면 기존 마켓플레이스의 구버전을 다시 설치할 수 있다.
-- Grok은 `~/.grok/plugins/chef`가 이번 push 체크아웃의 `plugins/chef`를 가리키도록 등록한다. 기존 대상이 있으면 실제 대상을 확인하고 덮어쓰지 않는다. 전환 전 `~/.grok/config.toml`과 `~/.grok/skills/han-*`·`chef-*` 링크 정보를 저장하고, 이전 이름(`han`)의 `~/.grok/plugins/han` 등록과 이 플러그인 전용 `[skills].paths` 항목, `han-*`·`chef-*` 링크만 등록 해제한다. 다른 스킬 설정은 보존한다.
+- Grok은 `grok plugin marketplace update chef`와 `grok plugin update chef`를 실행한다. 마켓플레이스가 없으면 `grok plugin marketplace add https://github.com/notdevblue/chef.git`로 등록하고 처음에는 `grok plugin install chef@chef --trust`를 실행한다. 기존 링크가 남아 있으면 [Grok 전환 절차](docs/install.md#grok-등록)를 따른다.
 - Codex 역할 등록이 하나라도 있으면(`$CODEX_HOME/agents`, 없으면 `~/.codex/agents/`) 이번 push 체크아웃의 `plugins/chef/codex/agents/`에 있는 chef 역할 toml 전부(새로 생긴 역할 포함)를 같게 복사하고 `diff`로 차이가 없는지 확인한다. 등록이 없으면 만들지 않는다. 그 폴더의 다른 사용자 파일은 건드리지 않고, 플러그인에 없는 `chef-` 역할 파일(옛 이름 `chef-developer-*.toml` 포함)은 지우지 않고 알린다.
-- `grok inspect`에서 native `chef`가 이번 체크아웃을 선택하고 스킬 8개·훅 1개와 native 역할 6개(`chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:code-reviewer`, `chef:reviewer-small`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `provides.agents`는 등록 경로 수이므로 역할 수로 판단하지 않는다. `chef-watch`·`chef-handoff`가 없어야 한다. `grok plugin install` 성공만으로 선택된 플러그인을 판단하지 않는다. compat `chef`가 native 경로보다 우선할 수 있다.
+- `grok inspect`에서 native `chef`가 마켓플레이스 설치본을 선택하고 스킬 8개·훅 1개와 native 역할 6개(`chef:researcher`, `chef:dev-small`, `chef:dev-medium`, `chef:verifier`, `chef:code-reviewer`, `chef:reviewer-small`)를 읽는지 확인한다. 역할은 실제 `agents` 이름과 원본 경로로 확인한다. `chef-watch`·`chef-handoff`가 없어야 한다. 기존 링크가 마켓플레이스 설치본보다 우선하므로 선택 경로를 확인한다.
 - 선택된 native 경로의 manifest·스킬 파일과 그 파일이 부르는 공유 스크립트를 push한 커밋과 대조한다. 다른 작업의 미커밋 변경이 그 파일에 있으면 반영으로 치지 않는다.
 - 설치 버전과 캐시 파일을 실제 push한 커밋의 배포 내용과 대조한다. 다른 작업의 미커밋 변경이 있으면 커밋된 배포본을 기준으로 업데이트하며, 작성 중인 내용을 함께 설치하지 않는다.
-- 배포 내용이 그대로이고 `grok inspect`의 선택 경로·manifest 내용이 일치하면 최신 상태로 보고 불필요한 재등록은 생략한다.
+- 배포 내용이 그대로이고 세 런타임의 설치본이 배포 내용과 일치하면 재설치를 생략한다.
 - 대시보드 변경이면 대상 프로세스를 확인해 다시 시작하고 실제 HTTP 응답까지 확인한다. 실행 중인 Grok 세션은 스킬과 저장소 지침을 다시 읽지 않으므로 재시작을 알린다. 다른 실행 중 세션의 지침 재로드·재시작이 필요하면 알린다.
 - push·업데이트·반영 확인이 실패하면 실패 지점과 남은 작업을 보고한다. 확인하지 못한 단계를 완료로 표시하지 않는다.
 - 완료 보고에는 커밋 SHA, push 결과, 설치 버전, Grok 경로 확인, 검증 결과를 짧게 적는다.

@@ -22,10 +22,14 @@ ACTIVE가 있는 슬롯에는 다른 미션을 겹치지 않는다.
 
 ## 순서
 
+`<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
+경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
+별도 스킬 라이브러리를 사용하고 Grok CLI에 접근할 수 없는 Bot은 설정된 `HAN_REPO/plugins/chef`를 사용한다.
+
 1. `chef-status`와 같은 조회로 현재 상태를 본다. 어댑터 오류면 `chef-doctor`로 가고 브리프를 만들지 않는다.
 
 ```text
-python "<repo>/plugins/chef/grok/scripts/han_state.py" snapshot --project "<프로젝트 폴더>"
+python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<프로젝트 폴더>"
 ```
 
 2. 메인 ACTIVE나 슬롯 ACTIVE가 있으면 미션 id·단계·목표를 보여주고, 새 미션으로 열지 사용자에게 묻는다.
@@ -35,14 +39,12 @@ python "<repo>/plugins/chef/grok/scripts/han_state.py" snapshot --project "<프�
 4. `--goal`은 대상과 결과가 보이는 한 줄이다.
 
 ```text
-python "<repo>/plugins/chef/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime grok --goal "<한 줄 목표>"
-python "<repo>/plugins/chef/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime grok --slot slot2 --goal "<한 줄 목표>"
+python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime grok --goal "<한 줄 목표>"
+python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime grok --slot slot2 --goal "<한 줄 목표>"
 ```
 
 5. `인계:` 아래 `SendToAgent:` 블록을 그 봇에게 보낸다. 슬래시 명령으로 바꾸지 않는다.
    도구가 있으면 SendToAgent로, 없으면 그 봇의 입력으로 같은 블록을 전달한다.
-
-`<repo>`는 `HAN_REPO`이거나 저장소 체크아웃이다. 스크립트 복사본을 만들지 않는다.
 
 ## 보낼 내용
 
@@ -61,8 +63,8 @@ python "<repo>/plugins/chef/grok/scripts/han_state.py" brief --project "<프로�
 기본 인계를 이 문장으로 바꾸지 않는다.
 
 ```text
-python "<repo>/plugins/chef/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime claude --goal "<한 줄 목표>"
-python "<repo>/plugins/chef/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime codex --goal "<한 줄 목표>"
+python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime claude --goal "<한 줄 목표>"
+python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime codex --goal "<한 줄 목표>"
 ```
 
 Claude 문장은 `/chef:mission ...`, Codex 문장은 `$chef:chef-mission ...`이다.

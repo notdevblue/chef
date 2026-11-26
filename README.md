@@ -11,11 +11,6 @@ Claude Code · Codex CLI · Grok CLI · Hermes Agent에서 개발 작업을 계�
 
 Python 3.11 이상과 사용할 런타임의 CLI가 필요합니다. macOS·Linux에서는 `python3` 또는 `python`을, Windows에서는 `python`을 PATH에 둡니다. [설치 안내](docs/install.md#python-3-진입점)
 
-```bash
-git clone https://github.com/notdevblue/chef.git
-cd chef
-```
-
 ### Codex
 
 ```bash
@@ -32,16 +27,13 @@ claude plugin install chef@chef --scope user
 
 ### Grok
 
-처음 설치할 때 체크아웃의 `plugins/chef`를 `~/.grok/plugins/chef`에 연결합니다.
-Linux/macOS에서는 저장소 폴더에서 실행합니다.
-
 ```bash
-mkdir -p ~/.grok/plugins
-ln -s "$PWD/plugins/chef" ~/.grok/plugins/chef
+grok plugin marketplace add https://github.com/notdevblue/chef.git
+grok plugin install chef@chef --trust
 grok inspect
 ```
 
-Windows에서는 junction을 사용합니다. 기존 설치가 있다면 [설치·업데이트 안내](docs/install.md)를 따르세요.
+기존 심볼릭 링크나 junction을 사용했다면 [Grok 전환 절차](docs/install.md#grok-등록)를 따르세요.
 
 ### Hermes Agent (macOS·Linux)
 
