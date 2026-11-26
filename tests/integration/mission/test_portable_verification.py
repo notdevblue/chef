@@ -133,8 +133,22 @@ def test_shell_command_operand_matches_actual_local_option_parsing(shell, option
     from chef.guards.argv import describe
 
     executable = shutil.which(shell)
+    if os.name == "nt" and shell == "bash":
+        # The Windows bash launcher enters WSL, whose paths and startup are not
+        # those of this local-process test. Prefer Git for Windows' native shell.
+        git = shutil.which("git.exe")
+        if git:
+            root = Path(git).resolve().parent.parent
+            executable = next((str(path) for folder in ("bin", "usr/bin")
+                               if (path := root / folder / f"{shell}.exe").is_file()), executable)
+        if executable:
+            windows = os.environ.get("SystemRoot")
+            if windows and Path(executable).resolve().parent in {
+                Path(windows) / folder for folder in ("System32", "Sysnative", "SysWOW64")
+            }:
+                executable = None
     if not executable:
-        pytest.skip("shell unavailable")
+        pytest.skip("native local shell unavailable")
     script = "printf CHEF_SCRIPT_PROBE"
     argv = [executable, *options, script]
     assert describe(argv).script == script

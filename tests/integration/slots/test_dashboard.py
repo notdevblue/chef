@@ -302,13 +302,14 @@ def test_view_updates_verified_tabular_questions_without_changing_raw_files(worl
     path.write_bytes(old)
     view = dashboard.view_url(path)
     source = detail_dom(world.get(view)[1]).elements("script", id="source")[0]
-    assert "- Blue — Higher contrast." in json.loads(source.text())
+    choice = "- Blue  \n  영향 · Higher contrast."
+    assert choice in json.loads(source.text())
     assert b"| id |" in dashboard.route(world.config, dashboard.raw_url(path))[2]
     assert path.read_bytes() == old
     path.write_bytes(old.replace(b"Higher contrast.", b"Edited outside publication."))
     source = detail_dom(world.get(view)[1]).elements("script", id="source")[0]
     assert "| Blue |" in json.loads(source.text())
-    assert "- Blue — Higher contrast." not in json.loads(source.text())
+    assert choice not in json.loads(source.text())
 
 
 def test_broken_files_do_not_break_the_overview(world):
