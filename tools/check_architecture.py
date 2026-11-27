@@ -1,6 +1,8 @@
 """Check deployment and Python dependency boundaries without running product code."""
 
 import ast
+import json
+import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -52,13 +54,35 @@ def inspect(plugin=PLUGIN):
 
 
 def main():
-    errors = inspect()
+    errors = inspect() + inspect_versions()
     for error in errors:
         print(error)
     if errors:
         return 1
-    print("Deployment tests, package imports, and infrastructure dependencies verified")
+    print("Deployment tests, package imports, infrastructure dependencies, and release versions verified")
     return 0
+
+
+def inspect_versions(repo=REPO):
+    """Native installers use separate manifests; keep all release pins equal."""
+    repo = Path(repo)
+    versions = {}
+    try:
+        marketplace = json.loads((repo / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
+        versions["marketplace"] = next(item["version"] for item in marketplace["plugins"] if item["name"] == "chef")
+        for runtime in ("claude", "codex", "grok"):
+            manifest = repo / "plugins/chef" / ("." + runtime + "-plugin/plugin.json")
+            versions[runtime] = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+        hermes = (repo / "plugins/chef/hermes/plugin.yaml").read_text(encoding="utf-8")
+        version = re.search(r"(?m)^version:[ \t]*(\S+)[ \t]*$", hermes)
+        versions["hermes"] = version.group(1).strip("\"'") if version else None
+    except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+        return ["release version metadata cannot be read: " + str(error)]
+    if any(not isinstance(value, str) or not value for value in versions.values()):
+        return ["release versions must be nonempty strings"]
+    if len(set(versions.values())) != 1:
+        return ["release versions differ: " + ", ".join(name + "=" + value for name, value in versions.items())]
+    return []
 
 
 if __name__ == "__main__":
