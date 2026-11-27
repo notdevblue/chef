@@ -550,10 +550,11 @@ def test_invalid_regex_is_reported_on_allowed_command_only_while_mission_active(
 
 
 def test_rule_exception_matches_entire_fragment_and_only_its_own_rule():
-    rule = {"pattern": "submit", "except": ["rg submit"], "reason": "submit"}
+    rule = {"pattern": "submit", "except": ["inspect submit"], "reason": "submit"}
     adapter = {"guard": {"deny": [rule]}}
-    assert mission_guard.judge_command(adapter, "rg submit").kind == "allow"
-    assert mission_guard.judge_command(adapter, "rg submit extra").denied
+    assert mission_guard.judge_command(adapter, "inspect submit").kind == "allow"
+    assert mission_guard.judge_command(adapter, "inspect submit extra").denied
+    assert mission_guard.judge_command(adapter, "rg submit extra").kind == "allow"
     assert mission_guard.judge_command(adapter, "prefix rg submit").denied
     adapter["guard"]["deny"].append({"pattern": "^rg", "reason": "separate rule"})
     assert mission_guard.judge_command(adapter, "rg submit").reason == "separate rule"
@@ -580,7 +581,7 @@ def test_rule_exception_leaves_other_fragments_checked(command, tool):
 def test_invalid_rule_exceptions_do_not_grant_allowance(project, exceptions):
     make_adapter(project, deny=[{"pattern": "submit", "except": exceptions}])
     make_active(project)
-    output = run_guard(project, "rg submit")
+    output = run_guard(project, "inspect submit")
     assert is_denied(output)
     assert "guard.deny.except" in output["systemMessage"]
     assert "예외를 적용하지 않음" in context_of(output)
@@ -598,7 +599,7 @@ def test_check_guard_reports_invalid_exception_without_allowing_it(tmp_path):
     make_adapter(tmp_path, deny=[{"pattern": "submit", "except": ["rg submit", "["]}])
     adapter = tmp_path / ".claude" / "orchestrator" / "adapter.json"
     cases = tmp_path / "cases.json"
-    cases.write_text(json.dumps([{"expect": "deny", "command": "rg submit"}]), encoding="utf-8")
+    cases.write_text(json.dumps([{"expect": "deny", "command": "inspect submit"}]), encoding="utf-8")
     mismatches, errors, problems = load_check_guard().evaluate(str(adapter), str(cases))
     assert (mismatches, errors) == ([], [])
     assert len(problems) == 1

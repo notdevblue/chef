@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from chef.guards import mission, questions
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.paths import inside_real_root, same_path
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment

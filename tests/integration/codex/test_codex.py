@@ -476,7 +476,7 @@ def test_installed_codex_integrity_uses_config_registry_read_only(project, tmp_p
     env = {key: value for key, value in os.environ.items() if key not in ("HAN_ADAPTERS_DIR", "HAN_REPO", "CLAUDE_PROJECT_DIR")}
     env.update(CODEX_HOME=str(config_home), HAN_GUARD_LOG=str(log))
     payload = {"hook_event_name": event, "tool_name": tool_name, "session_id": "owner", "agent_id": "child", "cwd": str(project),
-               "tool_input": {"command": "*** Begin Patch\n*** End Patch"}, "stop_hook_active": True}
+               "tool_input": {"command": "*** Begin Patch\n*** End Patch"}, "stop_hook_active": False}
 
     def run(fields):
         done = subprocess.run([sys.executable, str(installed / "codex/question_integrity.py")], input=json.dumps(fields).encode(),
@@ -485,7 +485,8 @@ def test_installed_codex_integrity_uses_config_registry_read_only(project, tmp_p
 
     before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in folder.parent.rglob("*") if path.is_file()}
     output = run(payload)
-    assert output["decision"] == "block" and "ask-colors.md" in output["reason"]
+    assert "decision" not in output and "ask-colors.md" in output["systemMessage"]
+    assert run({**payload, "stop_hook_active": True}) == {}
     if event == "PostToolUse":
         assert output["hookSpecificOutput"]["hookEventName"] == event
     assert run({**payload, "session_id": "unrelated"}) == {}

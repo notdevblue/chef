@@ -10,7 +10,7 @@ from pathlib import Path
 
 from chef.guards import mission
 from chef.infrastructure import configuration, paths
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.locking import FileLock
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment
@@ -71,9 +71,9 @@ def project_paths(project, values, label):
         current = Path(project)
         for part in relative.parts:
             current /= part
-            if paths.is_link(current):
+            if paths.is_link(current) and (label != "inputPaths" or not paths.inside_real_root(project, current)):
                 raise ValueError(f"{label} cannot traverse links")
-        if absolute.exists() and not absolute.is_file():
+        if absolute.exists() and not absolute.is_file() and not (label == "inputPaths" and absolute.is_dir()):
             raise ValueError(f"{label} accepts exact files only")
         result.append(relative.as_posix())
     return list(dict.fromkeys(result))
@@ -84,6 +84,36 @@ def snapshot(project, values):
     for name in project_paths(project, values, "snapshot"):
         path = Path(project, name)
         result[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+    return result
+
+
+def input_snapshot(project, values):
+    result = {}
+    for name in project_paths(project, values, "inputPaths"):
+        path = Path(project, name)
+        if not path.is_dir():
+            result[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+            continue
+        entries = {}
+        pending, seen = [(path, Path(), frozenset())], 0
+        while pending:
+            child, relative, ancestors = pending.pop()
+            seen += 1
+            if seen > 250000:
+                raise ValueError("input directory exceeds 250000 entries")
+            if not paths.inside_real_root(project, child):
+                raise ValueError("input directory escaped the project through a link")
+            if child.is_dir():
+                info = child.stat()
+                identity = (info.st_dev, info.st_ino) if info.st_ino else os.path.realpath(child)
+                if identity in ancestors:
+                    raise ValueError("input directory contains a link cycle")
+                pending.extend((item, relative / item.name, ancestors | {identity}) for item in child.iterdir())
+            elif child.is_file():
+                entries[relative.as_posix()] = hashlib.sha256(child.read_bytes()).hexdigest()
+            if len(entries) > 10000:
+                raise ValueError("input directory exceeds 10000 files")
+        result[name] = digest(entries)
     return result
 
 
@@ -107,9 +137,19 @@ def observed_snapshot(project, values):
 
 
 def collect_snapshots(request, result):
+    after = {}
+    for name in request["inputPaths"]:
+        try:
+            after.update(input_snapshot(request["project"], [name]))
+        except (ValueError, OSError) as error:
+            after[name] = {"kind": "invalid-path", "error": str(error)}
     output = {**result, "before": request["before"],
-              "after": observed_snapshot(request["project"], request["inputPaths"]),
+              "after": after,
               "files": observed_snapshot(request["project"], request["files"])}
+    for name in request["inputPaths"]:
+        path = Path(request["project"], name)
+        if path.is_dir() and request.get("inputKinds", {}).get(name) != "directory":
+            output["after"][name] = {"kind": "invalid-path", "error": "input became a directory after admission"}
     if any(isinstance(value, dict) for field in ("after", "files") for value in output[field].values()):
         for name in ("error", "errorCode"):
             if name in result:
@@ -146,7 +186,8 @@ def ownership(request):
     if request.get("unitContract") and request["unitContract"] != binding:
         raise ValueError("worker unit brief changed")
     return adapter, {"runtime": runtime, "session": active.session,
-                     "mission": active.id, "state": state, "unitContract": binding}
+                      "mission": active.id, "state": state, "unitContract": binding,
+                      "timeboxSeconds": int(row["timebox"]) * 60 if str(row.get("timebox", "")).isdecimal() else 0}
 
 
 def prepare(value):
@@ -159,8 +200,8 @@ def prepare(value):
     if not isinstance(prompt, str) or not prompt.strip() or "\x00" in prompt:
         raise ValueError("prompt must be nonempty text")
     timeout = request.get("timeout", 600)
-    if type(timeout) is not int or not 10 <= timeout <= 3600:
-        raise ValueError("timeout must be 10..3600 seconds")
+    if type(timeout) is not int or not 10 <= timeout <= 86400:
+        raise ValueError("timeout must be 10..86400 seconds")
     request["timeout"] = timeout
     if "independent" in request and type(request["independent"]) is not bool:
         raise ValueError("independent must be a boolean")
@@ -176,6 +217,14 @@ def prepare(value):
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
         raise ValueError("workers must be an object")
+    maximum = settings.get("maxTimeoutSeconds", 7200)
+    if "timeout" not in value and type(maximum) is int:
+        timeout = min(timeout, maximum, owner.get("timeboxSeconds") or maximum)
+        request["timeout"] = timeout
+    if type(maximum) is not int or not 10 <= maximum <= 86400 or timeout > maximum:
+        raise ValueError("worker timeout exceeds workers.maxTimeoutSeconds")
+    if owner.get("timeboxSeconds", 0) > 0 and timeout > owner["timeboxSeconds"]:
+        raise ValueError("worker timeout exceeds the approved unit timebox")
     resolved = policy.resolve(request, settings, owner_runtime=owner["runtime"], role=request["role"])
     request["mode"] = resolved["mode"]
     request["allowedRuntimes"] = resolved["allowedRuntimes"]
@@ -183,14 +232,26 @@ def prepare(value):
     request["unitContract"] = owner["unitContract"]
     role_key = requested_role if requested_role in ("audit", "research", "implement", "implementSmall", "verify", "review", "reviewSmall") else ROLE_KEYS[request["role"]]
     roles = adapter.get("roles", {})
-    request["actualRole"] = text(roles.get(role_key, roles.get("review") if role_key == "audit" else None)
-                                  or "chef:" + request["role"], "actual role")
+    default_role = roles.get(role_key, roles.get("review") if role_key == "audit" else None) or "chef:" + request["role"]
+    actual_role = text(request.get("actualRole", default_role), "actual role")
+    if actual_role not in (default_role, "chef:" + request["role"]):
+        raise ValueError("actualRole must preserve the requested role capability")
+    from chef.guards.subagents import allow_patterns, allows
+
+    patterns, problem = allow_patterns(adapter)
+    if problem or (patterns is not None and not allows(patterns, actual_role)):
+        raise ValueError(problem or "actualRole is outside agents.allow")
+    request["actualRole"] = actual_role
+    from chef.workers.verification import bind
+
+    request["verification"] = bind(request, owner)
     project = request["project"]
     request["files"] = project_paths(project, request.get("files", []), "files")
     request["inputPaths"] = project_paths(project, request.get("inputPaths", []), "inputPaths")
+    request["inputKinds"] = {name: "directory" if Path(project, name).is_dir() else "file" for name in request["inputPaths"]}
     role = request["role"].removeprefix("chef:")
-    if role not in READ_ONLY and not request["files"]:
-        raise ValueError("write and verification workers require an explicit files scope")
+    if role not in READ_ONLY and role != "verifier" and not request["files"]:
+        raise ValueError("write workers require an explicit files scope")
     for key in ("requiredTools", "hostTools", "hostRoles"):
         request[key] = string_list(request.get(key, []), key)
     for name in request["files"]:
@@ -199,7 +260,7 @@ def prepare(value):
             raise ValueError("worker files cannot include mission control state")
         if any(part.casefold() in (".git", ".claude", ".codex", ".grok", ".chef") for part in Path(name).parts):
             raise ValueError("worker files cannot include executable policy or repository metadata")
-    request["before"] = snapshot(project, request["inputPaths"])
+    request["before"] = input_snapshot(project, request["inputPaths"])
     request["beforeFiles"] = snapshot(project, request["files"])
     request["implementation"] = implementation_digest()
     request["adapterDigest"] = digest(adapter)
@@ -297,7 +358,7 @@ def dispatch(value, *, store=None, launch=None):
     identity = digest({"workspace": [workspace.st_dev, workspace.st_ino],
                        "mission": request["mission"], "requestId": request["requestId"]})
     submission = Path(store.root) / "submissions" / (identity + ".json")
-    gate = str(Path(store.root) / "admission.lock")
+    gate = str(Path(store.root) / "admission" / (digest([workspace.st_dev, workspace.st_ino]) + ".lock"))
     with FileLock(gate, "worker admission", timeout=10):
         existing = existing_submission(store, request, submission)
         if existing is not None:
@@ -325,7 +386,7 @@ def dispatch(value, *, store=None, launch=None):
         current_adapter, _ = ownership(request)
         if digest(current_adapter) != request["adapterDigest"]:
             raise ValueError("worker adapter changed during admission")
-        if (snapshot(request["project"], request["inputPaths"]) != request["before"]
+        if (input_snapshot(request["project"], request["inputPaths"]) != request["before"]
                 or snapshot(request["project"], request["files"]) != request["beforeFiles"]):
             raise ValueError("worker files changed during admission")
         check_conflicts(store, request)
@@ -383,11 +444,11 @@ def supervise(key, token, *, store=None):
         adapter, owner = ownership(request)
         if digest(adapter) != request["adapterDigest"] or implementation_digest() != request["implementation"]:
             raise ValueError("worker configuration or implementation changed before launch")
-        if snapshot(request["project"], request["inputPaths"]) != request["before"]:
+        if input_snapshot(request["project"], request["inputPaths"]) != request["before"]:
             raise ValueError("worker inputs changed before launch")
         if snapshot(request["project"], request["files"]) != request["beforeFiles"]:
             raise ValueError("worker output files changed before launch")
-        owner.update(files=request["files"], inputPaths=request["inputPaths"])
+        owner.update(files=request["files"], inputPaths=request["inputPaths"], verification=request.get("verification"))
         owner["cancelPath"] = str(directory / "cancel.json")
         if request.get("resumeSession"):
             previous = require_record(store, request["previous"])
@@ -432,7 +493,7 @@ def supervise(key, token, *, store=None):
             except backends.RateLimited as error:
                 if (not error.before_work or error.runtime != runtime or cancelled()
                         or snapshot(request["project"], request["files"]) != request["beforeFiles"]
-                        or snapshot(request["project"], request["inputPaths"]) != request["before"]):
+                        or input_snapshot(request["project"], request["inputPaths"]) != request["before"]):
                     raise ValueError("rate-limited worker cannot safely reroute after changes or cancellation") from error
                 current_adapter, _ = ownership(request)
                 if digest(current_adapter) != request["adapterDigest"]:

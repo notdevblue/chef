@@ -68,10 +68,9 @@ def sample(tmp_path, monkeypatch, capsys):
     (root / "scope.json").write_text('["widget.py"]', encoding="utf-8")
     (root / "findings.json").write_text('[]', encoding="utf-8")
     folder = root / "state/widget"
-    registry = home / ".cache/chef/execution"
-    monkeypatch.setattr(execution, "registry_directory", lambda: registry)
     effective_adapter = configuration.read_adapter(configuration.locate(str(root), "claude").adapter_path, "claude")
-    return root, folder, registry, effective_adapter
+    with execution.workspace_scope(root):
+        yield root, folder, execution.registry_directory(), effective_adapter
 
 
 def request_file(sample, script="print('widget inspected')", *, timeout=10, limit=1024):

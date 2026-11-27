@@ -201,6 +201,14 @@ def consume_shared_allow_once(state_dir, mission_id, command, *, payload, partic
     approval but cannot restore a consumed approval or authorize another call.
     """
     try:
+        preflight = (config or {}).get("adapter", {}).get("guard", {}).get("allowOncePreflightCommand")
+        token = Path(state_dir) / mission_id / "allow-once"
+        if participant == "chef-mission" and preflight and token.is_file() and _matching_line(token.read_bytes(), command.strip()) is not None:
+            from chef.guards.policy import command_denial
+
+            reason = command_denial(preflight, payload, payload.get("cwd"))
+            if reason:
+                raise SharedAllowOnceError("shared allow-once preflight denied without consuming approval: " + reason)
         return _consume(state_dir, mission_id, command, payload, participant, participants, active, config)
     except SharedAllowOnceError:
         raise

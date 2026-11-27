@@ -28,6 +28,7 @@ MAX_HARDLINKS = 16384
 MAX_ALIASES = 16384
 MAX_JSON_DEPTH = 64
 COMMAND_CONTEXT = ContextVar("chef_execution_command", default=None)
+REGISTRY_CONTEXT = ContextVar("chef_execution_registry", default=None)
 
 
 class ExecutionBusy(VerificationError):
@@ -40,8 +41,43 @@ class ExecutionBusy(VerificationError):
 
 
 def registry_directory():
-    """One per-user registry shared by installed runtimes and project aliases."""
+    """A workspace scope is shared by runtimes, never by unrelated projects."""
+    if REGISTRY_CONTEXT.get() is not None:
+        return Path(REGISTRY_CONTEXT.get())
     return Path.home() / ".cache" / "chef" / "execution"
+
+
+def workspace_root(cwd):
+    root = Path(cwd).resolve()
+    for candidate in (root, *root.parents):
+        if any((candidate / marker).exists() for marker in (".p4config", ".git", ".chef/binding.json",
+                   ".claude/orchestrator/adapter.json", ".codex/orchestrator/adapter.json",
+                   ".grok/orchestrator/adapter.json", ".hermes/orchestrator/adapter.json")):
+            return candidate
+    return root
+
+
+def legacy_leases(directory):
+    """Read old atomic records during upgrade without taking the global gate."""
+    legacy = Path.home() / ".cache" / "chef" / "execution"
+    if not Path(directory).is_relative_to(legacy / "workspaces") or not (legacy / "inputs.json").is_file():
+        return []
+    return live_leases(legacy)
+
+
+@contextlib.contextmanager
+def workspace_scope(project):
+    if REGISTRY_CONTEXT.get() is not None:
+        yield
+        return
+    root = Path(project).resolve()
+    info = root.stat()
+    key = digest([info.st_dev, info.st_ino] if info.st_ino else str(root))
+    token = REGISTRY_CONTEXT.set(registry_directory() / "workspaces" / key)
+    try:
+        yield
+    finally:
+        REGISTRY_CONTEXT.reset(token)
 
 
 def read_record(path):
@@ -271,6 +307,8 @@ def require_no_overlap(records, targets, mode, hardlinks=()):
         if info.st_nlink > 1 and info.st_ino and not os.path.isdir(target):
             target_links.add((info.st_dev, info.st_ino))
     for record in records:
+        if record.get("indexing") and (mode == "mutation" or record["mode"] == "mutation"):
+            raise VerificationError("protected execution input: workspace input index is being prepared", "input_busy")
         if mode == "verify" and record["mode"] == "verify":
             continue
         if target_links.intersection(tuple(item) for item in record.get("hardlinks", [])):
@@ -292,26 +330,38 @@ def input_lease(values, *, mode="verify", directory=None, label=""):
         raise ValueError("unknown execution lease mode")
     directory = Path(directory) if directory is not None else registry_directory()
     lock = directory / "inputs.lock"
+    targets = canonical_inputs(values)
     with locking.FileLock(lock, "execution inputs", timeout=2):
         records = live_leases(directory)
-        targets = canonical_inputs(values)
-        require_no_overlap(records, targets, mode)
-        links, aliases = input_file_aliases(targets)
-        require_no_overlap(records, [*targets, *aliases], mode, links)
+        require_no_overlap([*records, *legacy_leases(directory)], targets, mode)
         if len(records) >= MAX_RECORDS:
             raise VerificationError("execution lease registry is full", "execution_registry_invalid")
         record = {"token": uuid.uuid4().hex, "pid": os.getpid(), "processStart": process_start(os.getpid()), "mode": mode,
-                  "paths": targets, "hardlinks": links, "aliases": aliases, "label": str(label), "startedAt": utc_now()}
+                  "paths": targets, "hardlinks": [], "aliases": [], "indexing": True, "label": str(label), "startedAt": utc_now()}
         write_record(directory / "inputs.json", {"leases": [*records, record]})
+    scope = REGISTRY_CONTEXT.set(directory)
+    indexed = False
     try:
+        links, aliases = input_file_aliases(targets)
+        with locking.FileLock(lock, "execution inputs", timeout=2):
+            records = [item for item in live_leases(directory) if item["token"] != record["token"]]
+            require_no_overlap([*records, *legacy_leases(directory)], [*targets, *aliases], mode, links)
+            record.update(hardlinks=links, aliases=aliases, indexing=False)
+            write_record(directory / "inputs.json", {"leases": [*records, record]})
+            indexed = True
         yield record
     finally:
-        with locking.FileLock(lock, "execution inputs", timeout=2):
-            records = live_leases(directory)
-            write_record(directory / "inputs.json", {
-                "leases": [item for item in records if item["token"] != record["token"]
-                           or item.get("launchPending") is True or child_alive(item)]
-            })
+        try:
+            with locking.FileLock(lock, "execution inputs", timeout=2):
+                records = live_leases(directory)
+                remaining = [item for item in records if item["token"] != record["token"]
+                             or item.get("launchPending") is True or child_alive(item)]
+                if not indexed and not remaining:
+                    (directory / "inputs.json").unlink(missing_ok=True)
+                else:
+                    write_record(directory / "inputs.json", {"leases": remaining})
+        finally:
+            REGISTRY_CONTEXT.reset(scope)
 
 
 def mutation_lease(values, **kwargs):
@@ -324,17 +374,19 @@ def require_mutation_allowed(values, *, directory=None):
     try:
         os.stat(directory / "inputs.json")
     except FileNotFoundError:
+        require_no_overlap(legacy_leases(directory), canonical_inputs(values), "mutation")
         return
     targets = canonical_inputs(values)
     with locking.FileLock(directory / "inputs.lock", "execution inputs", timeout=2):
         records = live_leases(directory)
-        require_no_overlap(records, targets, "mutation")
+        require_no_overlap([*records, *legacy_leases(directory)], targets, "mutation")
         write_record(directory / "inputs.json", {"leases": records})
 
 
 def has_input_leases():
     """Cheap bounded read before shell target extraction; corrupt records deny."""
-    return bool(live_leases(registry_directory()))
+    directory = registry_directory()
+    return bool(live_leases(directory) or legacy_leases(directory))
 
 
 def job_directory(folder):

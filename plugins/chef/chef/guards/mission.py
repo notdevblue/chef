@@ -280,6 +280,9 @@ def find_denied_reason(adapter, fragments, problems=None, command="", check_p4=T
     fragments = allowed_fragments(adapter, fragments, problems)
     if not fragments:
         return ""
+    from chef.guards.commands import readonly
+    safe_read = bool(command) and readonly(command)
+
     for rule in (adapter.get("guard") or {}).get("deny") or []:
         pattern = rule.get("pattern") if isinstance(rule, dict) else None
         if not isinstance(pattern, str):
@@ -297,10 +300,14 @@ def find_denied_reason(adapter, fragments, problems=None, command="", check_p4=T
         if command_exceptions and literal_data_command(command):
             if any(exception.fullmatch(command) for exception in command_exceptions):
                 continue
-        if any(
-            compiled.search(fragment) and not any(exception.fullmatch(fragment) for exception in exceptions)
-            for fragment in fragments
-        ):
+        for fragment in fragments:
+            match = compiled.search(fragment)
+            if not match or any(exception.fullmatch(fragment) for exception in exceptions):
+                continue
+            first = re.match(r"\S+", fragment)
+            search = first and first.group().casefold().removesuffix(".exe") in ("rg", "grep", "select-string")
+            if safe_read and search and readonly(fragment) and match.start() >= first.end():
+                continue  # A searched word is argument data, not an invocation.
             return str(rule.get("reason") or "차단된 명령")
     return p4_deny_reason(adapter, fragments, problems) if check_p4 else ""
 
@@ -635,7 +642,7 @@ def written_path(payload):
     return ""
 
 
-def coordinator_write_reason(project, cwd, target, globs):
+def coordinator_write_reason(project, cwd, target, globs, documentation=False):
     """프로젝트 안 경로가 globs 어디에도 안 맞으면 거부 이유. 프로젝트 밖(메모리·임시 파일)은 보지 않음."""
     base = os.path.abspath(project)
     path = os.path.abspath(os.path.join(cwd or base, target))
@@ -645,6 +652,11 @@ def coordinator_write_reason(project, cwd, target, globs):
         return ""
     relative = relative.replace(os.sep, "/")
     if relative == ".." or relative.startswith("../"):
+        return ""
+    parts = relative.casefold().split("/")
+    if (documentation and os.path.splitext(parts[-1])[1] in (".md", ".txt")
+            and not any(part.startswith(".") for part in parts)
+            and parts[-1] not in ("agents.md", "agents.override.md", "claude.md", "claude.local.md")):
         return ""
     if any(glob_regex(pattern).fullmatch(relative) for pattern in globs):
         return ""
@@ -658,8 +670,8 @@ def decide_write(payload):
     outcome = Outcome()
     if is_grok_subagent(payload) or (payload.get("han_runtime") != "grok" and payload.get("agent_id")):
         return outcome
-    target = written_path(payload)
-    if not target:
+    targets = question_write_guard.tool_targets(payload)
+    if not targets:
         return outcome
     located = locate_adapter(payload)
     if not located:
@@ -675,7 +687,11 @@ def decide_write(payload):
     if active.session != str(payload.get("session_id") or ""):
         return outcome
     outcome.messages.extend(problems)
-    outcome.deny = coordinator_write_reason(located.project, payload.get("cwd"), target, globs)
+    for target in targets:
+        outcome.deny = coordinator_write_reason(located.project, payload.get("cwd"), target, globs,
+                            ((adapter.get("guard") or {}).get("coordinatorDocumentation") is True))
+        if outcome.deny:
+            break
     return outcome
 
 
@@ -688,12 +704,18 @@ def execution_write_reason(payload):
     """
     if payload.get("tool_name") not in (*question_write_guard.STRUCTURED_TOOLS, *question_write_guard.PATCH_TOOLS, *GUARDED_TOOLS):
         return ""
-    try:
-        if not execution.has_input_leases():
+    cwd = payload.get("cwd") or os.getcwd()
+    if payload.get("tool_name") in GUARDED_TOOLS:
+        from chef.guards.commands import readonly
+
+        if readonly((payload.get("tool_input") or {}).get("command", ""), payload["tool_name"]):
             return ""
+    try:
+        with execution.workspace_scope(execution.workspace_root(cwd)):
+            if not execution.has_input_leases():
+                return ""
     except (execution.VerificationError, execution.locking.LockBusy, OSError, ValueError) as error:
         return f"execution input protection: {error}"
-    cwd = payload.get("cwd") or os.getcwd()
     targets = question_write_guard.tool_targets(payload)
     if targets:
         targets = [question_write_guard.absolute_path(target, cwd) for target in targets]
@@ -703,6 +725,7 @@ def execution_write_reason(payload):
             return ""
         tool_name = payload["tool_name"]
         literal_paths = set()
+        p4_roots = []
         fragment_cwd = cwd
         # The shared shell extractor resolves literal cd and constant variable
         # assignments. Do not invent a cwd after an unresolved directory change.
@@ -711,6 +734,9 @@ def execution_write_reason(payload):
             tokens = [unquote(token) for token in raw_tokens]
             if not tokens:
                 continue
+            invocation = p4_invocation(p4c_as_p4(fragment, str(execution.workspace_root(cwd))) or fragment)
+            if invocation and invocation[1] in ("sync", "revert", "clean", "reconcile", "rec", "delete", "move"):
+                p4_roots.append(str(execution.workspace_root(cwd)))
             name = tokens[0].casefold()
             if name in ("pushd", "popd", "push-location", "pop-location"):
                 return ""
@@ -768,10 +794,12 @@ def execution_write_reason(payload):
                     # parent. Protect that prefix without guessing its matches.
                     resolved_targets.append(os.path.dirname(target[:wildcard]) or cwd)
         targets = resolved_targets
+        targets.extend(p4_roots)
     if not targets:
         return ""
     try:
-        execution.require_mutation_allowed(targets)
+        with execution.workspace_scope(execution.workspace_root(cwd)):
+            execution.require_mutation_allowed(targets)
     except (execution.VerificationError, execution.locking.LockBusy, OSError, ValueError) as error:
         return f"execution input protection: {error}"
     return ""
@@ -805,7 +833,7 @@ def decide(payload):
     if outcome.deny:
         return outcome
     tool_name = payload.get("tool_name")
-    if tool_name in WRITE_TOOLS:
+    if tool_name in (*WRITE_TOOLS, *question_write_guard.PATCH_TOOLS):
         try:
             return decide_write(payload)
         except GuardOff:

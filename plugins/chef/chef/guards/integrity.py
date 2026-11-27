@@ -32,7 +32,7 @@ def decide(payload, runtime=""):
     payload = normalize_payload(payload, runtime)
     runtime = payload["han_runtime"]
     event = payload.get("hook_event_name")
-    if event != "Stop":
+    if event != "Stop" or payload.get("stop_hook_active"):
         return {}
     if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
         return {}
@@ -60,10 +60,7 @@ def decide(payload, runtime=""):
         except Exception as error:
             issues = [f"검사 실패 ({type(error).__name__}: {error})"]
         if issues:
-            return {
-                "decision": "block",
-                "reason": "\n".join([*issues, repair_direction(located, active, folder, runtime)]),
-            }
+            return {"systemMessage": "\n".join([*issues, repair_direction(located, active, folder, runtime)])}
     return {}
 
 

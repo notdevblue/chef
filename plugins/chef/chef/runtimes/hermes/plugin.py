@@ -101,6 +101,11 @@ def canonical_payload(tool_name, args, session_id, task_id, cwd):
 
 
 def workspace_policy(payload):
+    from chef.guards.commands import readonly
+
+    tool = payload.get("tool_name")
+    reading = tool in ("Read", "Grep", "Glob", "WebFetch", "WebSearch") or (
+        tool in ("Bash", "PowerShell") and readonly((payload.get("tool_input") or {}).get("command", ""), tool))
     targets = questions.tool_targets(payload)
     contexts = questions.adapter_contexts(payload, targets, mission)
     external = any(external_slots.configured(adapter) for _, adapter in contexts)
@@ -108,7 +113,7 @@ def workspace_policy(payload):
         active = mission.read_active(mission.state_dir_of(located.project, adapter))
         if active.corrupt:
             return external, "ACTIVE is corrupt; inspect the mission before continuing"
-        if active.id and (active.session != payload["session_id"] or active.runtime not in ("", "hermes")):
+        if active.id and not reading and (active.session != payload["session_id"] or active.runtime not in ("", "hermes")):
             return external, "this workspace belongs to another active mission session"
     return external, ""
 

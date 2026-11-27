@@ -90,16 +90,16 @@ def test_opaque_writes_are_detected_without_rewriting(project, event, mutation):
     else:
         source.write_bytes(b"\xff")
     before = snapshot(project[0])
-    output = question_integrity.decide(payload(project, event, stop_hook_active=True))
-    assert output["decision"] == "block"
-    assert "ask-palette.md" in output["reason"] or "검사 실패" in output["reason"]
-    assert "question check" in output["reason"] and "question restore" in output["reason"]
+    output = question_integrity.decide(payload(project, event))
+    assert output["systemMessage"]
+    assert "ask-palette.md" in output["systemMessage"] or "검사 실패" in output["systemMessage"]
+    assert "question check" in output["systemMessage"] and "question restore" in output["systemMessage"]
     assert "permissionDecision" not in output.get("hookSpecificOutput", {})
     if event == "PostToolUse":
-        assert output["hookSpecificOutput"] == {"hookEventName": event, "additionalContext": output["reason"]}
+        assert output["hookSpecificOutput"] == {"hookEventName": event, "additionalContext": output["systemMessage"]}
     else:
         assert "hookSpecificOutput" not in output
-        assert question_integrity.decide(payload(project, event, stop_hook_active=True))["decision"] == "block"
+        assert question_integrity.decide(payload(project, event, stop_hook_active=True)) == {}
     assert snapshot(project[0]) == before
 
 
@@ -109,7 +109,7 @@ def test_owner_and_common_parent_child_session_scope(project, fields, blocked):
     _, mission = project
     (mission / "ask-palette.md").write_text("# Unregistered fictional question", encoding="utf-8")
     output = question_integrity.decide(payload(project, **fields))
-    assert (output.get("decision") == "block") is blocked
+    assert bool(output.get("systemMessage")) is blocked
 
 
 @pytest.mark.parametrize("runtime", ["grok", "codex", "claude"])
@@ -126,10 +126,10 @@ def test_repair_command_preserves_detected_runtime_and_adapter(project, runtime,
         output = question_integrity.decide(fields)
     else:
         output = question_integrity.decide(fields, runtime)
-    assert output["decision"] == "block"
+    assert output["systemMessage"]
     expected = f'python "{os.path.join(question_integrity.SCRIPTS, "mission_state.py")}" --runtime {runtime} question check --project "{root}" --mission "{mission.name}"'
-    assert expected in output["reason"]
-    assert str(mission) in output["reason"]
+    assert expected in output["systemMessage"]
+    assert str(mission) in output["systemMessage"]
 
 
 def test_no_active_or_adapter_does_not_audit_archived_questions(project):
@@ -151,11 +151,11 @@ def test_unowned_active_is_quiet(project, invalid):
 
 def test_missing_owned_mission_and_inspector_errors_block(project, monkeypatch):
     project[1].rmdir()
-    assert question_integrity.decide(payload(project))["decision"] == "block"
+    assert question_integrity.decide(payload(project))["systemMessage"]
     project[1].mkdir()
     monkeypatch.setattr(question_integrity.mission_state, "question_inspections", lambda folder: (_ for _ in ()).throw(OSError("unreadable")))
     output = question_integrity.decide(payload(project))
-    assert output["decision"] == "block" and "unreadable" in output["reason"]
+    assert output["systemMessage"] and "unreadable" in output["systemMessage"]
 
 
 def test_unavailable_adapter_and_missing_session_are_quiet(project):
@@ -179,14 +179,14 @@ def test_unsupported_events_and_tools_are_ignored(project):
 def test_patch_payload_shape_does_not_bypass_owned_inspection(project, tool_input):
     (project[1] / "ask-palette.md").write_text("# Unregistered fictional question", encoding="utf-8")
     output = question_integrity.decide(payload(project, "Stop", tool_name="apply_patch", tool_input=tool_input))
-    assert output["decision"] == "block" and "ask-palette.md" in output["reason"]
+    assert output["systemMessage"] and "ask-palette.md" in output["systemMessage"]
 
 
 def test_codex_relative_command_cwd_is_resolved_once(project):
     unrelated = project[0].parent
     (project[1] / "ask-palette.md").write_text("# Unregistered fictional question", encoding="utf-8")
     fields = payload(project, "Stop", cwd=str(unrelated), tool_input={"command": "opaque-writer", "cwd": project[0].name})
-    assert question_integrity.decide(fields, "codex")["decision"] == "block"
+    assert question_integrity.decide(fields, "codex")["systemMessage"]
 
 
 def test_malformed_stdin_is_quiet_without_writes(project):
@@ -220,7 +220,7 @@ def test_real_cli_publish_answer_and_reviewed_restore_pass(project, tmp_path):
     restored["items"][0].update(status="answered", answer=extra["updates"][0]["answer"])
     markdown = project[1] / "ask-palette.md"
     markdown.write_text(markdown.read_text(encoding="utf-8") + "\n" + extra["text"] + "\n", encoding="utf-8")
-    assert question_integrity.decide(payload(project))["decision"] == "block"
+    assert question_integrity.decide(payload(project))["systemMessage"]
     evidence = tmp_path / "original.md"
     evidence.write_bytes(markdown.read_bytes())
     draft.write_text(json.dumps(restored), encoding="utf-8")
@@ -238,8 +238,8 @@ def test_cli_answer_repairs_markdown_only_answer_without_question_changes(projec
     question_records.answer_document(project[1], "ask-palette.md", answer())
     source.write_bytes(before)
     output = question_integrity.decide(payload(project))
-    assert output["decision"] == "block"
-    assert output["reason"].index("question answer") < output["reason"].index("question restore")
+    assert output["systemMessage"]
+    assert output["systemMessage"].index("question answer") < output["systemMessage"].index("question restore")
     reply = tmp_path / "confirmed-reply.json"
     reply.write_text(json.dumps(answer()), encoding="utf-8")
     run_cli(project, "answer", "ask-palette.md", "--input", str(reply))
@@ -273,12 +273,12 @@ def test_only_stop_inspects_and_each_stop_rechecks(project, inspections, runtime
     info = path.stat()
     path.write_bytes(path.read_bytes().replace(b"Choose", b"Select"))
     os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
-    assert question_integrity.decide(payload(project), runtime)["decision"] == "block"
+    assert question_integrity.decide(payload(project), runtime)["systemMessage"]
     assert len(inspections) == 3
 
 
 def test_grok_child_stop_participates_only_with_nonempty_session(project):
     (project[1] / "ask-palette.md").write_text("# Unregistered fictional question", encoding="utf-8")
     fields = payload(project, session_id="child", subagentType="chef:dev-medium")
-    assert question_integrity.decide(fields, "grok")["decision"] == "block"
+    assert question_integrity.decide(fields, "grok")["systemMessage"]
     assert question_integrity.decide({**fields, "session_id": ""}, "grok") == {}

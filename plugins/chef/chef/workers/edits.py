@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from chef.infrastructure.paths import inside_real_root, is_link
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.storage import atomic_write_bytes, atomic_write_json, replace_file
 
 MAX_CONTENT = 4 * 1024 * 1024

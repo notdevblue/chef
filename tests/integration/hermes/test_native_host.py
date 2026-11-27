@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="chef-hermes-native-host-") as directory
         assert denied and "fictional operation denied" in denied, denied
         assert plugins.resolve_pre_tool_block("terminal", {"command": "echo safe"}, task_id=task, session_id=session) is None
         foreign = plugins.resolve_pre_tool_block("terminal", {"command": "echo safe"}, task_id=task, session_id="unrelated")
-        assert foreign and "another active" in foreign, foreign
+        assert foreign is None, foreign
         foreign_path = root / "foreign\\garden/probe.txt"
         assert str(_resolve_path_for_task(str(foreign_path), task)) == str(foreign_path)
         foreign_write = plugins.resolve_pre_tool_block("write_file", {"path": str(foreign_path), "content": "fixture"}, task_id=task, session_id=session)

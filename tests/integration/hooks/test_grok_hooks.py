@@ -119,8 +119,8 @@ def test_native_integrity_checks_current_and_child_session_at_stop(project):
     question = project / "state/garden/ask-colors.md"
     question.write_text("Untracked answer", encoding="utf-8")
     value = payload(project, tool="write", hookEventName="stop")
-    assert question_integrity.decide(value)["decision"] == "block"
-    assert question_integrity.decide({**value, "sessionId": "child", "subagentType": "developer"})["decision"] == "block"
+    assert question_integrity.decide(value)["systemMessage"]
+    assert question_integrity.decide({**value, "sessionId": "child", "subagentType": "developer"})["systemMessage"]
     assert question_integrity.decide({**value, "sessionId": "unrelated"}) == {}
 
 

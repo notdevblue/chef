@@ -10,7 +10,7 @@ import tomllib
 import uuid
 from pathlib import Path
 
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment
 from chef.infrastructure.storage import atomic_write_text, make_private_directory
@@ -139,8 +139,7 @@ def auth(runtime, cwd, settings=None):
 def tools_for(role):
     role = role_name(role)
     tools = ["Read", "Grep", "Glob"]
-    if role not in context.READ_ONLY:
-        tools.extend(("Bash", "PowerShell"))
+    tools.extend(("Bash", "PowerShell"))
     if role in ("dev-small", "dev-medium"):
         tools.extend(("Write", "Edit", "apply_patch"))
     return tools
@@ -284,7 +283,7 @@ def command(runtime, executable, role, config, cwd, directory, settings, *, prob
             argv += ["resume", config["session"]]
         return argv + ["-"]
     prompt = directory / "prompt.txt"
-    tools = ["Bash"] if probe else ["Read", "Grep", "Glob"]
+    tools = ["Bash"] if probe else ["Read", "Grep", "Glob", *( ["Bash"] if role in context.READ_ONLY else [])]
     argv = [executable, "--cwd", cwd, "--prompt-file", str(prompt), "--rules", config["instructions"],
             "--output-format", "streaming-json", "--no-subagents", "--no-memory", "--permission-mode", "dontAsk",
             "--tools", ",".join(tools),
@@ -297,7 +296,10 @@ def command(runtime, executable, role, config, cwd, directory, settings, *, prob
     if probe:
         argv.extend(("--deny", "Bash"))
     if not probe:
-        argv.extend(("--disallowed-tools", "Bash,PowerShell,Write,Edit,MultiEdit,NotebookEdit,apply_patch,spawn_subagent"))
+        denied = "PowerShell,Write,Edit,MultiEdit,NotebookEdit,apply_patch,spawn_subagent"
+        if role not in context.READ_ONLY:
+            denied = "Bash," + denied
+        argv.extend(("--disallowed-tools", denied))
         if role in ("dev-small", "dev-medium"):
             argv.extend(("--json-schema", json.dumps(edits.SCHEMA)))
     if config["model"] not in ("", "inherit"):
@@ -350,8 +352,13 @@ def run(runtime, role, prompt, *, cwd, owner, settings=None, timeout=600, contex
         (directory / "prompt.txt").write_text(text, encoding="utf-8")
         execution_config = {**config, "session": str(uuid.uuid4()), "resume": False} if probe else config
         argv = command(runtime, executable, role, execution_config, cwd, directory, settings, probe=probe)
+        def should_stop():
+            blocker = directory / "blocked.json"
+            repeated = blocker.exists() and json.loads(blocker.read_text(encoding="utf-8")).get("count", 0) >= 2
+            return repeated or bool(cancelled and cancelled())
+
         result = process.run(argv, text if runtime != "grok" else "", cwd=cwd, env=env,
-                             timeout=min(timeout, 120) if probe else timeout, cancelled=cancelled, on_start=on_start)
+                             timeout=min(timeout, 120) if probe else timeout, cancelled=should_stop, on_start=on_start)
         label = "probe" if probe else "work"
         atomic_write_text(durable_directory / (label + ".stdout.jsonl"), result.stdout)
         atomic_write_text(durable_directory / (label + ".stderr.log"), result.stderr)
@@ -374,7 +381,15 @@ def run(runtime, role, prompt, *, cwd, owner, settings=None, timeout=600, contex
         Path(data["ready"]).unlink()
         data["phase"] = "work"
         context_path.write_text(json.dumps(data), encoding="utf-8")
-        completed = execute(prompt, False)
+        try:
+            completed = execute(prompt, False)
+        except process.Cancelled:
+            blocker = directory / "blocked.json"
+            if not blocker.exists():
+                raise
+            blocked = json.loads(blocker.read_text(encoding="utf-8"))
+            return {"ok": False, "runtime": runtime, "errorCode": "guard_blocked", "error": blocked["reason"],
+                    "blocked": blocked, "result": "Stopped after repeated guard denials; inspect the recorded command and scope."}
         result = parse_result(runtime, completed, role)
         if cancelled and cancelled():
             raise process.Cancelled("worker cancelled before accepting result")

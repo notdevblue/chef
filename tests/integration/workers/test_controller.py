@@ -855,12 +855,61 @@ def test_old_native_directory_output_can_be_collected_and_inspected(project, mon
     controller.check_conflicts(project.store, prepared)
 
 
-@pytest.mark.parametrize("field", ["files", "inputPaths"])
+@pytest.mark.parametrize("field", ["files"])
 def test_existing_directories_still_cannot_be_admitted(project, field):
     (project.root / "artifacts").mkdir()
     with pytest.raises(ValueError, match="exact files only"):
         controller.prepare({**project.request(), field: ["artifacts"]})
     assert project.store.list() == []
+
+
+def test_default_worker_timeout_fits_the_unit_without_rejecting_an_implicit_default(project, monkeypatch):
+    ownership = controller.ownership
+
+    def owned(request):
+        adapter, owner = ownership(request)
+        return adapter, {**owner, "timeboxSeconds": 60}
+
+    monkeypatch.setattr(controller, "ownership", owned)
+    prepared, _, _ = controller.prepare(project.request())
+    assert prepared["timeout"] == 60
+    with pytest.raises(ValueError, match="unit timebox"):
+        controller.prepare({**project.request(), "timeout": 61})
+
+
+def test_read_directory_scope_and_per_request_role_do_not_change_the_adapter(project):
+    (project.root / "inputs").mkdir()
+    (project.root / "inputs/reference.txt").write_text("reference", encoding="utf-8")
+    project.adapter["roles"] = {"verify": "configured-verifier"}
+    project.adapter["agents"] = {"allow": ["configured-*", "chef:*"]}
+    request = {**project.request(role="verifier"), "actualRole": "chef:verifier", "files": [], "inputPaths": ["inputs"], "timeout": 5400}
+    prepared, _, _ = controller.prepare(request)
+    assert prepared["actualRole"] == "chef:verifier"
+    assert prepared["files"] == [] and prepared["inputKinds"] == {"inputs": "directory"}
+    assert project.adapter["roles"] == {"verify": "configured-verifier"}
+    with pytest.raises(ValueError, match="capability"):
+        controller.prepare({**request, "actualRole": "chef:dev-medium"})
+    project.adapter["agents"]["allow"] = ["configured-*"]
+    with pytest.raises(ValueError, match="agents.allow"):
+        controller.prepare(request)
+
+
+def test_verifier_plan_is_bound_to_its_unit_and_content(project):
+    from chef.locations import PLUGIN_ROOT
+    from chef.workers.verification import permitted
+
+    path = project.state / "sample-mission/check-plan.json"
+    path.write_text(json.dumps({"commands": [{"argv": ["checker"]}]}), encoding="utf-8")
+    request = {**project.request(role="verifier"), "files": [], "verificationPlan": str(path)}
+    prepared, _, owner = controller.prepare(request)
+    owner["verification"] = prepared["verification"]
+    data = {"role": "verifier", "owner": owner, "cwd": str(project.root)}
+    script = str(PLUGIN_ROOT / "skills/mission/scripts/mission_state.py")
+    arguments = ["--runtime", "claude", "verify", "U1", "--plan", str(path)]
+    assert permitted(script, arguments, data)
+    assert not permitted(script, ["complete", "U1"], data)
+    path.write_text(json.dumps({"commands": [{"argv": ["changed-checker"]}]}), encoding="utf-8")
+    assert not permitted(script, arguments, data)
 
 
 def test_regular_file_replaced_by_directory_requires_inspection(project, monkeypatch):

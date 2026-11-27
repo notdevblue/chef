@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.locking import process_alive
 from chef.infrastructure.paths import inside_real_root, same_path
 
@@ -68,6 +68,13 @@ def acknowledge(payload, denied):
     inputs = payload.get("tool_input") or {}
     if data and denied and isinstance(inputs, dict) and inputs.get("command") == PROBE:
         Path(data["guardReady"]).write_text(data["digest"], encoding="utf-8")
+    if data and denied and data.get("phase") == "work" and data.get("contextPath"):
+        from chef.infrastructure.storage import atomic_write_json
+
+        target = Path(data["contextPath"]).parent / "blocked.json"
+        previous = json.loads(target.read_text(encoding="utf-8")) if target.exists() else {}
+        count = previous.get("count", 0) + 1 if previous.get("reason") == denied else 1
+        atomic_write_json(target, {"reason": denied, "command": inputs.get("command", ""), "count": count})
 
 
 def denial(payload):
@@ -90,11 +97,19 @@ def denial(payload):
         return "role workers cannot delegate more work"
     if inputs.get("run_in_background"):
         return "role workers cannot detach background commands"
-    for text in ("han-mission", "chef-mission", "mission_state.py", "mission_entry.py", "worker.py"):
-        if text in command:
+    from chef.guards.commands import control_invocation, readonly
+
+    control_read = False
+    for script, arguments in control_invocation(command, tool):
+        from chef.workers.verification import permitted, control_read as query
+
+        if permitted(script, arguments, data):
+            continue
+        if not query(script, arguments):
             return "role workers cannot change mission or delegation state"
+        control_read = len(mission.command_fragments(command, tool)) == 1 and not any(char in command for char in ">&<")
     allowed = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
-    if data["role"] not in READ_ONLY:
+    if data["role"] not in READ_ONLY or readonly(command, tool) or control_read:
         allowed.update(("Bash", "PowerShell"))
     if data["role"] in ("dev-small", "dev-medium"):
         allowed.update(("Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "ApplyPatch"))

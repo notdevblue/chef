@@ -161,7 +161,8 @@ def test_bound_tasks_get_independent_terminal_and_file_paths(world):
 
 def test_explicit_workdir_cannot_escape_original_ownership_check(world, tmp_path):
     world.bridge.bindings[("stranger", "task")] = {"cwd": str(world.project)}
-    assert call(world, "terminal", {"command": "echo safe", "workdir": str(tmp_path)}, session="stranger")["action"] == "block"
+    assert call(world, "terminal", {"command": "echo safe", "workdir": str(tmp_path)}, session="stranger") is None
+    assert call(world, "terminal", {"command": "touch changed.txt", "workdir": str(tmp_path)}, session="stranger")["action"] == "block"
 
 
 def test_case_distinct_projects_are_not_deduplicated_in_patch_ownership(world, tmp_path):

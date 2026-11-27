@@ -132,9 +132,9 @@ def test_claude_external_review_preserves_inheritance_and_exact_read_tools(tmp_p
         assert argv[argv.index("--model") + 1] == model
     assert argv[argv.index("--effort") + 1] == config["effort"]
     for flag in ("--tools", "--allowedTools"):
-        assert argv[argv.index(flag) + 1] == "Read,Grep,Glob"
+        assert argv[argv.index(flag) + 1] == "Read,Grep,Glob,Bash"
     settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert settings["permissions"]["allow"] == ["Read", "Grep", "Glob"]
+    assert settings["permissions"]["allow"] == ["Read", "Grep", "Glob", "Bash"]
 
 
 def test_subscription_credentials_only_and_parent_markers_removed(monkeypatch, tmp_path):

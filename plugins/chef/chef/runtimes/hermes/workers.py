@@ -12,7 +12,7 @@ from pathlib import Path
 from chef.guards import mission as guard
 from chef.infrastructure.configuration import locate, read_adapter
 from chef.infrastructure.errors import UsageError
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.locking import FileLock, process_alive
 from chef.infrastructure.paths import inside_real_root, same_path
 from chef.infrastructure.process import child_env
@@ -105,7 +105,10 @@ def worker_denial(payload):
     if tool.endswith("spawn_agent"):
         return "Codex 역할 워커는 하위 에이전트를 만들지 않음"
     command = str(inputs.get("command") or "") if isinstance(inputs, dict) else ""
-    if any(word in command for word in ("han-mission", "chef-mission", "mission_state.py", "mission_entry.py")):
+    from chef.guards.commands import control_invocation
+    from chef.workers.verification import control_read
+
+    if any(not control_read(script, arguments) for script, arguments in control_invocation(command, tool)):
         return "Codex 역할 워커는 미션 소유권·상태를 변경하지 않음"
     if data.get("external"):
         from chef.runtimes.hermes.external_slots import from_context

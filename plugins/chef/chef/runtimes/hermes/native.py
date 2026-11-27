@@ -20,7 +20,7 @@ from pathlib import Path
 
 from chef.guards import mission, questions
 from chef.infrastructure.errors import UsageError
-from chef.infrastructure.fingerprints import implementation_digest
+from chef.infrastructure.fingerprints import execution_digest as implementation_digest
 from chef.infrastructure.process import child_env
 from chef.runtimes.hermes import research, workers
 

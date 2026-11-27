@@ -178,7 +178,7 @@ def dispatch(project, folder, unit, plan, guard, command, argv, timeout, before,
         bundle = references.load(project, plan["referenceBundle"])
         roots.extend(references.resolve_path(project, pointer["path"], external=True)
                      for pointer in references.read_sources(bundle))
-    with execution.input_lease(roots, label=f"review:{unit}") as lease:
+    with execution.workspace_scope(project), execution.input_lease(roots, label=f"review:{unit}") as lease:
         # Recheck under the cooperative lease immediately before dispatch.
         if (plans.snapshot(project, plan["inputs"]) != before or runtime_identity(project, command, guard) != runtime
                 or plans.reference_identity(project, plan) != reference

@@ -239,7 +239,7 @@ def _run_owned(project, folder, unit, plan, guard, force, settings):
             if not isinstance(inputs, list) or not inputs:
                 raise VerificationError("inputs 에 검증에 영향을 주는 파일·폴더를 지정할 것", "plan_invalid")
             targets = [project_path(project, value) for value in inputs]
-            with execution.input_lease(targets, label=f"verify:{unit}") as lease:
+            with execution.workspace_scope(project), execution.input_lease(targets, label=f"verify:{unit}") as lease:
                 checked = preflight(project, plan, guard, settings)
                 if checked["status"] == "fail":
                     failure = checked["failure"]
