@@ -14,7 +14,7 @@ from chef.infrastructure.fingerprints import implementation_digest
 from chef.infrastructure.locking import FileLock
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment
-from chef.infrastructure.storage import atomic_write_json
+from chef.infrastructure.storage import atomic_write_json, make_private_directory
 from chef.locations import PLUGIN_ROOT
 from chef.mission import unit_contracts
 from chef.mission.contracts import StateError, UNIT_HEADER, UNITS_FILE
@@ -207,7 +207,7 @@ def available_candidates(adapter, request, owner):
 
 def attempt_directory(store, record):
     directory = Path(store.root) / "attempts" / record["key"] / record["token"]
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    make_private_directory(directory)
     return directory
 
 
@@ -374,7 +374,7 @@ def supervise(key, token, *, store=None):
             tried.add(runtime)
             owner["expectedPolicy"] = record["route"].get("policy", "")
             run_directory = directory / "runs" / runtime
-            run_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            make_private_directory(run_directory)
             try:
                 result = backends.run(runtime, request["role"], request["prompt"],
                                       cwd=request["project"], owner=owner,

@@ -2,12 +2,31 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from chef.infrastructure import storage
 from chef.infrastructure.fingerprints import implementation_digest
 
 from tests.paths import PLUGIN_ROOT
+
+
+@pytest.mark.parametrize("platform,mode", [("nt", 0o777), ("posix", 0o700)])
+def test_private_directory_uses_platform_permissions(tmp_path, monkeypatch, platform, mode):
+    calls = []
+    original = Path.mkdir
+
+    def mkdir(path, mode=0o777, **options):
+        calls.append((path, mode, options))
+        return original(path, mode=mode, **options)
+
+    monkeypatch.setattr(storage, "os", SimpleNamespace(name=platform))
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    target = tmp_path / "state"
+    storage.make_private_directory(target)
+    assert target.is_dir()
+    assert calls == [(target, mode, {"parents": True, "exist_ok": True})]
 
 
 def test_failed_replace_preserves_previous_bytes_and_cleans_temporary(tmp_path, monkeypatch):

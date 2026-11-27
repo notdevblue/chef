@@ -3,11 +3,15 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from chef.workers import store
 from chef.workers.routing import RUNTIMES
+from chef.workers import controller
+from chef.infrastructure import storage
 
 
 @pytest.fixture
@@ -27,6 +31,26 @@ def registry(tmp_path):
 def candidates():
     return [{"runtime": runtime, "available": True, "roles": ["implement"], "tools": []}
             for runtime in RUNTIMES]
+
+
+def test_windows_store_and_attempts_preserve_inherited_sandbox_access(tmp_path, monkeypatch, job_request):
+    original = Path.mkdir
+
+    def restricted_mkdir(path, mode=0o777, **options):
+        if mode == 0o700:
+            raise PermissionError("restricted process cannot replace the inherited directory ACL")
+        return original(path, mode=mode, **options)
+
+    monkeypatch.setattr(storage, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(Path, "mkdir", restricted_mkdir)
+    registry = store.Store(tmp_path / "new-state")
+    job = registry.reserve(job_request, candidates())
+    attempt = controller.attempt_directory(registry, job)
+    assert attempt.is_dir()
+    restored = store.Store(registry.root).get(job["key"], reconcile=False)["request"]
+    assert restored["role"] == "dev-medium"
+    assert restored["project"] == job_request["project"]
+    assert restored["prompt"] == job_request["prompt"]
 
 
 def test_concurrent_duplicate_admission_creates_exactly_one_job(registry, job_request):

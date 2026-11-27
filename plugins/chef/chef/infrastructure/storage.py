@@ -8,6 +8,17 @@ import uuid
 from pathlib import Path
 
 
+def make_private_directory(path):
+    """Create state below the caller's authorized writable root.
+
+    POSIX uses owner-only mode. Windows keeps the parent ACL, including the
+    sandbox's access entries; requesting mode 0700 replaces those entries and
+    can make a directory inaccessible to the same restricted process.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True, mode=0o777 if os.name == "nt" else 0o700)
+
+
 def replace_file(source, destination):
     """Publish a complete file, allowing a short Windows reader to close.
 

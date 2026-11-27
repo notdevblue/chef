@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from chef.infrastructure.locking import FileLock
-from chef.infrastructure.storage import atomic_write_bytes, atomic_write_json
+from chef.infrastructure.storage import atomic_write_bytes, atomic_write_json, make_private_directory
 from chef.verification.execution import process_owner_alive, process_start
 from chef.workers import routing
 
@@ -74,7 +74,7 @@ def request_identity(request):
 class Store:
     def __init__(self, root=None):
         self.root = Path(root or os.environ.get("CHEF_WORKERS_HOME") or Path.home() / ".chef/workers").absolute()
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        make_private_directory(self.root)
         self.path = self.root / "registry.json"
 
     def _lock(self):
@@ -181,7 +181,7 @@ class Store:
             raise ValueError("worker payload exceeds size limit")
         reference = hashlib.sha256(raw).hexdigest()
         path = self._payload_path(reference)
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        make_private_directory(path.parent)
         if path.exists() or path.is_symlink():
             self._read_payload(reference, limit)
         else:

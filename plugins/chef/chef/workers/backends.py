@@ -13,7 +13,7 @@ from pathlib import Path
 from chef.infrastructure.fingerprints import implementation_digest
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment
-from chef.infrastructure.storage import atomic_write_text
+from chef.infrastructure.storage import atomic_write_text, make_private_directory
 from chef.locations import PLUGIN_ROOT
 from chef.runtimes.hermes import claude
 from chef.runtimes.hermes.workers import extra_arguments
@@ -321,7 +321,7 @@ def run(runtime, role, prompt, *, cwd, owner, settings=None, timeout=600, contex
     config.update(session=resumed or str(uuid.uuid4()), resume=bool(resumed))
     executable = auth(runtime, cwd, settings)
     durable_directory = Path(context_dir)
-    durable_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    make_private_directory(durable_directory)
     temporary = tempfile.TemporaryDirectory(prefix="chef-grok-hook-") if runtime == "grok" else None
     directory = Path(temporary.name) if temporary else durable_directory
     context_path = directory / "context.json"
