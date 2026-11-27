@@ -804,3 +804,184 @@ def test_invalid_requests_cannot_reserve_jobs(project, field, value):
     with pytest.raises((ValueError, OSError)):
         controller.prepare({**project.request(), field: value})
     assert project.store.list() == []
+
+
+@pytest.mark.parametrize("runtime", controller.RUNTIMES)
+@pytest.mark.parametrize("ok", [True, False])
+@pytest.mark.parametrize("legacy_inline", [True, False])
+def test_old_native_directory_output_can_be_collected_and_inspected(project, monkeypatch, runtime, ok, legacy_inline):
+    choose(monkeypatch, runtime)
+    request = project.request(owner=runtime)
+    request["files"].append("artifacts")
+    with monkeypatch.context() as old_installation:
+        old_installation.setattr(controller, "implementation_digest", lambda: "retired-implementation")
+        job = controller.dispatch(request, store=project.store)
+    saved = project.store.get(job["key"])
+    assert saved["request"]["beforeFiles"]["artifacts"] is None
+    if legacy_inline:
+        state = json.loads(project.store.path.read_text(encoding="utf-8"))
+        state["jobs"][job["key"]] = saved
+        project.store.path.write_text(json.dumps(state), encoding="utf-8")
+    artifacts = project.root / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "leaf.txt").write_text("synthetic output", encoding="utf-8")
+    controller.cancel(job["key"], job["token"], store=project.store)
+    with pytest.raises(ValueError, match="collect the native"):
+        controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)
+    receipt = {"ok": ok, "result": "host collected the stopped agent", "evidence": ["source.txt"]}
+    if not ok:
+        receipt.update(error="synthetic worker failure", errorCode="worker_failure")
+    result = controller.native_result(job["key"], job["token"], receipt, store=project.store)
+    assert result["status"] == "needs-inspection"
+    assert result["result"]["ok"] is False
+    assert result["result"]["errorCode"] == "path_snapshot_failed"
+    if not ok:
+        assert result["result"]["workerError"] == receipt["error"]
+        assert result["result"]["workerErrorCode"] == receipt["errorCode"]
+    assert result["result"]["files"]["artifacts"] == {
+        "kind": "invalid-path", "error": "snapshot accepts exact files only"}
+    marker = controller.attempt_directory(project.store, job) / "native-collected.json"
+    assert json.loads(marker.read_text(encoding="utf-8"))["files"] == result["result"]["files"]
+    followup = {**request, "requestId": "followup", "files": ["artifacts/leaf.txt"], "inputPaths": []}
+    prepared, _, _ = controller.prepare(followup)
+    with pytest.raises(ValueError, match="scope conflicts"):
+        controller.check_conflicts(project.store, prepared)
+    inspected = controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)
+    assert inspected["status"] == "failed"
+    assert inspected["result"]["previousResult"] == result["result"]
+    assert inspected["result"]["files"] == result["result"]["files"]
+    assert inspected["request"] == saved["request"]
+    assert (artifacts / "leaf.txt").read_text(encoding="utf-8") == "synthetic output"
+    controller.check_conflicts(project.store, prepared)
+
+
+@pytest.mark.parametrize("field", ["files", "inputPaths"])
+def test_existing_directories_still_cannot_be_admitted(project, field):
+    (project.root / "artifacts").mkdir()
+    with pytest.raises(ValueError, match="exact files only"):
+        controller.prepare({**project.request(), field: ["artifacts"]})
+    assert project.store.list() == []
+
+
+def test_regular_file_replaced_by_directory_requires_inspection(project, monkeypatch):
+    choose(monkeypatch, "claude")
+    target = project.root / "output.txt"
+    target.write_text("old file", encoding="utf-8")
+    request = {**project.request(), "files": ["output.txt"]}
+    job = controller.dispatch(request, store=project.store)
+    target.unlink()
+    target.mkdir()
+    result = controller.native_result(job["key"], job["token"],
+                                      {"ok": True, "evidence": ["source.txt"]}, store=project.store)
+    assert result["status"] == "needs-inspection"
+    assert result["result"]["files"]["output.txt"]["kind"] == "invalid-path"
+    assert controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)["status"] == "failed"
+
+
+def test_new_exact_file_under_existing_directory_completes_normally(project, monkeypatch):
+    choose(monkeypatch, "claude")
+    (project.root / "artifacts").mkdir()
+    request = {**project.request(), "files": ["artifacts/leaf.txt"]}
+    job = controller.dispatch(request, store=project.store)
+    (project.root / "artifacts/leaf.txt").write_text("new file", encoding="utf-8")
+    result = controller.native_result(job["key"], job["token"],
+                                      {"ok": True, "evidence": ["artifacts/leaf.txt"]}, store=project.store)
+    assert result["status"] == "completed"
+    assert isinstance(result["result"]["files"]["artifacts/leaf.txt"], str)
+
+
+@pytest.mark.parametrize("role", ["implement", "review"])
+def test_input_path_shape_failure_is_collected_before_inspection(project, monkeypatch, role):
+    choose(monkeypatch, "claude")
+    request = project.request(role=role)
+    request["inputPaths"].append("future-input")
+    job = controller.dispatch(request, store=project.store)
+    (project.root / "future-input").mkdir()
+    if role == "review":
+        with pytest.raises(ValueError, match="review inputs changed"):
+            controller.native_result(job["key"], job["token"],
+                                     {"ok": True, "evidence": ["source.txt"]}, store=project.store)
+        result = project.store.get(job["key"])
+    else:
+        result = controller.native_result(job["key"], job["token"],
+                                          {"ok": True, "evidence": ["source.txt"]}, store=project.store)
+    assert result["status"] == "needs-inspection"
+    assert result["result"]["after"]["future-input"]["kind"] == "invalid-path"
+    assert controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)["status"] == "failed"
+
+
+def test_unreadable_output_is_recorded_without_losing_other_hashes(project, monkeypatch):
+    choose(monkeypatch, "claude")
+    request = project.request()
+    request["files"].append("future.txt")
+    job = controller.dispatch(request, store=project.store)
+    target = project.root / "future.txt"
+    target.write_text("synthetic output", encoding="utf-8")
+    original_read = Path.read_bytes
+
+    def read(path):
+        if path == target:
+            raise PermissionError("synthetic denial")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+    result = controller.native_result(job["key"], job["token"],
+                                      {"ok": True, "evidence": ["source.txt"]}, store=project.store)
+    assert result["status"] == "needs-inspection"
+    assert result["result"]["files"]["future.txt"] == {"kind": "unreadable", "error": "PermissionError"}
+    assert result["result"]["files"]["source.txt"] == job["request"]["beforeFiles"]["source.txt"]
+    assert controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)["status"] == "failed"
+
+
+def test_replaced_output_link_is_recorded_without_reading_its_target(project, monkeypatch, tmp_path):
+    choose(monkeypatch, "claude")
+    request = project.request()
+    request["files"].append("future.txt")
+    job = controller.dispatch(request, store=project.store)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("unrelated content", encoding="utf-8")
+    try:
+        (project.root / "future.txt").symlink_to(outside)
+    except OSError:
+        pytest.skip("symbolic links unavailable")
+    original_read = Path.read_bytes
+
+    def read(path):
+        if path.name in ("future.txt", "outside.txt"):
+            pytest.fail("must not read a changed output link")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+    result = controller.native_result(job["key"], job["token"],
+                                      {"ok": True, "evidence": ["source.txt"]}, store=project.store)
+    assert result["status"] == "needs-inspection"
+    assert result["result"]["files"]["future.txt"]["kind"] == "invalid-path"
+    assert controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)["status"] == "failed"
+    assert outside.read_text(encoding="utf-8") == "unrelated content"
+
+
+def test_detached_directory_output_retains_result_until_inspected(project, monkeypatch):
+    choose(monkeypatch, "grok")
+    request = project.request()
+    request["files"].append("artifacts")
+    job = controller.dispatch(request, store=project.store, launch=lambda *args: None)
+
+    def run(*args, **kwargs):
+        (project.root / "artifacts").mkdir()
+        return {"ok": True, "result": "synthetic worker finished"}
+
+    monkeypatch.setattr(controller.backends, "run", run)
+    result = controller.supervise(job["key"], job["token"], store=project.store)
+    assert result["status"] == "needs-inspection"
+    assert result["result"]["result"] == "synthetic worker finished"
+    assert result["result"]["files"]["artifacts"]["kind"] == "invalid-path"
+    assert controller.reconcile(job["key"], job["token"], ["source.txt"], store=project.store)["status"] == "failed"
+
+
+@pytest.mark.parametrize("first,second", [("future", "future/leaf.txt"), ("future/leaf.txt", "future")])
+def test_missing_parent_and_child_scopes_conflict(project, monkeypatch, first, second):
+    choose(monkeypatch, "claude")
+    request = {**project.request(), "files": [first], "inputPaths": []}
+    controller.dispatch(request, store=project.store)
+    with pytest.raises(ValueError, match="scope conflicts"):
+        controller.dispatch({**request, "requestId": "overlapping", "files": [second]}, store=project.store)

@@ -87,6 +87,38 @@ def snapshot(project, values):
     return result
 
 
+def observed_snapshot(project, values):
+    """Record changed path shapes without following or authorizing them.
+
+    Admission remains file-only. A previously missing output can become a
+    directory or link, including in requests saved by older installations.
+    Such a path must retain its reservation until inspection, but must not
+    prevent collecting the stopped worker's result.
+    """
+    result = {}
+    for name in string_list(values, "snapshot"):
+        try:
+            result.update(snapshot(project, [name]))
+        except ValueError as error:
+            result[name] = {"kind": "invalid-path", "error": str(error)}
+        except OSError as error:
+            result[name] = {"kind": "unreadable", "error": type(error).__name__}
+    return result
+
+
+def collect_snapshots(request, result):
+    output = {**result, "before": request["before"],
+              "after": observed_snapshot(request["project"], request["inputPaths"]),
+              "files": observed_snapshot(request["project"], request["files"])}
+    if any(isinstance(value, dict) for field in ("after", "files") for value in output[field].values()):
+        for name in ("error", "errorCode"):
+            if name in result:
+                output["worker" + name[0].upper() + name[1:]] = result[name]
+        output.update(ok=False, errorCode="path_snapshot_failed",
+                      error="worker paths could not be snapshotted; inspect the recorded path errors")
+    return output
+
+
 def ownership(request):
     runtime = request.get("ownerRuntime")
     if runtime not in RUNTIMES:
@@ -217,9 +249,16 @@ def overlaps(project, first, second):
         try:
             value = path.stat()
             return ("file", value.st_dev, value.st_ino)
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):
             return ("path", paths.canonical_path(path))
-    return bool({identity(name) for name in first} & {identity(name) for name in second})
+    if {identity(name) for name in first} & {identity(name) for name in second}:
+        return True
+    # A missing exact-file scope may later become a directory. Keep its
+    # descendants reserved too, until the original work has been inspected.
+    first_paths = [paths.canonical_path(Path(project, name)) for name in first]
+    second_paths = [paths.canonical_path(Path(project, name)) for name in second]
+    return any(left == right or paths.inside_root(left, right) or paths.inside_root(right, left)
+               for left in first_paths for right in second_paths)
 
 
 def check_conflicts(store, request):
@@ -412,14 +451,12 @@ def supervise(key, token, *, store=None):
                                                                   "handoff": "rate-limit fallback"})
                     return {**record, "native": True, "actualRole": request["actualRole"], "brief": request["prompt"]}
         ownership(request)
-        after = snapshot(request["project"], request["inputPaths"])
-        result["before"] = request["before"]
-        result["after"] = after
-        result["files"] = snapshot(request["project"], request["files"])
-        if request["role"].removeprefix("chef:") in READ_ONLY and after != request["before"]:
+        result = collect_snapshots(request, result)
+        if request["role"].removeprefix("chef:") in READ_ONLY and result["after"] != request["before"]:
             result.update(ok=False, error="read-only worker inputs changed during execution")
         state = "cancelled" if (directory / "cancel.json").exists() else None
-        if result.get("ok") is not True and result["files"] != request["beforeFiles"]:
+        if result.get("ok") is not True and (result["files"] != request["beforeFiles"]
+                                              or result.get("errorCode") == "path_snapshot_failed"):
             state = "needs-inspection"
         return store.finish(key, token, result, status=state)
     except BaseException as error:
@@ -473,23 +510,23 @@ def native_result(key, token, result, *, store=None):
     pointers = snapshot(request["project"], evidence)
     if any(value is None for value in pointers.values()):
         raise ValueError("native evidence files must exist")
-    after = snapshot(request["project"], request["inputPaths"])
-    output = {**result, "evidence": pointers, "before": request["before"], "after": after,
-              "files": snapshot(request["project"], request["files"])}
-    atomic_write_json(directory / "native-collected.json", {"evidence": pointers, "files": output["files"]})
+    output = collect_snapshots(request, {**result, "evidence": pointers})
+    atomic_write_json(directory / "native-collected.json", {"evidence": pointers, "files": output["files"],
+                                                            "after": output["after"]})
     reason = ""
     if record["route"].get("policy"):
         config = backends.role_config(record["route"]["runtime"], request["role"],
                                       {**adapter.get("workers", {}), "projectRoles": effective_roles(adapter, request)})
         if backends.role_policy(config) != record["route"]["policy"]:
             reason = "native worker role policy changed before result acceptance"
-    if request["role"].removeprefix("chef:") in READ_ONLY and after != request["before"]:
+    if request["role"].removeprefix("chef:") in READ_ONLY and output["after"] != request["before"]:
         reason = "native review inputs changed; its result cannot be accepted"
     if reason:
         store.finish(key, token, {**output, "ok": False, "error": reason}, status="needs-inspection")
         raise ValueError(reason)
     state = "cancelled" if (directory / "cancel.json").exists() else None
-    if result["ok"] is not True and output["files"] != request["beforeFiles"]:
+    if output["ok"] is not True and (output["files"] != request["beforeFiles"]
+                                      or output.get("errorCode") == "path_snapshot_failed"):
         state = "needs-inspection"
     return store.finish(key, token, output, status=state)
 
@@ -540,6 +577,6 @@ def reconcile(key, token, evidence, *, store=None):
     if not pointers or any(value is None for value in pointers.values()):
         raise ValueError("inspection requires existing evidence files")
     result = {"ok": False, "error": "partial work inspected and reservation released",
-              "inspection": pointers, "files": snapshot(request["project"], request["files"]),
+              "inspection": pointers, "files": observed_snapshot(request["project"], request["files"]),
               "previousResult": record.get("result")}
     return store.finish(key, token, result, status="failed")
