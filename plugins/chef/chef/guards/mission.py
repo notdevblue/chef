@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from chef.guards import questions as question_write_guard
+from chef.guards.allow_once import SharedAllowOnceError, configured_participants, consume_shared_allow_once, shared_once_context, normalize_shared_payload
 from chef.guards.policy import mission_policy_configured, mission_policy_denial
 from chef.guards.adapters import (
     AdapterNotFound,
@@ -548,7 +549,7 @@ def allow_once_guidance(state_dir, mission_id, command, tool_name):
 
 
 def judge_denied_command(
-    payload, command, active, state_dir, reason, outcome, stale_hours=STALE_HOURS_DEFAULT
+    payload, command, active, state_dir, reason, outcome, stale_hours=STALE_HOURS_DEFAULT, shared=False
 ):
     try:
         if runs_in_other_session(active, payload):
@@ -561,7 +562,7 @@ def judge_denied_command(
             outcome.messages.append(
                 f"미션 {active.id}가 다른 세션에서 진행 중{note} — 이 세션은 막지 않음: {reason}"
             )
-        elif consume_allow_once(state_dir, active.id, command):
+        elif not shared and consume_allow_once(state_dir, active.id, command):
             outcome.messages.append(f"1회 허용 사용: {command.strip()}")
         else:
             guidance = allow_once_guidance(state_dir, active.id, command, payload.get("tool_name", "Bash"))
@@ -571,7 +572,7 @@ def judge_denied_command(
         outcome.deny = f"{reason} (미션 진행 중: {active.id}; 1회 허용 확인 실패라 허용 안 함: {path} — {type(e).__name__}: {e})"
 
 
-def apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_hours=STALE_HOURS_DEFAULT):
+def apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_hours=STALE_HOURS_DEFAULT, shared=False):
     active = read_active(state_dir)
     if not active.id:
         return
@@ -579,7 +580,7 @@ def apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_ho
     if active.corrupt:
         outcome.deny = f"{verdict.reason} ({corrupt_active_notice(state_dir)})"
         return
-    judge_denied_command(payload, command, active, state_dir, verdict.reason, outcome, stale_hours)
+    judge_denied_command(payload, command, active, state_dir, verdict.reason, outcome, stale_hours, shared)
 
 
 def report_problems_while_active(state_dir, problems, outcome):
@@ -777,7 +778,10 @@ def execution_write_reason(payload):
 
 
 def decide(payload):
-    payload = normalize_payload(payload)
+    try:
+        payload = normalize_shared_payload(payload)
+    except SharedAllowOnceError as error:
+        return Outcome(deny=f"명령 입력 확인 실패: {error}")
     if payload.get("han_worker"):
         from chef.workers.context import denial
 
@@ -869,6 +873,19 @@ def decide(payload):
             outcome.deny = "Grok 명령 입력이 잘려 미션 가드를 확인할 수 없음; 짧은 명령으로 나눌 것"
             return outcome
     verdict = judge_command(adapter, command, tool_name, problems, located.project, payload.get("cwd") or located.project)
+    participants = None
+    if verdict.kind not in ("marker", "mixed"):
+        try:
+            participants = configured_participants(adapter)
+            if participants is not None and consume_shared_allow_once(
+                state_dir, active.id, command, payload=payload, participant="chef-mission",
+                participants=participants, active=active, config=shared_once_context(adapter),
+            ):
+                outcome.messages.append(f"공유 1회 허용 사용: {command.strip()}")
+                return outcome
+        except SharedAllowOnceError as error:
+            outcome.deny = f"공유 1회 허용 확인 실패: {error}"
+            return outcome
     if verdict.kind != "marker":
         try:
             heartbeat(state_dir, payload)
@@ -940,7 +957,7 @@ def decide(payload):
             )
     elif verdict.kind == "rule":
         try:
-            apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_hours)
+            apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_hours, participants is not None)
         except Exception as e:  # 규칙에 걸린 뒤의 오류는 허용이 아니라 거부
             outcome.deny = f"{verdict.reason} (가드 상태 확인 실패라 허용 안 함: {type(e).__name__}: {e})"
     elif problems:
