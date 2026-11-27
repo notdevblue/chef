@@ -267,7 +267,7 @@ def command(runtime, executable, role, config, cwd, directory, settings, *, prob
         tools = ["Bash"] if probe else [tool for tool in tools_for(role) if tool not in ("apply_patch", "PowerShell")]
         effective = directory / "settings.json"
         claude.write_settings(effective, tools, {"forceLoginMethod": "claudeai"})
-        argv = claude.command_for(executable, role, config, settings_path=effective, probe=probe)
+        argv = claude.command_for(executable, role, config, settings_path=effective, probe=probe, tools=tools)
         argv.remove("--no-session-persistence")
         return argv + ["--resume" if config.get("resume") and not probe else "--session-id", config["session"]]
     if runtime == "codex":

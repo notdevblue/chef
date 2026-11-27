@@ -27,6 +27,9 @@ Other failures use exit 1 and stderr. Slot launch diagnostics go to stderr.
 An entry success does not prove that hooks are enabled, that a launched runtime has finished starting,
 or that project guidance was reloaded into an existing session. The marker's hook response and ACTIVE ownership still need verification.
 
+An optional [mission transition policy](mission-policy.md) lets an adapter check a marker before
+Chef changes ACTIVE. It runs under the existing entry lock and preserves registered entry checks.
+
 ## Explicit external registration
 
 The existing runtime-specific registry resolver selects the directory: `HAN_ADAPTERS_DIR`, the runtime's

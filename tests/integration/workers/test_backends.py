@@ -120,6 +120,23 @@ def test_commands_do_not_bypass_permissions_and_keep_argument_boundaries(tmp_pat
         assert argv[argv.index("--rules") + 1] == config["instructions"]
 
 
+@pytest.mark.parametrize("model", ["inherit", "", "fictional-review-model"])
+def test_claude_external_review_preserves_inheritance_and_exact_read_tools(tmp_path, model):
+    config = backends.role_config("claude", "code-reviewer")
+    config.update(model=model, session="00000000-0000-0000-0000-000000000001")
+    argv = backends.command("claude", "/fictional/cli", "code-reviewer", config,
+                            str(tmp_path), tmp_path, {})
+    if model in ("inherit", ""):
+        assert "--model" not in argv
+    else:
+        assert argv[argv.index("--model") + 1] == model
+    assert argv[argv.index("--effort") + 1] == config["effort"]
+    for flag in ("--tools", "--allowedTools"):
+        assert argv[argv.index(flag) + 1] == "Read,Grep,Glob"
+    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert settings["permissions"]["allow"] == ["Read", "Grep", "Glob"]
+
+
 def test_subscription_credentials_only_and_parent_markers_removed(monkeypatch, tmp_path):
     for name in ("XAI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CHEF_HERMES_WORKER", "GROK_SESSION_ID"):
         monkeypatch.setenv(name, "fictional-value")

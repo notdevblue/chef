@@ -240,16 +240,19 @@ def fixed_settings(tools):
                       "PreToolUse": [{"hooks": [hook("mission_guard.py")]}]}}
 
 
-def command_for(path, role, config, *, settings_path, probe=False):
-    tools = ("Bash",) if probe else tools_for(role)
-    return [path, "-p", "--output-format", "stream-json", "--verbose",
+def command_for(path, role, config, *, settings_path, probe=False, tools=None):
+    tools = ("Bash",) if probe else (tools_for(role) if tools is None else tools)
+    command = [path, "-p", "--output-format", "stream-json", "--verbose",
             "--settings", str(settings_path), "--setting-sources", "",
             "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--tools", ",".join(tools), "--allowedTools", ",".join(tools),
             "--disallowedTools", "Agent,Task", "--no-session-persistence",
-            "--model", config["model"], "--effort", config["effort"],
+            "--effort", config["effort"],
             "--append-system-prompt", config["instructions"]]
+    if config["model"] not in ("", "inherit"):
+        command.extend(("--model", config["model"]))
+    return command
 
 
 def run_process(command, prompt, env, timeout, cwd):

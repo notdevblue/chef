@@ -68,6 +68,7 @@ Hermes는 macOS·Linux의 로컬 terminal backend에서 `chef_slot`으로 현재
 
 - [설치·설정·업데이트](docs/install.md)
 - [개발·검증](docs/development.md)
+- [미션 상태 변경 전 정책 검사](plugins/chef/skills/mission/references/mission-policy.md)
 - [개발 구조와 호환성 계약](docs/architecture.md)
 - [Claude·Codex·Grok 역할 워커](docs/cross-runtime-workers.md)
 - [실행 통계·작업 대기열·모델 선택 추천](docs/autonomous-lab.md)

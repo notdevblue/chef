@@ -276,29 +276,12 @@ def project_denial(payload, env=None):
         raise ValueError("invalid project guard in Hermes worker context")
     request = {key: value for key, value in payload.items() if key != "han_hermes_worker"}
     cwd = payload.get("cwd") or data["cwd"]
-    try:
-        result = subprocess.run(argv, input=json.dumps(request, ensure_ascii=False).encode("utf-8"), cwd=cwd,
-                                capture_output=True, timeout=GUARD_TIMEOUT, env=child_env(cwd) if env is None else env)
-    except (OSError, subprocess.SubprocessError) as e:
-        return f"프로젝트 워커 가드를 실행하지 못함: {e}"
-    if result.returncode:
-        return "프로젝트 워커 가드 실패: " + result.stderr.decode("utf-8", "replace").strip()[-500:]
-    text = result.stdout.decode("utf-8", "replace").strip()
-    if not text:
-        return ""
-    try:
-        output = json.loads(text)
-    except ValueError:
-        return "프로젝트 워커 가드 출력이 JSON 이 아님"
-    specific = output.get("hookSpecificOutput") if isinstance(output, dict) else None
-    if isinstance(specific, dict) and specific.get("permissionDecision") == "allow" and "decision" not in output:
-        return ""
-    reason = ""
-    if isinstance(specific, dict):
-        reason = str(specific.get("permissionDecisionReason") or "")
-    if isinstance(output, dict) and not reason:
-        reason = str(output.get("reason") or "")
-    return "프로젝트 워커 가드: " + (reason or "거부")
+    from chef.guards.policy import command_denial
+
+    return command_denial(argv, request, cwd, env=child_env(cwd) if env is None else env,
+                          timeout=GUARD_TIMEOUT, messages={"error": "프로젝트 워커 가드를 실행하지 못함: ",
+                          "failed": "프로젝트 워커 가드 실패: ", "json": "프로젝트 워커 가드 출력이 JSON 이 아님",
+                          "denied": "프로젝트 워커 가드: "})
 
 
 def command_for(executable, role, cwd, extra=()):

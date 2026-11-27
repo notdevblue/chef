@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from chef.guards import questions as question_write_guard
+from chef.guards.policy import mission_policy_configured, mission_policy_denial
 from chef.guards.adapters import (
     AdapterNotFound,
     GuardOff,
@@ -886,21 +887,36 @@ def decide(payload):
                 "Grok 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
             )
             return outcome
-        if payload.get("han_runtime") == "hermes" and payload.get("agent_id"):
-            outcome.deny = "Hermes 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
+        if payload.get("agent_id"):
+            if payload.get("han_runtime") == "hermes":
+                outcome.deny = "Hermes 서브에이전트는 미션 open/resume/close를 실행하지 않음; 부모 세션에서 실행할 것"
+            else:
+                outcome.deny = "Subagents cannot open, resume or close a mission; use the coordinator session"
             return outcome
         if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
             outcome.deny = "미션 마커에 소유 session_id가 없음"
             return outcome
-        if entry_context:
+        if entry_context or mission_policy_configured(adapter):
+            from chef.cli import mission_entry as mission_entry
+
             try:
                 with mission_entry.active_lock(state_dir):
-                    checked = mission_entry.guard_location(payload, mode, entry_marker.group(2))
-                    checked_state = state_dir_of(checked["located"].project, checked["adapter"])
-                    if mission_entry.path_key(checked_state) != mission_entry.path_key(state_dir):
-                        raise mission_entry.EntryError(
-                            "mission entry state directory changed before the marker"
-                        )
+                    checked_state = state_dir
+                    if verdict.marker.group(1).lower() in SESSION_ACTIONS:
+                        checked_mode = "resume" if verdict.marker.group(1).lower() == "resume" else "new"
+                        checked = mission_entry.guard_location(payload, checked_mode, verdict.marker.group(2))
+                        if checked:
+                            checked_state = state_dir_of(checked["located"].project, checked["adapter"])
+                            if mission_entry.path_key(checked_state) != mission_entry.path_key(state_dir):
+                                raise mission_entry.EntryError(
+                                    "mission entry state directory changed before the marker"
+                                )
+                    current_adapter = load_adapter(located.adapter_path, runtime=payload.get("han_runtime", "claude"))
+                    if current_adapter != adapter:
+                        raise mission_entry.EntryError("mission policy adapter changed before the marker")
+                    outcome.deny = mission_policy_denial(current_adapter, payload)
+                    if outcome.deny:
+                        return outcome
                     handle_marker(
                         verdict.marker,
                         checked_state,
