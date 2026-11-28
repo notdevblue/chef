@@ -9,6 +9,9 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 
 `<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
 
+미션 전환은 `<plugin-root>/mission_control.py`를 `--runtime claude`와 실제 세션·작업 루트·새 요청 ID로 호출한다.
+사전 검사 영수증만으로 시작하지 않고 실행 성공과 ACTIVE의 id·session·runtime을 대조한다. 예전 echo 마커는 사용하지 않는다.
+
 ## 실행 경로와 역할
 
 - `<mission-entry>`: `<plugin-root>/skills/mission/scripts/mission_entry.py`, `<mission-entry-runtime>`: `--runtime claude`.

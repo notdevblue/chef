@@ -165,5 +165,8 @@
   },
   "skills/slots/scripts/slots.py": {
     "module": "chef.slots.commands"
+  },
+  "mission_control.py": {
+    "module": "chef.mission.transitions"
   }
 }

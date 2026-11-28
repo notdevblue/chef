@@ -1967,12 +1967,12 @@ def test_question_inspection_does_not_remember_recent_or_problem_results(tmp_pat
     calls = count_inspections(monkeypatch)
     inspect_saved(tmp_path)
     inspect_saved(tmp_path)
-    assert len(calls) == 2 and dashboard.INSPECTIONS == {}
+    assert len(calls) == 2 and dashboard_data.INSPECTIONS == {}
     age_files(tmp_path)
     (tmp_path / "details/history/ask-1.md").unlink()
     assert inspect_saved(tmp_path)[1] != ""
     assert inspect_saved(tmp_path)[1] != ""
-    assert len(calls) == 4 and dashboard.INSPECTIONS == {}
+    assert len(calls) == 4 and dashboard_data.INSPECTIONS == {}
 
 
 def test_question_inspection_returns_private_copies_and_stays_bounded(tmp_path, monkeypatch):
@@ -1987,7 +1987,7 @@ def test_question_inspection_returns_private_copies_and_stays_bounded(tmp_path, 
     assert len(dashboard.inspect_question(str(tmp_path), "ask-1.md", texts["ask-1.md"])[0].items) == 1
     for name, text in texts.items():
         dashboard.inspect_question(str(tmp_path), name, text)
-    assert len(dashboard.INSPECTIONS) <= 2
+    assert len(dashboard_data.INSPECTIONS) <= 2
 
 
 def test_question_inspection_cache_is_safe_under_concurrent_requests(tmp_path, monkeypatch):
@@ -2013,7 +2013,7 @@ def test_question_inspection_cache_is_safe_under_concurrent_requests(tmp_path, m
         thread.start()
     for thread in threads:
         thread.join()
-    assert failures == [] and len(dashboard.INSPECTIONS) <= 3
+    assert failures == [] and len(dashboard_data.INSPECTIONS) <= 3
 
 
 def test_page_functions_share_one_realpath_memo_per_request(monkeypatch):

@@ -104,7 +104,7 @@ def test_canonical_bridge_payload_keeps_owner_and_does_not_trust_environment(tmp
 
 def test_hermes_owner_marker_records_runtime_and_command_guard_applies(tmp_path):
     adapter(tmp_path, {"guard": {"deny": [{"pattern": "forbidden-action", "reason": "fictional restriction"}]}})
-    outcome = mission.decide(payload(tmp_path, "Bash", {"command": "echo han-mission open garden-mission"}))
+    outcome = mission.decide(payload(tmp_path, "Bash", {"command": "echo han-mission open garden-mission"}), marker_mode="execute")
     assert not outcome.deny
     active = mission.read_active(str(tmp_path / "state"))
     assert (active.id, active.session, active.runtime) == ("garden-mission", "garden-owner", "hermes")

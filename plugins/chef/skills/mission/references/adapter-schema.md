@@ -49,8 +49,8 @@ Claude 설정·메모리 준비 단계는 `runtimes.claude.slots.beforeRun`에�
 ```
 
 `roots`는 경로나 glob이다. Windows 형식 경로는 구분자·대소문자를 정규화하며, POSIX 경로는 파일시스템의 경로 식별을 보존한다. 둘 다 없으면 어댑터 없음이다.
-그때 스킬은 멈춘다. 훅은 미션 마커 명령(`echo han-mission open|resume|close <id>`)일 때만
-`미션 가드 꺼짐: 어댑터 못 찾음 — <이유>`로 알리고(차단은 안 함), 다른 명령에는 아무것도 하지 않는다.
+그때 스킬은 멈춘다. 미션 전환 명령(`mission_control.py open|resume|close <id> ...`)은
+어댑터를 찾지 못하면 거부하고 상태를 보존한다. 다른 명령에는 기존 어댑터 검색 동작을 유지한다.
 이유는 레지스트리 경로 미설정, 레지스트리 폴더 없음, `projects.json` 없음, 맞는 `roots` 없음 중 하나다.
 
 어댑터를 찾으면 같은 폴더의 `local.json`(PC별 값, VCS 제외)을 깊게 병합해 읽는다. 객체는 키별로 합치고
@@ -74,12 +74,12 @@ Claude와 Codex는 같은 레지스트리·stateDir·슬롯 잠금 파일을 공
 Codex 덮어쓰기는 `runtimes.codex` 객체에 둔다. 위 OS·런타임 병합 순서를 적용하며 공통 PC별 경로는 `local.json`에서 관리한다.
 스킬과 가드, check_guard, slots가 이 병합 규칙을 같이 쓴다.
 
-`AdapterNotFound`는 미션 마커 명령(`echo han-mission open|resume|close <id>`)에서만
-`미션 가드 꺼짐: 어댑터 못 찾음 — <이유>`로 알리고(차단은 안 함), 다른 명령에는 알리지 않는다. 가능한 이유는
+`AdapterNotFound`가 나면 미션 전환 명령(`mission_control.py open|resume|close <id> ...`)을
+거부하고 상태를 보존한다. 다른 명령에는 기존 동작을 유지한다. 가능한 이유는
 시작 폴더 없음, 경로 미설정, 레지스트리 폴더나 `projects.json` 없음, 맞는 `roots` 없음이다.
-Codex 설정 읽기·형식 오류 또는 Python 버전 부족은 `GuardOff`이므로 마커 여부와 관계없이 훅 호출에서
-`미션 가드 꺼짐: <이유>`를 알린다. 셸 `echo`의 텍스트 출력은 훅 실행 증거가 아니다. 미션을 열거나 재개한
-뒤에는 훅의 `가드 켜짐` 안내와 `<stateDir>/ACTIVE`의 미션 id 및 현재 세션 id가 일치하는지 확인한다.
+Codex 설정 읽기·형식 오류 또는 Python 버전 부족은 `GuardOff`다. 전환 명령은 이를 거부하고,
+일반 명령은 기존 가드 진단을 유지한다. 미션을 열거나 재개한 뒤에는 CLI 실행 성공과
+`<stateDir>/ACTIVE`의 미션 id·현재 세션 id·runtime이 모두 일치하는지 확인한다.
 
 ## Grok에서 상태 읽기
 
@@ -272,11 +272,12 @@ PC마다 다른 값은 같은 폴더의 `local.json`에 둔다. 깊은 병합으
   `except`처럼 조각 전체 일치만 보며, 같은 명령의 다른 조각은 계속 검사한다. p4 쓰기 규칙은 긴 접두 정규식 대신
   `guard.p4Deny`로 하위 명령 이름을 적는다. 예: `{"commands": ["shelve"], "when": "(?:^|\\s)-d\\b", "reason": "shelve 삭제 금지"}`.
   어댑터를 바꾸면 `check_guard.py <adapter.json>`로 `guard-cases.json`이 `mismatches=0`인지 확인한다.
-- **진행 표시**: `<stateDir>/ACTIVE`는 JSON `{"id", "session", "openedAt"}`. 코디네이터가 마커 명령으로만 바꾼다.
-  마커는 그 호출의 유일한 명령일 때만 동작한다.
-  - `echo han-mission open <id>` — 없으면 만들고 이 세션에 건다. 다른 미션이 있으면 거부
-  - `echo han-mission resume <id>` — 같은 미션을 이 세션에 다시 건다(압축·재시작 뒤)
-  - `echo han-mission close <id>` — 지우고 `allow-once`도 지운다. 연 세션에서만(손상된 ACTIVE는 예외)
+- **진행 표시**: `<stateDir>/ACTIVE`는 JSON `{"id", "session", "openedAt", "runtime"}`. 코디네이터가 전용 전환 명령으로 바꾼다.
+  전환은 그 호출의 유일한 명령일 때만 동작한다.
+  - 전용 명령 전체 인자와 사전 검사/실행 구분은 [공통 미션 절차](../../../shared/skills/mission.md#미션-전환-명령)를 따른다. 실행 전 훅은 ACTIVE를 변경하지 않는다.
+  - `mission_control.py open <id> ...` — 없으면 만들고 이 세션에 건다. 다른 미션이 있으면 거부
+  - `mission_control.py resume <id> ...` — 같은 미션을 이 세션에 다시 건다(압축·재시작 뒤)
+  - `mission_control.py close <id> ...` — 지우고 `allow-once`도 지운다. 연 세션에서만(손상된 ACTIVE는 예외)
 - **세션 범위**: ACTIVE의 `session`과 같은 세션만 막는다. 서브에이전트는 부모 세션의 `session_id`로 훅에 들어오므로 같이 막힌다(2026-10-15 실측). 다른 세션은 경고만 받는다.
 - **1회 허용**: `<stateDir>/<id>/allow-once`에 명령 문자열이 한 줄로 있으면 그 명령은 한 번 통과하고 줄이 지워진다.
   사용자가 그 명령을 그 자리에서 승인했을 때만 쓴다. 읽다가 오류가 나면 막는다.

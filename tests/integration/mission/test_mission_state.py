@@ -211,7 +211,7 @@ def opened(mission):
 
 def test_init_requires_guard_to_be_on(mission):
     (mission.root / "state" / "ACTIVE").unlink()
-    assert "han-mission open m1" in mission.fail("--mission", "m1", "init")
+    assert "mission_control.py open m1" in mission.fail("--mission", "m1", "init")
     (mission.root / "state" / "ACTIVE").write_text(json.dumps({"id": "m1", "session": ""}), encoding="utf-8")
     assert "가드 안 켜짐" in mission.fail("init")
     (mission.root / "state" / "ACTIVE").write_text(json.dumps({"id": "other", "session": "s1"}), encoding="utf-8")
@@ -249,7 +249,7 @@ def test_init_records_tier(mission):
 
 def test_init_refuses_small_tier_unless_forced(mission):
     err = mission.fail("init", "--tier", "S")
-    assert "S 티어는 미션으로 열지 않음" in err and "han-mission close m1" in err
+    assert "S 티어는 미션으로 열지 않음" in err and "mission_control.py close m1" in err
     assert not mission.folder.exists()
     assert "S·M·L" in mission.fail("init", "--tier", "XL")
     out = mission.ok("init", "--tier", "S", "--force-tier")

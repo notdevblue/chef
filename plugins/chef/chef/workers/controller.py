@@ -172,9 +172,12 @@ def ownership(request):
     adapter = configuration.read_adapter(located.adapter_path, runtime)
     state = os.path.realpath(mission.state_dir_of(located.project, adapter))
     active = mission.read_active(state)
+    if (not active.corrupt and active.id == request.get("mission")
+            and active.session == request.get("ownerSession") and not active.runtime):
+        raise ValueError("ACTIVE runtime is missing; run mission_control.py resume before dispatch")
     if (active.corrupt or not mission.valid_mission_id(active.id) or active.id != request.get("mission")
             or active.session != request.get("ownerSession")
-            or active.runtime not in ("", runtime)):
+            or active.runtime != runtime):
         raise ValueError("worker request does not own the ACTIVE mission")
     if not (Path(state) / active.id / "mission.md").is_file():
         raise ValueError("initialize the owned mission before dispatch")

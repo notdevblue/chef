@@ -85,6 +85,25 @@ def test_native_unregistered_role_cannot_create_unusable_dispatch(project, monke
     assert project.store.list() == []
 
 
+@pytest.mark.parametrize("owner", controller.RUNTIMES)
+@pytest.mark.parametrize("legacy", ["missing", "empty"])
+def test_dispatch_requires_explicit_runtime_after_legacy_resume(project, monkeypatch, owner, legacy):
+    calls = choose(monkeypatch, owner)
+    request = project.request(owner)
+    path = project.state / "ACTIVE"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if legacy == "missing":
+        value.pop("runtime")
+    else:
+        value["runtime"] = ""
+    path.write_text(json.dumps(value), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="mission_control.py resume"):
+        controller.dispatch(request, store=project.store)
+    assert calls == [] and project.store.list() == []
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("owner,mode", list(itertools.product(controller.RUNTIMES, controller.MODES)))
 def test_mode_limits_candidates_before_launch(project, monkeypatch, owner, mode):
     target = owner if mode in ("auto", "native") else mode

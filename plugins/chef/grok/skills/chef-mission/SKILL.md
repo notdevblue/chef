@@ -26,6 +26,9 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
   어댑터의 프로젝트 스킬은 실제 설치 파일과 도구를 읽고 적용한다. 필요한 스킬·Unity 연결이 없으면 해당 단계를 미확인으로 남긴다.
   Claude JSONL 전용 사용량 집계기는 Grok 로그에 적용하지 않는다. 실제 모델·effort 증거와 미확인 한계만 기록한다.
 
+미션 전환은 `<plugin-root>/mission_control.py`를 `--runtime grok`와 실제 세션·작업 루트·새 요청 ID로 호출한다.
+사전 검사 영수증만으로 시작하지 않고 실행 성공과 ACTIVE의 id·session·runtime을 대조한다. 예전 echo 마커는 사용하지 않는다.
+
 ## 실행 경로
 
 - `<mission-entry>`: `<plugin-root>/grok/scripts/mission_entry.py`, `<mission-entry-runtime>`: 빈 값.
@@ -34,4 +37,4 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 - `<p4-wrapper>`: `<plugin-root>/grok/skills/chef-mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/grok/skills/chef-distill/SKILL.md`. 슬롯은 `chef-slots`, 어댑터는 `chef-adapter-init`이다.
 - M·L은 코디네이터이며 프로젝트 파일은 역할에 맡긴다. S는 `chef-run` 직접 처리이며 사용자가 명시적으로 원할 때만 `init --tier S --force-tier`로 미션을 열고 분리를 유지한다.
-- Grok 세션 id는 실제 세션에서 확인한다. open·resume 단독 마커 뒤 훅 안내와 ACTIVE의 미션 id·현재 세션 id를 모두 확인한다.
+- Grok 세션 id는 실제 세션에서 확인한다. open·resume CLI의 실행 성공과 ACTIVE의 미션 id·현재 세션 id·runtime=grok을 모두 확인한다.

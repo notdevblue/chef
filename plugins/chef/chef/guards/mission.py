@@ -6,6 +6,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from contextlib import nullcontext
 
 from chef.guards import questions as question_write_guard
 from chef.guards.allow_once import SharedAllowOnceError, configured_participants, consume_shared_allow_once, shared_once_context, normalize_shared_payload
@@ -395,18 +396,19 @@ def clear_allow_once(state_dir, mission_id):
                 remove_quietly(os.path.join(folder, name))
 
 
-def open_mission(state_dir, mission_id, session_id, active, outcome, runtime=""):
+def open_mission(state_dir, mission_id, session_id, active, outcome, runtime="", *, commit=True):
     if active.corrupt:
         outcome.deny = corrupt_active_notice(state_dir)
         return
     if active.id and active.id != mission_id:
         outcome.deny = f"다른 미션 {active.id} 진행 중"
         return
-    write_active(state_dir, Active(mission_id, session_id, now_iso(), runtime=runtime or active.runtime))
+    if commit:
+        write_active(state_dir, Active(mission_id, session_id, now_iso(), runtime=runtime or active.runtime))
     outcome.messages.append(f"미션 {mission_id} 가드 켜짐")
 
 
-def resume_mission(state_dir, mission_id, session_id, active, outcome, runtime=""):
+def resume_mission(state_dir, mission_id, session_id, active, outcome, runtime="", *, commit=True):
     if active.corrupt:
         outcome.deny = corrupt_active_notice(state_dir)
         return
@@ -415,21 +417,24 @@ def resume_mission(state_dir, mission_id, session_id, active, outcome, runtime="
             f"다른 미션 {active.id} 진행 중" if active.id else f"미션 {mission_id} 가 열려 있지 않음"
         )
         return
-    write_active(
-        state_dir,
-        Active(mission_id, session_id, active.opened_at or now_iso(), runtime=runtime or active.runtime),
-    )
+    if commit:
+        write_active(
+            state_dir,
+            Active(mission_id, session_id, active.opened_at or now_iso(), runtime=runtime or active.runtime),
+        )
     outcome.messages.append(f"미션 {mission_id} 가드 세션 갱신 (이전 session: {active.session or '없음'})")
 
 
-def close_mission(state_dir, mission_id, session_id, active, outcome, runtime=""):
+def close_mission(state_dir, mission_id, session_id, active, outcome, runtime="", *, commit=True):
     if active.corrupt:
-        remove_quietly(active_path_of(state_dir))
-        clear_allow_once(state_dir, mission_id)
+        if commit:
+            remove_quietly(active_path_of(state_dir))
+            clear_allow_once(state_dir, mission_id)
         outcome.messages.append(f"손상된 ACTIVE 를 지움 (close {mission_id})")
         return
     if not active.id:
-        clear_allow_once(state_dir, mission_id)
+        if commit:
+            clear_allow_once(state_dir, mission_id)
         outcome.messages.append(f"미션 {mission_id} 는 이미 닫혀 있음")
         return
     if active.id != mission_id:
@@ -438,8 +443,9 @@ def close_mission(state_dir, mission_id, session_id, active, outcome, runtime=""
     if active.session and active.session != session_id:
         outcome.deny = f"다른 세션의 미션 {active.id} — resume 후 close"
         return
-    remove_quietly(active_path_of(state_dir))
-    clear_allow_once(state_dir, mission_id)
+    if commit:
+        remove_quietly(active_path_of(state_dir))
+        clear_allow_once(state_dir, mission_id)
     outcome.messages.append(f"미션 {mission_id} 가드 꺼짐")
 
 
@@ -447,14 +453,20 @@ MARKER_ACTIONS = {"open": open_mission, "resume": resume_mission, "close": close
 
 
 def handle_marker(
-    marker, state_dir, session_id, outcome, transcript="", stale_hours=STALE_HOURS_DEFAULT, runtime=""
+    marker, state_dir, session_id, outcome, transcript="", stale_hours=STALE_HOURS_DEFAULT, runtime="", *, commit=True
 ):
     action, mission_id = marker.group(1).lower(), marker.group(2)
     if not valid_mission_id(mission_id):
         outcome.deny = f"미션 id 형식 오류: {mission_id}"
         return
     active = read_active(state_dir)
-    MARKER_ACTIONS[action](state_dir, mission_id, session_id, active, outcome, runtime)
+    prior_path = active_path_of(state_dir)
+    try:
+        with open(prior_path, "rb") as stream:
+            prior_active = stream.read()
+    except FileNotFoundError:
+        prior_active = None
+    MARKER_ACTIONS[action](state_dir, mission_id, session_id, active, outcome, runtime, commit=commit)
     if outcome.deny and active.id and not active.corrupt:
         try:
             state = staleness(state_dir, active, stale_hours)
@@ -462,7 +474,7 @@ def handle_marker(
             state = NOT_STALE
         if state.stale:
             outcome.deny += f" — {active.id} {stale_text(state)}. {FORCE_CLOSE_HINT}"
-    if action in SESSION_ACTIONS and not outcome.deny:
+    if commit and action in SESSION_ACTIONS and not outcome.deny:
         try:
             folder = os.path.join(state_dir, mission_id)
             os.makedirs(folder, exist_ok=True)
@@ -472,10 +484,22 @@ def handle_marker(
             )
             cells = [now_iso(), action, session_id, transcript]
             lines.append("\t".join(CELL_BREAKS.sub(" ", cell).strip() for cell in cells))
-            with open(path, "a", encoding="utf-8", newline="\n") as f:
-                f.write("\n".join(lines) + "\n")
-        except OSError as e:  # 가드는 이미 켜졌으니 기록 실패로 마커를 거부하지 않음
-            outcome.messages.append(f"{SESSIONS_FILE} 기록 실패: {e}")
+            from chef.infrastructure.storage import atomic_write_bytes
+
+            existing = b""
+            if os.path.isfile(path):
+                with open(path, "rb") as stream:
+                    existing = stream.read()
+            atomic_write_bytes(path, existing + ("\n".join(lines) + "\n").encode("utf-8"), creation_mode=0o666)
+        except OSError as e:
+            from chef.infrastructure.storage import atomic_write_bytes
+
+            if prior_active is None:
+                os.unlink(prior_path)
+            else:
+                atomic_write_bytes(prior_path, prior_active, creation_mode=0o666)
+            outcome.messages.clear()
+            outcome.deny = f"{SESSIONS_FILE} 기록 실패; ACTIVE 복원: {e}"
 
 
 def consume_allow_once(state_dir, mission_id, command):
@@ -805,7 +829,7 @@ def execution_write_reason(payload):
     return ""
 
 
-def decide(payload):
+def decide(payload, *, marker_mode="", marker_locked=False, marker_snapshot=None):
     try:
         payload = normalize_shared_payload(payload)
     except SharedAllowOnceError as error:
@@ -843,6 +867,15 @@ def decide(payload):
     command = (payload.get("tool_input") or {}).get("command")
     if not isinstance(command, str):
         return outcome
+    from chef.mission import transitions
+
+    try:
+        transition = transitions.invocation(command, tool_name)
+        if transition is not None:
+            return transitions.prepare(payload, transition)
+    except (ValueError, OSError, GuardOff, AdapterNotFound, RuntimeError) as error:
+        return Outcome(deny=f"Mission transition rejected: {error}")
+
     marker_command = contains_marker(command, tool_name)
     entry_context = {}
     entry_marker = MARKER.fullmatch(command.strip())
@@ -941,11 +974,14 @@ def decide(payload):
         if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
             outcome.deny = "미션 마커에 소유 session_id가 없음"
             return outcome
+        if marker_mode not in ("check", "execute"):
+            outcome.deny = "Echo mission markers no longer change state; use mission_control.py with the current session/runtime and a fresh --request"
+            return outcome
         if entry_context or mission_policy_configured(adapter):
             from chef.cli import mission_entry as mission_entry
 
             try:
-                with mission_entry.active_lock(state_dir):
+                with (nullcontext() if marker_locked else mission_entry.active_lock(state_dir)):
                     checked_state = state_dir
                     if verdict.marker.group(1).lower() in SESSION_ACTIONS:
                         checked_mode = "resume" if verdict.marker.group(1).lower() == "resume" else "new"
@@ -962,6 +998,8 @@ def decide(payload):
                     outcome.deny = mission_policy_denial(current_adapter, payload)
                     if outcome.deny:
                         return outcome
+                    if marker_snapshot is not None and transitions.snapshot(payload) != marker_snapshot:
+                        return Outcome(deny="Transition inputs changed before commit")
                     handle_marker(
                         verdict.marker,
                         checked_state,
@@ -970,19 +1008,26 @@ def decide(payload):
                         str(payload.get("transcript_path") or ""),
                         stale_hours,
                         payload.get("han_runtime", "claude"),
+                        commit=marker_mode == "execute",
                     )
             except (mission_entry.EntryError, GuardOff, OSError, ValueError, TypeError, RuntimeError) as exc:
                 outcome.deny = f"미션 진입 확인 실패: {exc}"
         else:
-            handle_marker(
-                verdict.marker,
-                state_dir,
-                payload["session_id"],
-                outcome,
-                str(payload.get("transcript_path") or ""),
-                stale_hours,
-                "hermes" if payload.get("han_runtime") == "hermes" else "",
-            )
+            from chef.cli import mission_entry
+
+            with (nullcontext() if marker_locked else mission_entry.active_lock(state_dir)):
+                if marker_snapshot is not None and transitions.snapshot(payload) != marker_snapshot:
+                    return Outcome(deny="Transition inputs changed before commit")
+                handle_marker(
+                    verdict.marker,
+                    state_dir,
+                    payload["session_id"],
+                    outcome,
+                    str(payload.get("transcript_path") or ""),
+                    stale_hours,
+                    payload.get("han_runtime", "claude"),
+                    commit=marker_mode == "execute",
+                )
     elif verdict.kind == "rule":
         try:
             apply_rule(payload, command, verdict, state_dir, problems, outcome, stale_hours, participants is not None)

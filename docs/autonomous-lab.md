@@ -243,7 +243,8 @@ automated evaluator execution itself has the tested OS isolation boundary.
 
 ## Compatibility and restoration
 
-`chef-*` are public skill/role identifiers. `han-mission` lifecycle markers,
+`chef-*` are public skill/role identifiers. Lifecycle changes now execute through
+`mission_control.py`; legacy `han-mission` echo markers give migration guidance without changing state.
 `HAN_ADAPTERS_DIR`, `HAN_REPO`, `HAN_TRANSCRIPT`, `HAN_DISTILL_LOG`, guard variables,
 the `han` personal data directories and `han_state.py` internal implementation
 remain compatible. New modules do not rename them or rewrite existing adapters,

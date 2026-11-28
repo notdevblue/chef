@@ -43,7 +43,7 @@ def enter(project, mode="new", session="session-a", mission="sample-mission", ru
 
 def marker(project, action="open", mission="sample-mission", session="session-a", runtime="claude", cwd=""):
     return mission_guard.decide({"tool_name": "Bash", "tool_input": {"command": f"echo han-mission {action} {mission}"},
-                                 "cwd": cwd or str(project["root"]), "session_id": session, "han_runtime": runtime})
+                                 "cwd": cwd or str(project["root"]), "session_id": session, "han_runtime": runtime}, marker_mode="execute")
 
 
 def test_unregistered_existing_marker_compatibility(project):
@@ -684,7 +684,7 @@ def test_registered_new_markers_serialize_same_active_across_runtimes(project, t
         "mission_entry.guard_location=checked\noriginal_marker=mission_guard.handle_marker\n"
         "def transition(*args,**kwargs):\n with socket.create_connection(('127.0.0.1',int(sys.argv[4]))) as gate:\n"
         "  gate.sendall(payload['session_id'].encode())\n  gate.recv(1)\n return original_marker(*args,**kwargs)\n"
-        "mission_guard.handle_marker=transition\nresult=mission_guard.decide(payload)\nprint(json.dumps({'deny':result.deny}))\n")
+        "mission_guard.handle_marker=transition\nresult=mission_guard.decide(payload,marker_mode='execute')\nprint(json.dumps({'deny':result.deny}))\n")
     processes = []
     gates = []
     with listen() as snapshot, listen() as transition:

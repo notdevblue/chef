@@ -22,9 +22,12 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
   도구로 막는 강제 차단이 아니라 역할 정의가 브리프를 따르게 하는 것이며, 코디네이터가 반환된 분할안으로 새 단위를 파견한다.
 - 어댑터의 OS·`runtimes.codex` 덮어쓰기를 적용한다. 병합 순서는 [공통 어댑터 계약](references/adapter-schema.md#os와-런타임-병합)을 따른다.
 - CLI에서 hooks 기능이 켜져 있고 `/hooks`에서 현재 플러그인 훅을 신뢰한 상태여야 한다.
-  단독 마커 뒤 ACTIVE와 훅 안내가 모두 확인되기 전에는 미션 파일·프로젝트 파일을 쓰지 않는다.
+  전환 CLI의 실행 성공과 ACTIVE 소유권이 모두 확인되기 전에는 미션 파일·프로젝트 파일을 쓰지 않는다.
 - 프로젝트의 AGENTS.md와 실제 설치된 Codex 스킬을 우선 확인한다. Claude용 도구 이름·스킬이
   그대로 있다고 가정하지 않는다. 필요한 PoC·리뷰·Unity MCP가 없으면 해당 단계를 미확인으로 보고하고 멈춘다.
+
+미션 전환은 `<plugin-root>/mission_control.py`를 `--runtime codex`와 실제 세션·작업 루트·새 요청 ID로 호출한다.
+사전 검사 영수증만으로 시작하지 않고 실행 성공과 ACTIVE의 id·session·runtime을 대조한다. 예전 echo 마커는 사용하지 않는다.
 
 ## 실행 경로와 검증 범위
 

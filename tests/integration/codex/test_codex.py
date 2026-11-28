@@ -9,6 +9,7 @@ import pytest
 from chef.guards import adapters as guard_adapters
 
 from tests.paths import PLUGIN_ROOT
+from tests.transition_support import run_lifecycle_hook
 
 PLUGIN = PLUGIN_ROOT
 
@@ -59,13 +60,8 @@ def hook(project, command, session="parent", **fields):
         "tool_input": {"command": command},
         **fields,
     }
-    done = subprocess.run(
-        [sys.executable, "-B", str(PLUGIN / "codex/mission_guard.py")],
-        input=json.dumps(payload).encode(),
-        capture_output=True,
-        check=True,
-        timeout=15,
-    )
+    done = run_lifecycle_hook(PLUGIN / "codex/mission_guard.py", payload)
+    assert done.returncode == 0, done.stderr
     return json.loads(done.stdout or b"{}")
 
 
@@ -265,6 +261,7 @@ def test_installed_codex_hook_uses_config_registry_without_environment(project, 
     (installed / "hooks").mkdir()
     shutil.copytree(PLUGIN / "chef", installed / "chef", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(PLUGIN / "codex/mission_guard.py", installed / "codex/mission_guard.py")
+    shutil.copy2(PLUGIN / "mission_control.py", installed / "mission_control.py")
     shutil.copy2(PLUGIN / "hooks/mission_guard.py", installed / "hooks/mission_guard.py")
     shutil.copy2(PLUGIN / "hooks/mission_entry.py", installed / "hooks/mission_entry.py")
     shutil.copy2(PLUGIN / "hooks/question_write_guard.py", installed / "hooks/question_write_guard.py")
@@ -294,14 +291,8 @@ def test_installed_codex_hook_uses_config_registry_without_environment(project, 
     env["CODEX_HOME"] = str(config_home)
     hook_path = installed / "codex/mission_guard.py"
     payload = {"tool_name": "Bash", "cwd": str(project), "session_id": "installed-session"}
-    opened = subprocess.run(
-        [sys.executable, "-B", str(hook_path)],
-        input=json.dumps({**payload, "tool_input": {"command": "echo han-mission open test"}}).encode(),
-        capture_output=True,
-        env=env,
-        check=True,
-        timeout=15,
-    )
+    opened = run_lifecycle_hook(hook_path,
+        {**payload, "tool_input": {"command": "echo han-mission open test"}}, env=env)
     assert "켜짐" in json.loads(opened.stdout)["systemMessage"]
     denied_submit = subprocess.run(
         [sys.executable, "-B", str(hook_path)],

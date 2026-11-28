@@ -134,7 +134,7 @@ def tier_messages(args, mission_id):
     if tier == "S":
         if not getattr(args, "force_tier", False):
             raise StateError(
-                f"S 티어는 미션으로 열지 않음({MISSION_TIERS['S']}). `echo han-mission close {mission_id}` 로 닫고 직접 처리할 것. "
+                f"S 티어는 미션으로 열지 않음({MISSION_TIERS['S']}). `mission_control.py close {mission_id} ...` 로 닫고 직접 처리할 것. "
                 "사용자가 미션을 원하면 `--force-tier`"
             )
         return ["경고: S 티어를 --force-tier 로 미션으로 엶"], tier
@@ -145,7 +145,7 @@ def cmd_init(ctx, args):
     active = mission_guard.read_active(ctx.state_dir)
     if active.corrupt or active.id != ctx.mission_id or not active.session:
         raise StateError(
-            f"가드 안 켜짐: ACTIVE 가 미션 {ctx.mission_id} 의 세션을 가리키지 않음 — `echo han-mission open {ctx.mission_id}` 를 단독으로 먼저 실행할 것"
+            f"가드 안 켜짐: ACTIVE 가 미션 {ctx.mission_id} 의 세션을 가리키지 않음 — `mission_control.py open {ctx.mission_id} ...` 를 단독으로 먼저 실행할 것"
         )
     warnings, tier = tier_messages(args, ctx.mission_id)
     os.makedirs(ctx.folder, exist_ok=True)
@@ -422,7 +422,7 @@ def cmd_close_stale(ctx, args):
     lines = active_lines(ctx, active, state)
     if not state.stale:
         raise StateError(
-            f"아직 끊김 아님(기준 {limit:g}시간): {lines[1]} — 그 세션에서 `echo han-mission close {active.id}`"
+            f"아직 끊김 아님(기준 {limit:g}시간): {lines[1]} — 그 세션에서 `mission_control.py close {active.id} ...`"
         )
     if not args.force_close_stale:
         args.exit_code = FAILED
@@ -450,7 +450,7 @@ def cmd_close_stale(ctx, args):
                 f"\tlast={last}\tlimit={limit:g}h\treason={note}\n"
             )
         done.append(f"기록: {ctx.path('force-close.log')}")
-    done.append(f"되살리기: `echo han-mission open {active.id}` 후 `mission set --state 진행`")
+    done.append(f"되살리기: `mission_control.py open {active.id} ...` 후 `mission set --state 진행`")
     return done
 
 
@@ -977,7 +977,7 @@ def main(argv=None, runtime="claude"):
                 )
             if not active.id:
                 raise StateError(
-                    "미션 id 없음: --mission <id> 를 주거나 `echo han-mission open <id>` 로 먼저 열 것"
+                    "미션 id 없음: --mission <id> 를 주거나 `mission_control.py open <id> ...` 로 먼저 열 것"
                 )
             mission_id = active.id
         if not standalone and not mission_guard.valid_mission_id(mission_id):

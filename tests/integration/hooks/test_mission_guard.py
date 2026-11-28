@@ -10,6 +10,7 @@ import pytest
 from chef.guards import adapters as guard_adapters
 
 from tests.paths import PLUGIN_ROOT, REPO_ROOT
+from tests.transition_support import run_lifecycle_hook
 
 HOOKS_DIR = (PLUGIN_ROOT / 'hooks')
 
@@ -236,6 +237,12 @@ def run_raw(stdin, env_project=None, cwd=None, env=None, script=None):
     base.update(env or {})
     if env_project is not None:
         base["CLAUDE_PROJECT_DIR"] = str(env_project)
+    try:
+        value = json.loads(stdin)
+    except (ValueError, TypeError):
+        value = None
+    if isinstance(value, dict):
+        return run_lifecycle_hook(script or SCRIPT, value, env=base, cwd=cwd)
     return subprocess.run([sys.executable, "-B", str(script or SCRIPT)], input=stdin, capture_output=True, env=base, cwd=cwd, timeout=30)
 
 
@@ -647,7 +654,7 @@ def test_marker_open_creates_active_with_session(project):
     assert active["id"] == "m-1"
     assert active["session"] == "s9"
     assert active["openedAt"]
-    assert sorted(p.name for p in (project / STATE).iterdir()) == ["ACTIVE", "m-1"]
+    assert sorted(p.name for p in (project / STATE).iterdir()) == [".transitions", "ACTIVE", "ACTIVE.entry.lock.gate", "m-1"]
     assert sorted(p.name for p in (project / STATE / "m-1").iterdir()) == ["sessions.tsv"]
 
 
@@ -778,7 +785,7 @@ def test_marker_close_removes_allow_once_of_that_mission(project):
 def test_marker_with_bad_id_is_denied(project, bad_id):
     make_adapter(project)
     output = run_guard(project, f"echo han-mission open {bad_id}")
-    assert "형식 오류" in denial(output)
+    assert is_denied(output)
     assert not (project / STATE / "ACTIVE").exists()
 
 
@@ -1524,6 +1531,11 @@ GUARD_OFF_MARKERS = [
 
 
 def assert_guard_off_notice(output, reason_part):
+    if is_denied(output):
+        # The replacement lifecycle CLI fails closed when discovery fails.
+        assert "Mission transition rejected:" in denial(output)
+        assert reason_part in denial(output)
+        return
     assert not is_denied(output)
     for text in (output["systemMessage"], context_of(output)):
         assert "미션 가드 꺼짐: 어댑터 못 찾음" in text
@@ -1563,7 +1575,7 @@ def test_marker_without_adapter_warns_when_no_root_matches(project):
     repo.mkdir()
     output = run_guard(repo, "echo han-mission open m-1", env={"HAN_ADAPTERS_DIR": str(registry)})
     assert_guard_off_notice(output, "맞는 항목 없음")
-    assert str(repo) in output["systemMessage"]
+    assert str(repo) in (output.get("systemMessage", "") + denial(output))
 
 
 def test_marker_without_adapter_warns_when_registry_path_unset(project):

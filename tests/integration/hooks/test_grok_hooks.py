@@ -11,6 +11,7 @@ from chef.runtimes import hooks as hook_runtime
 from chef.runtimes import session as session_rules
 
 from tests.paths import PLUGIN_ROOT
+from tests.transition_support import run_lifecycle_hook
 
 
 @pytest.fixture
@@ -34,9 +35,7 @@ def payload(project, command="echo ready", tool="run_terminal_command", session=
 
 def run_hook(script, value, **environment):
     env = {key: value for key, value in os.environ.items() if key not in ("GROK_HOOK_EVENT", "GROK_SESSION_ID", "CLAUDE_PROJECT_DIR")}
-    result = subprocess.run([sys.executable, "-B", str((PLUGIN_ROOT / 'hooks') / script)],
-                            input=json.dumps(value).encode("utf-8"), capture_output=True,
-                            env={**env, **environment}, timeout=30)
+    result = run_lifecycle_hook((PLUGIN_ROOT / 'hooks') / script, value, env={**env, **environment})
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout) if result.stdout else {}
 
@@ -67,7 +66,7 @@ def test_native_marker_lifecycle_and_init_boundary(project, tool, shell, marker)
 
 
 def open_mission(project):
-    assert not mission_guard.decide(payload(project, "echo han-mission open garden")).deny
+    assert not mission_guard.decide(payload(project, "echo han-mission open garden"), marker_mode="execute").deny
 
 
 def test_native_deny_command_and_unrelated_session(project):
@@ -83,7 +82,7 @@ def test_native_marker_requires_owner_and_records_transcript(project):
     missing = payload(project, "echo han-mission open garden", session="")
     assert "session_id" in mission_guard.decide(missing).deny
     transcript = str(project / "session.json")
-    assert not mission_guard.decide(payload(project, "echo han-mission open garden", transcriptPath=transcript)).deny
+    assert not mission_guard.decide(payload(project, "echo han-mission open garden", transcriptPath=transcript), marker_mode="execute").deny
     sessions = (project / "state/garden/sessions.tsv").read_text(encoding="utf-8")
     assert f"open\towner\t{transcript}" in sessions
 

@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.transition_support import run_lifecycle_hook
 from chef.mission import state as mission_state
 from chef.verification import runner as verification
 from test_verification import (  # Reuse synthetic mission helpers.
@@ -207,8 +208,7 @@ def test_runtime_guard_owner_and_child_contract_in_real_hook_process(tmp_path, r
                            tool_name='Bash', tool_input={'command': command})
             if child:
                 payload.update(agent_id='child', agent_type='developer')
-        result = subprocess.run([sys.executable, '-B', str(script)], cwd=root,
-                                input=json.dumps(payload).encode('utf-8'), capture_output=True, timeout=15)
+        result = run_lifecycle_hook(script, payload, cwd=root, timeout=15)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout or b'{}')
 

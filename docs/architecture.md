@@ -135,4 +135,13 @@ POSIX의 개인 캐시 실행기는 원래 인터프리터 경로를 exec하여 
 위험한 동작인 상태 변경·동시 실행·경로 접근·검증 재사용을 실제 관찰 결과로 확인한다.
 구조 검사는 테스트 혼입, 구현의 경로 조작과 등록 디렉터리 의존이 다시 생기면 실패해야 한다.
 
-Hermes의 미션 상태 변경은 `chef_mission` 도구 handler가 담당한다. 사전 훅은 검증만 하며 shell marker는 native bridge에서 거부한다. `contracts.py`는 명시된 외부 읽기 파일과 역할 지침·모델 정책의 해시를 확인한다. 다른 런타임의 기존 marker와 명령·훅 경로는 유지한다.
+Hermes의 미션 상태 변경은 `chef_mission` 도구 handler가 담당한다. 사전 훅은 검증만 하며 shell marker는 native bridge에서 거부한다. `contracts.py`는 명시된 외부 읽기 파일과 역할 지침·모델 정책의 해시를 확인한다. Claude·Codex·Grok의 기존 echo marker는 아래 실행 경계에 따라 전용 명령으로 전환한다. 기존 상태 CLI·훅 경로는 유지한다.
+
+## 미션 전환의 실행 경계
+
+Claude·Codex·Grok은 `mission_control.py`로 open·resume·close를 실행한다. 실행 전 훅은
+실제 런타임·세션·cwd와 호출 인자를 대조하고 2분 유효한 요청별 1회용 영수증만 기록한다.
+ACTIVE·일회 허용·세션 기록의 변경은 호스트가 명령 실행을 허용한 뒤 CLI에서 수행한다.
+CLI는 ACTIVE 잠금 안에서 준비 당시 소유권·어댑터·경로와 현재 정책을 재검사한다.
+resume은 세션과 런타임을 함께 교체하며 최초 열린 시각을 유지한다. 영수증은 OS 보안 경계가 아니다.
+기존 echo 마커는 변경 없이 새 명령을 안내하며, Hermes는 native 도구 handler에서 상태를 확정한다.
