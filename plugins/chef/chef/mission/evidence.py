@@ -12,13 +12,16 @@ MAX_INPUT_BYTES = 1024 * 1024
 
 
 def capture(project, value, summary=""):
-    path = references.resolve_path(project, value)
     try:
-        with path.open("rb") as stream:
-            raw = stream.read(MAX_INPUT_BYTES + 1)
-        if len(raw) > MAX_INPUT_BYTES:
-            raise ValueError("input too large")
-        document = json.loads(raw.decode("utf-8-sig"))
+        if isinstance(value, dict):
+            document = value
+        else:
+            path = references.resolve_path(project, value)
+            with path.open("rb") as stream:
+                raw = stream.read(MAX_INPUT_BYTES + 1)
+            if len(raw) > MAX_INPUT_BYTES:
+                raise ValueError("input too large")
+            document = json.loads(raw.decode("utf-8-sig"))
         if (not isinstance(document, dict) or set(document) != {"schema", "files"}
                 or type(document["schema"]) is not int or document["schema"] != 1
                 or not isinstance(document["files"], list) or not 1 <= len(document["files"]) <= MAX_FILES):

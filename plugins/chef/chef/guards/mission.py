@@ -867,6 +867,10 @@ def decide(payload, *, marker_mode="", marker_locked=False, marker_snapshot=None
     command = (payload.get("tool_input") or {}).get("command")
     if not isinstance(command, str):
         return outcome
+    from chef.guards.commands import owned_worker_command_denial
+
+    if denial := owned_worker_command_denial(payload, command, tool_name):
+        return Outcome(deny=denial)
     from chef.mission import transitions
 
     try:

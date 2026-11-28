@@ -5,12 +5,17 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from chef.guards import mission
 from chef.mission.contracts import StateError
 from chef.mission.documents import share_documents, shared_documents
+from chef.verification.contracts import digest
+from chef.verification.plan import snapshot
+from chef.workers.store import Store
 from tests.paths import PLUGIN_ROOT
 
 
@@ -24,6 +29,7 @@ def project(tmp_path, monkeypatch):
     adapter.mkdir(parents=True)
     (adapter / "adapter.json").write_text(json.dumps({
         "schema": 1, "paths": {"stateDir": "state"}, "documents": {"schemaCatalog": "schema.json"},
+        "verify": {"grades": ["pytest-pass"]},
     }), encoding="utf-8")
     folder = project / "state" / "orchard"
     folder.mkdir(parents=True)
@@ -36,9 +42,10 @@ def project(tmp_path, monkeypatch):
     return project, folder
 
 
-def run(project, *args, input=None):
+def run(project, *args, input=None, runtime="codex"):
+    options = ("--runtime", runtime) if runtime else ()
     return subprocess.run(
-        [sys.executable, "-I", "-B", str(PLUGIN_ROOT / "chef_cli.py"), *args, "--runtime", "codex"],
+        [sys.executable, "-I", "-B", str(PLUGIN_ROOT / "chef_cli.py"), *args, *options],
         cwd=project, env={**os.environ, "PYTHONUTF8": "1"}, input=json.dumps(input) if input is not None else None,
         capture_output=True, encoding="utf-8", timeout=20,
     )
@@ -106,8 +113,14 @@ def test_normal_init_yields_one_managed_report_and_a_valid_design_template(proje
     assert not (folder / "confirm-A2.md").exists()
     published = run(root, "question", "publish", "--input", "-", input=draft)
     assert published.returncode == 0, published.stderr
-    reply = {"schema": 1, "id": "first", "revision": 1, "at": "2026-01-01T00:00:00Z", "text": "Blue",
-             "updates": [{"id": "color", "status": "answered", "answer": "Blue", "selected": "blue"}]}
+    snapshot = (folder / "questions/confirm-A2.json").read_bytes()
+    template = run(root, "question", "reply-template", "confirm-A2.md")
+    assert template.returncode == 0, template.stderr
+    reply = json.loads(template.stdout)
+    assert reply["id"] and reply["revision"] == 1 and datetime.fromisoformat(reply["at"]).utcoffset().total_seconds() == 0
+    assert reply["text"] == "" and reply["updates"] == []
+    assert (folder / "questions/confirm-A2.json").read_bytes() == snapshot
+    reply.update(text="Blue", updates=[{"id": "color", "status": "answered", "answer": "Blue", "selected": "blue"}])
     answered = run(root, "question", "answer", "confirm-A2.md", "--input", "-", input=reply)
     assert answered.returncode == 0, answered.stderr
     assert run(root, "question", "check").returncode == 0
@@ -125,6 +138,213 @@ def test_unit_batch_admits_stdin_without_a_temporary_payload_file(project):
     assert result.returncode == 0, result.stderr
     assert (folder / "units.tsv").is_file()
     assert list(root.glob("*.json")) == [root / "schema.json"]
+
+
+def init_unit(root, files='["garden.txt", "seedlings.txt"]'):
+    started = run(root, "mission", "init", "--tier", "M", "--goal", "Plant")
+    assert started.returncode == 0, started.stderr
+    (root / "garden.txt").write_text("garden\n", encoding="utf-8")
+    result = run(root, "unit", "add", "--input", "-", input={
+        "schema": 1, "units": [{"id": "M1", "goal": "Plant the garden", "files": files,
+                              "done": "Planted", "verify": "Inspect the garden", "timebox": 15,
+                              "forbid": "No outside edits"}],
+    })
+    assert result.returncode == 0, result.stderr
+
+
+def dispatch(root, role, attempt, *options, session="fictional"):
+    return run(root, "worker", "dispatch", "M1", "--role", role, "--session", session, "--request-id", attempt,
+               "--mode", "native", "--host-role", f"chef:{role}", *options)
+
+
+def registered_plan(root):
+    result = run(root, "plan", "template", "M1")
+    assert result.returncode == 0 and "Inspect the garden" in result.stderr
+    plan = json.loads(result.stdout)
+    assert plan["grade"] == "pytest-pass" and plan["inputs"] == ["garden.txt", "seedlings.txt"]
+    assert not plan["commands"] and not plan["environment"]
+    plan.update(commands=[{"argv": [sys.executable, "-c", "assert open('garden.txt').read()"]}],
+                environment={"fixture": "orchard"})
+    saved = run(root, "plan", "save", "M1", "--input", "-", input=plan)
+    assert saved.returncode == 0, saved.stderr
+    return plan, json.loads(saved.stdout)
+
+
+def test_compact_dispatch_reuses_approved_scope_and_request_identity(project):
+    root, _ = project
+    init_unit(root)
+    wrong = dispatch(root, "dev-small", "writing", session="someone-else")
+    assert wrong.returncode == 1 and "ACTIVE" in wrong.stdout
+    outside = dispatch(root, "dev-small", "writing", "--file", "schema.json")
+    assert outside.returncode == 1 and "approved unit files" in outside.stdout
+    created = dispatch(root, "dev-small", "writing", "--prompt", "Plant in this order")
+    assert created.returncode == 0, created.stdout + created.stderr
+    job = json.loads(created.stdout)
+    assert job["native"] and "Plant the garden" in job["brief"] and "Plant in this order" in job["brief"]
+    request = Store().get(job["key"], reconcile=False)["request"]
+    assert request["files"] == ["garden.txt", "seedlings.txt"] and request["mission"] == "orchard"
+    retry = dispatch(root, "dev-small", "writing", "--prompt", "Plant in this order")
+    assert retry.returncode == 0 and json.loads(retry.stdout)["key"] == job["key"]
+    assert json.loads(retry.stdout)["created"] is False
+    assert dispatch(root, "dev-small", "writing", "--prompt", "Different scope").returncode == 1
+
+
+def test_plain_scope_only_admits_an_actual_file_and_rejects_opaque_prose(project):
+    root, _ = project
+    init_unit(root, "garden.txt and related files")
+    assert dispatch(root, "dev-small", "writing", "--file", "garden.txt").returncode == 1
+    edit = run(root, "unit", "set", "M1", "--files", "garden.txt")
+    assert edit.returncode == 0, edit.stderr
+    assert dispatch(root, "dev-small", "writing").returncode == 0
+
+
+def test_ledger_stdin_records_and_audits_current_evidence_hash(project):
+    root, folder = project
+    init_unit(root)
+    evidence = {"schema": 1, "files": [{"path": "garden.txt", "kind": "report", "sha256": "a" * 64}]}
+    args = ("ledger", "record", "M1", "--status", "pass", "--grade", "pytest-pass", "--evidence-input", "-")
+    ledger = (folder / "ledger.tsv").read_bytes()
+    rejected = run(root, *args, input=evidence)
+    assert rejected.returncode == 1 and "sha256 differs" in rejected.stderr
+    assert (folder / "ledger.tsv").read_bytes() == ledger
+    evidence["files"][0].pop("sha256")
+    recorded = run(root, *args, input=evidence)
+    assert recorded.returncode == 0, recorded.stderr
+    assert json.loads(run(root, "ledger", "audit").stdout)["counts"]["checkedFiles"] == 1
+    (root / "garden.txt").write_text("changed\n", encoding="utf-8")
+    assert json.loads(run(root, "ledger", "audit").stdout)["counts"]["changed"] == 1
+
+
+def test_registered_plan_is_reusable_with_content_and_revision_checks(project):
+    root, _ = project
+    init_unit(root)
+    plan, first = registered_plan(root)
+    repeated = run(root, "plan", "save", "M1", "--input", "-", input=plan)
+    assert repeated.returncode == 0 and json.loads(repeated.stdout) == first
+    verifier = dispatch(root, "verifier", "verification")
+    assert verifier.returncode == 0, verifier.stdout + verifier.stderr
+    bound_path = Store().get(json.loads(verifier.stdout)["key"], reconcile=False)["request"]["verification"]
+    assert bound_path["path"] == first["path"] and bound_path["sha256"] == first["sha256"]
+    assert run(root, "preflight", "M1").returncode == 0
+    verified = run(root, "verify", "M1")
+    assert verified.returncode == 0, verified.stderr
+    assert "재사용" in run(root, "verify", "M1").stdout
+    assert run(root, "review-start", "M1").returncode == 0
+    assert run(root, "unit", "set", "M1", "--verify", "Inspect again").returncode == 0
+    assert json.loads(run(root, "plan", "show", "M1").stdout)["stale"]
+    assert run(root, "preflight", "M1").returncode == 1
+    plan["environment"] = {"fixture": "second"}
+    assert run(root, "plan", "save", "M1", "--input", "-", input=plan).returncode == 1
+    replaced = run(root, "plan", "save", "M1", "--input", "-", "--expect-sha256", first["sha256"], input=plan)
+    assert replaced.returncode == 0, replaced.stderr
+    second = json.loads(replaced.stdout)
+    assert second["sha256"] != first["sha256"] and Path(first["path"]).is_file()
+    Path(second["path"]).write_text("{}\n", encoding="utf-8")
+    assert run(root, "preflight", "M1").returncode == 1
+    assert run(root, "preflight", "M1", "--plan", first["path"]).returncode == 0
+
+
+def test_registered_plan_supplies_review_run_without_an_explicit_path(project):
+    root, _ = project
+    python = Path(sys.base_prefix) / "python.exe" if os.name == "nt" else Path(sys.executable)
+    if not python.is_file():
+        pytest.skip("hashable Python executable unavailable")
+    init_unit(root)
+    plan, _ = registered_plan(root)
+    for name in ("scope.json", "findings.json"):
+        (root / name).write_text("[]", encoding="utf-8")
+    result = run(root, "review-run", "M1", "--runtime", "codex", "--snapshot", digest(snapshot(root, plan["inputs"])),
+                 "--purpose", "Inspect garden", "--scope", "scope.json", "--findings", "findings.json",
+                 "--", str(python), "-c", "print('Reviewed the garden')", runtime=None)
+    assert result.returncode == 0, result.stdout + result.stderr
+    review = json.loads(result.stdout)
+    assert review["status"] == "completed" and review["result"]["inputsUnchanged"]
+
+
+def collect_review(root, job, review):
+    result = run(root, "worker", "native-result", "--key", job["key"], "--token", job["token"], "--result", "-",
+                 input=review, runtime=None)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["status"] == "completed"
+
+
+def clean_review():
+    return {"schema": 1, "report": "Reviewed the garden.", "findings": [], "resolvedIds": [], "suggestions": []}
+
+
+def test_review_job_records_first_findings_and_manual_diff_closes_same_id(project):
+    root, folder = project
+    init_unit(root)
+    registered_plan(root)
+    assert run(root, "verify", "M1").returncode == 0
+    started = dispatch(root, "code-reviewer", "first-review")
+    assert started.returncode == 0, started.stdout + started.stderr
+    job = json.loads(started.stdout)
+    args = ("review", "M1", "--job", job["key"])
+    assert run(root, *args, "--session", "fictional").returncode == 1
+    result = clean_review()
+    result["findings"].append({"id": "F1", "kind": "defect", "origin": "new", "severity": "low",
+                               "reason": "Missing label", "evidence": "garden.txt:1"})
+    collect_review(root, job, result)
+    wrong = run(root, *args, "--session", "someone-else")
+    assert wrong.returncode == 1 and "owner session" in wrong.stderr
+    pointer = folder / "verification/M1.review.latest.json"
+    assert not pointer.exists()
+    recorded = run(root, *args, "--session", "fictional")
+    assert recorded.returncode == 0, recorded.stderr
+    first = pointer.read_bytes()
+    assert run(root, *args, "--session", "fictional").returncode == 0
+    assert pointer.read_bytes() == first
+    first_review = json.loads(Path(json.loads(first)["review"]).read_bytes())
+    assert first_review["workerJob"] == job["key"] and first_review["findings"][0]["id"] == "F1"
+    assert Path(first_review["evidence"]).read_text(encoding="utf-8") == result["report"]
+    assert run(root, *args, "--session", "fictional", "--status", "closed-low").returncode == 1
+    (root / "garden.txt").write_text("labeled garden\n", encoding="utf-8")
+    assert run(root, *args, "--session", "fictional").returncode == 1
+    scope = run(root, "review-scope", "M1")
+    assert scope.returncode == 0 and "garden.txt" in scope.stdout
+    assert run(root, "verify", "M1").returncode == 0
+    receipt = json.loads((folder / "verification/M1.latest.json").read_bytes())["receipt"]
+    diff = root / "reviewed-diff.md"
+    diff.write_text("Confirmed label in garden.txt:1.\n", encoding="utf-8")
+    closed = run(root, "review", "M1", "--receipt", receipt, "--evidence", str(diff), "--reviewer", "coordinator",
+                 "--kind", "unit", "--status", "closed-low", "--resolved-id", "F1")
+    assert closed.returncode == 0, closed.stderr
+    current = json.loads(Path(json.loads(pointer.read_bytes())["review"]).read_bytes())
+    assert current["closedLowIds"] == ["F1"] and current["round"] == 2
+
+
+def test_review_job_rejects_superseded_receipt_and_unstructured_result(project):
+    root, folder = project
+    init_unit(root)
+    registered_plan(root)
+    assert run(root, "verify", "M1").returncode == 0
+    started = dispatch(root, "reviewer-small", "review")
+    assert started.returncode == 0, started.stdout + started.stderr
+    job = json.loads(started.stdout)
+    invalid = run(root, "worker", "native-result", "--key", job["key"], "--token", job["token"], "--result", "-",
+                  input={"ok": True, "result": "No issues."}, runtime=None)
+    assert invalid.returncode == 1 and "structured JSON" in invalid.stdout
+    collect_review(root, job, clean_review())
+    assert run(root, "verify", "M1", "--force").returncode == 0
+    rejected = run(root, "review", "M1", "--job", job["key"], "--session", "fictional")
+    assert rejected.returncode == 1 and "마지막 검증 기록" in rejected.stderr
+    assert not (folder / "verification/M1.review.latest.json").exists()
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex", "grok"])
+@pytest.mark.parametrize("action", ["worker dispatch M1 --role code-reviewer", "review M1 --job candidate"])
+def test_host_guard_checks_new_commands_against_actual_host_identity(project, runtime, action):
+    root, folder = project
+    mission.write_active(str(folder.parent), mission.Active("orchard", "actual-session", "original", runtime=runtime))
+    command = f'python "{PLUGIN_ROOT / "chef_cli.py"}" {action}'
+    payload = {"cwd": str(root), "han_runtime": runtime, "session_id": "actual-session", "tool_name": "PowerShell"}
+    valid = f"{command} --runtime={runtime} --session actual-session"
+    assert not mission.decide({**payload, "tool_input": {"command": valid}}).deny
+    wrong_session = valid.replace("actual-session", "different-session")
+    assert "--session" in mission.decide({**payload, "tool_input": {"command": wrong_session}}).deny
+    wrong_runtime = valid.replace(f"--runtime={runtime}", "--runtime=foreign")
+    assert "--runtime" in mission.decide({**payload, "tool_input": {"command": wrong_runtime}}).deny
 
 
 def test_typed_schema_is_checked_and_tampering_cannot_be_shared(project):

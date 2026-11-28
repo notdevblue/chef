@@ -13,7 +13,7 @@ SCRIPT = PLUGIN_ROOT / "chef_cli.py"
 TRANSITIONS = ("open", "resume", "close")
 MISSION_STATE = ("init", "active", "status", "context", "close-stale")
 STATE_GROUPS = (
-    "question", "document", "unit", "ledger", "decision", "verify", "preflight",
+    "question", "document", "unit", "ledger", "decision", "plan", "verify", "preflight",
     "reference", "inspect", "review", "review-open", "review-start", "review-scope", "review-run",
     "complete", "brief", "handoff", "schema", "transcripts",
 )

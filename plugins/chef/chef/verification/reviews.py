@@ -199,6 +199,7 @@ def record_review(
     settings=None,
     *,
     require_structured=False,
+    worker_job="",
 ):
     if findings_count < -1 or fixed_count < -1:
         raise VerificationError("지적·해소 수는 0 이상 또는 미기록(-1)이어야 함")
@@ -241,6 +242,8 @@ def record_review(
         "previousReviewHash": "",
         "diagnostics": [],
     }
+    if worker_job:
+        review["workerJob"] = worker_job
     if history:
         review["previousReview"] = history[0][0]
         review["previousReviewHash"] = file_hash(history[0][0])
@@ -259,6 +262,8 @@ def record_review(
     directory = Path(folder) / "verification"
     start_path, start = pending_review_start(folder, unit, history)
     if start:
+        if worker_job and start.get("snapshot") != receipt["snapshot"]:
+            raise VerificationError("리뷰 시작 기록이 워커 검증 입력과 다름: review-start 를 다시 기록할 것")
         if start.get("inputs") != receipt["plan"].get("inputs"):
             raise VerificationError(
                 "리뷰 시작 기록의 inputs 가 검증 계획과 다름: review-start 를 다시 기록할 것"

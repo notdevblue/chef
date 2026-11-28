@@ -183,7 +183,7 @@ def events(stdout):
             yield value
 
 
-def parse_result(runtime, result, role):
+def parse_result(runtime, result, role, *, final_message=False):
     if runtime == "claude":
         parsed = claude.parse_result(result, role)
         parsed["session_id"] = next((row.get("session_id", "") for row in events(result.stdout)
@@ -231,6 +231,8 @@ def parse_result(runtime, result, role):
                 if isinstance(event.get("structured_output"), dict):
                     messages = [json.dumps(event["structured_output"])]
     ok = result.returncode == 0 and terminal and not failed
+    if runtime == "codex" and final_message:
+        messages = messages[-1:]
     parsed = {"ok": ok, "runtime": runtime, "role": "chef:" + role, "exit_code": result.returncode,
             "session_id": session,
             "result": "".join(messages) if runtime == "grok" else "\n".join(messages),
@@ -390,7 +392,7 @@ def run(runtime, role, prompt, *, cwd, owner, settings=None, timeout=600, contex
             blocked = json.loads(blocker.read_text(encoding="utf-8"))
             return {"ok": False, "runtime": runtime, "errorCode": "guard_blocked", "error": blocked["reason"],
                     "blocked": blocked, "result": "Stopped after repeated guard denials; inspect the recorded command and scope."}
-        result = parse_result(runtime, completed, role)
+        result = parse_result(runtime, completed, role, final_message=bool(owner.get("structuredReview")))
         if cancelled and cancelled():
             raise process.Cancelled("worker cancelled before accepting result")
         if role_policy(role_config(runtime, role, settings)) != policy:

@@ -5,6 +5,8 @@ import json
 import os
 import re
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from chef.cli.input_json import stdin_object
@@ -139,6 +141,15 @@ def cmd_question_answer(ctx, args):
     require_folder(ctx)
     record = question_records.answer_document(ctx.folder, args.name, read_input(args.input))
     return [f"답변 저장: {record['id']}.md (revision {record['revision']})"]
+
+
+def cmd_question_reply_template(ctx, args):
+    require_folder(ctx)
+    record = question_records.read_document(ctx.folder, args.name)
+    return [json.dumps({
+        "schema": 1, "id": uuid.uuid4().hex, "revision": record["revision"],
+        "at": datetime.now(timezone.utc).isoformat(), "text": "", "updates": [],
+    }, ensure_ascii=False, indent=2)]
 
 
 def cmd_question_restore(ctx, args):

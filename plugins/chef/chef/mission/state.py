@@ -9,6 +9,7 @@ import re
 import sys
 from datetime import datetime
 
+from chef.cli.input_json import stdin_object
 from chef.cli.mission_parser import OneLineParser, build_parser
 from chef.cli.question_commands import (
     cmd_document_check,
@@ -24,6 +25,7 @@ from chef.cli.question_commands import (
     cmd_question_preview,
     cmd_question_publish,
     cmd_question_render,
+    cmd_question_reply_template,
     cmd_question_restore,
     cmd_question_show,
     cmd_question_template,
@@ -116,6 +118,7 @@ from chef.mission.storage import (
     write_text,
 )
 from chef.mission import evidence as file_evidence
+from chef.mission import managed_plans
 from chef.mission import unit_contracts
 from chef.mission import unit_input
 from chef.mission import review_dispatch
@@ -353,8 +356,14 @@ def cmd_ledger_record(ctx, args):
         raise StateError(
             f"grade 허용 값: {', '.join(grades)} (어댑터 verify.grades + {NEEDS_HUMAN}): {grade}"
         )
-    if getattr(args, "evidence_input", ""):
-        evidence = file_evidence.capture(ctx.project, args.evidence_input, clean(args.evidence))
+    evidence_input = getattr(args, "evidence_input", "")
+    if evidence_input:
+        if evidence_input == "-":
+            try:
+                evidence_input = stdin_object()
+            except ValueError as error:
+                raise StateError(f"invalid evidence JSON on standard input: {error}") from error
+        evidence = file_evidence.capture(ctx.project, evidence_input, clean(args.evidence))
     else:
         evidence = require_text("--evidence", args.evidence)
     files = clean(args.files) or NONE_CELL
@@ -554,10 +563,41 @@ def cmd_context(ctx, args):
     return lines
 
 
-def verification_plan(ctx, args):
+def verification_row(ctx, unit):
     require_folder(ctx)
-    row = require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
-    plan = verification.load_plan(ctx.project, args.plan, (ctx.adapter.get("verify") or {}).get("grades", []))
+    return require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), unit)
+
+
+def verification_grades(ctx):
+    return (ctx.adapter.get("verify") or {}).get("grades", [])
+
+
+def cmd_plan_template(ctx, args):
+    row = verification_row(ctx, args.id)
+    plan = managed_plans.template(ctx.project, row, verification_grades(ctx), args.grade)
+    print(f"등록 전 명령·환경·필요한 결과 판정을 채울 것. 단위 검증 기준: {row['verify']}", file=sys.stderr)
+    return [json.dumps(plan, ensure_ascii=False, indent=2)]
+
+
+def cmd_plan_show(ctx, args):
+    return [json.dumps(managed_plans.show(ctx.folder, verification_row(ctx, args.id)), ensure_ascii=False)]
+
+
+def cmd_plan_save(ctx, args):
+    row = verification_row(ctx, args.id)
+    try:
+        plan = stdin_object() if args.input == "-" else verification.read_json(args.input)
+        with execution.unit_execution_lock(ctx.folder, args.id):
+            result = managed_plans.save(ctx.project, ctx.folder, row, plan, verification_grades(ctx), args.expect_sha256)
+    except ValueError as error:
+        raise StateError(str(error)) from error
+    return [json.dumps(result, ensure_ascii=False)]
+
+
+def verification_plan(ctx, args, *, with_path=False):
+    row = verification_row(ctx, args.id)
+    path = args.plan if args.plan is not None else managed_plans.path_for(ctx.folder, row)
+    plan = verification.load_plan(ctx.project, path, verification_grades(ctx))
     if "referenceBundle" in plan:
         try:
             reference_bundle.require_current(ctx.project, plan["referenceBundle"])
@@ -567,7 +607,7 @@ def verification_plan(ctx, args):
     contract = unit_contracts.binding(ctx.folder, row)
     if contract:
         plan["unitContract"] = contract
-    return plan
+    return (plan, path) if with_path else plan
 
 
 def verification_guard(ctx):
@@ -745,14 +785,14 @@ def cmd_verify(ctx, args):
 
 def cmd_review_run(ctx, args):
     require_folder(ctx)
-    plan = verification_plan(ctx, args)
+    plan, path = verification_plan(ctx, args, with_path=True)
     scope = review_dispatch.request_array(ctx.project, args.scope)
     findings = review_dispatch.request_array(ctx.project, args.findings)
     argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
     result = review_dispatch.run(
         ctx.project, ctx.folder, args.id, plan, ctx.adapter.get("verify") or {}, verification_guard(ctx),
         expected_snapshot=args.snapshot, purpose=args.purpose, scope=scope, findings=findings,
-        argv=argv, plan_path=args.plan, timeout=args.timeout_seconds, plan_loader=lambda: verification_plan(ctx, args),
+        argv=argv, plan_path=path, timeout=args.timeout_seconds, plan_loader=lambda: verification_plan(ctx, args),
         adapter=ctx.adapter, runtime_name=ctx.runtime,
     )
     args.exit_code = FAILED if (result.get("result") or {}).get("status") == "failed" else OK
@@ -765,8 +805,25 @@ def cmd_review_worker(_ctx, args):
 
 
 def cmd_review(ctx, args):
-    require_folder(ctx)
-    require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    row = verification_row(ctx, args.id)
+    manual = (args.receipt, args.evidence, args.reviewer, args.kind, args.status)
+    if args.job is not None:
+        from chef.workers.review_results import record
+        from chef.workers.store import Store
+
+        if (any(value is not None for value in manual) or args.findings_input or args.resolved_id
+                or args.findings_count != -1 or args.fixed_count != -1 or not args.session):
+            raise StateError("--job requires --session and cannot be combined with manual review options")
+        try:
+            with execution.unit_execution_lock(ctx.folder, args.id):
+                path = record(ctx.project, ctx.folder, row, ctx.adapter.get("verify") or {},
+                              ctx.runtime, args.session, args.job, Store())
+        except (ValueError, infrastructure_errors.UsageError) as error:
+            raise StateError(str(error)) from error
+        review = verification.read_json(path)
+        return [f"리뷰 {args.id} {review['status']} {review['kind']} | {path}", *review["diagnostics"]]
+    if args.session is not None or not all(manual):
+        raise StateError("manual review requires --receipt, --evidence, --reviewer, --kind and --status")
     findings = args.findings_input
     if getattr(args, "resolved_id", []):
         if findings or args.status != "closed-low":
@@ -989,7 +1046,7 @@ def main(argv=None, runtime="claude", *, unified=False):
             stream.reconfigure(encoding="utf-8")
     try:
         try:
-            args = build_parser(prog="chef" if unified else "mission_state.py").parse_args(argv)
+            args = build_parser(prog="chef" if unified else "mission_state.py", unified=unified).parse_args(argv)
         except SystemExit:
             return OK
         args.unified = unified
@@ -1038,8 +1095,11 @@ def main(argv=None, runtime="claude", *, unified=False):
             cmd_review_open,
             cmd_document_list,
             cmd_document_check,
+            cmd_plan_template,
+            cmd_plan_show,
             cmd_active,
             cmd_question_preview,
+            cmd_question_reply_template,
             cmd_question_show,
             cmd_question_check,
             cmd_question_preflight,

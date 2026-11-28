@@ -4,6 +4,10 @@ import argparse
 import json
 
 from chef.cli.input_json import stdin_object
+from chef.guards.adapters import GuardOff
+from chef.infrastructure.errors import UsageError
+from chef.mission.contracts import StateError
+from chef.verification.contracts import VerificationError
 
 from chef.workers import controller
 from chef.workers.store import Store
@@ -39,6 +43,9 @@ def summary(value, store):
                 compact[name] = dict(list(evidence.items())[:20])
                 truncated = truncated or len(evidence) > 20
         compact["truncated"] = truncated
+        if value["request"].get("reviewBinding") and result.get("ok") is True:
+            compact["review"] = {"findingsCount": len(result["review"]["findings"]),
+                                 "resolvedCount": len(result["review"]["resolvedIds"])}
         output["result"] = compact
     return output
 
@@ -47,9 +54,24 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", help="private shared worker state directory")
     sub = parser.add_subparsers(dest="command", required=True)
-    dispatch = sub.add_parser("dispatch")
-    dispatch.add_argument("--request", required=True, help="request JSON file, or - for standard input")
+    dispatch = sub.add_parser("dispatch", allow_abbrev=False)
+    dispatch.add_argument("unit", nargs="?", help="dispatch from the saved unit brief and ACTIVE mission")
+    dispatch.add_argument("--request", help="explicit request JSON file, or - for standard input")
     dispatch.add_argument("--stored-brief", action="store_true", help="reuse the approved unit brief")
+    dispatch.add_argument("--role")
+    dispatch.add_argument("--runtime", choices=controller.RUNTIMES)
+    dispatch.add_argument("--session", help="current coordinator session ID")
+    dispatch.add_argument("--request-id", help="stable ID for retrying this same dispatch")
+    dispatch.add_argument("--project")
+    dispatch.add_argument("--file", action="append", help="select an approved implementation file")
+    dispatch.add_argument("--input-path", action="append", help="additional read-only input to fingerprint")
+    dispatch.add_argument("--host-role", action="append")
+    dispatch.add_argument("--host-tool", action="append")
+    dispatch.add_argument("--required-tool", action="append")
+    dispatch.add_argument("--previous", help="prior job key for same-role follow-up work")
+    dispatch.add_argument("--prompt", help="extra instructions specific to this worker")
+    dispatch.add_argument("--review-kind", choices=("poc", "unit", "integration"))
+    dispatch.add_argument("--receipt", help="review receipt, defaults to the latest successful verification")
     dispatch.add_argument("--mode", choices=controller.MODES,
                           help="override request, environment, project and global worker routing mode")
     for name in ("status", "wait", "cancel", "native-result", "recover-owner", "reconcile", "supervise"):
@@ -71,9 +93,21 @@ def main(argv=None):
     try:
         store = Store(args.home)
         if args.command == "dispatch":
-            request = stdin_object() if args.request == "-" else controller.read_json(args.request)
-            if args.stored_brief:
-                request["useStoredBrief"] = True
+            if bool(args.unit) == bool(args.request):
+                raise ValueError("supply a unit or --request, exactly one")
+            if args.unit:
+                from chef.workers.unit_requests import build
+
+                request = build(args)
+            else:
+                if any(getattr(args, field) is not None for field in (
+                    "role", "runtime", "session", "request_id", "project", "file", "input_path",
+                    "host_role", "host_tool", "required_tool", "previous", "prompt", "review_kind", "receipt",
+                )):
+                    raise ValueError("unit dispatch options cannot be combined with --request")
+                request = stdin_object() if args.request == "-" else controller.read_json(args.request)
+                if args.stored_brief:
+                    request["useStoredBrief"] = True
             if args.mode is not None:
                 request["mode"] = args.mode
             value = controller.dispatch(request, store=store)
@@ -94,6 +128,6 @@ def main(argv=None):
             value = controller.supervise(args.key, args.token, store=store)
         print(json.dumps(value if getattr(args, "details", False) else summary(value, store), ensure_ascii=False))
         return 0
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, ValueError, RuntimeError, GuardOff, UsageError, StateError, VerificationError) as error:
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
         return 1

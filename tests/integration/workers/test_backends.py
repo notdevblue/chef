@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from chef.workers import backends
+from chef.workers import backends, review_results
 
 
 def result(stdout="", code=0, stderr=""):
@@ -82,6 +82,23 @@ def test_codex_error_after_message_is_failure():
     rows = [{"type": "item.completed", "item": {"type": "agent_message", "text": "done"}},
             {"type": "turn.failed"}]
     assert not backends.parse_result("codex", result("\n".join(map(json.dumps, rows))), "dev-medium")["ok"]
+
+
+@pytest.mark.parametrize("runtime", backends.RUNTIMES)
+def test_external_review_events_preserve_the_structured_final_result(runtime):
+    review = {"schema": 1, "report": "Reviewed the garden.", "findings": [], "resolvedIds": [], "suggestions": []}
+    if runtime == "claude":
+        rows = [{"type": "result", "subtype": "success", "result": json.dumps(review)}]
+    elif runtime == "codex":
+        rows = [{"type": "item.completed", "item": {"type": "agent_message", "text": "Inspecting"}},
+                {"type": "item.completed", "item": {"type": "agent_message",
+                                                    "text": "```json\n" + json.dumps(review) + "\n```"}},
+                {"type": "turn.completed"}]
+    else:
+        rows = [{"type": "text", "data": "Inspecting"},
+                {"type": "end", "stopReason": "end_turn", "structuredOutput": review}]
+    parsed = backends.parse_result(runtime, result("\n".join(map(json.dumps, rows))), "code-reviewer", final_message=True)
+    assert parsed["ok"] and review_results.payload(parsed) == review
 
 
 def test_grok_stream_chunks_and_completion():

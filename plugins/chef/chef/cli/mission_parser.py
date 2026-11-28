@@ -21,7 +21,7 @@ class OneLineParser(argparse.ArgumentParser):
         raise StateError(f"{self.prog}: {message} (-h 로 사용법 확인)")
 
 
-def build_parser(handlers=None, *, prog="mission_state.py"):
+def build_parser(handlers=None, *, prog="mission_state.py", unified=False):
     if handlers is None:
         from chef.mission import state as handlers
 
@@ -37,8 +37,8 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     common.add_argument("--runtime", choices=RUNTIMES, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def leaf(parent, name, handler):
-        child = parent.add_parser(name, parents=[common])
+    def leaf(parent, name, handler, **kwargs):
+        child = parent.add_parser(name, parents=[common], **kwargs)
         child.set_defaults(handler=handler)
         return child
 
@@ -113,6 +113,9 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     answer = leaf(question, "answer", handlers.cmd_question_answer)
     answer.add_argument("name")
     answer.add_argument("--input", required=True, help="reply JSON file, or - for standard input")
+    reply_template = leaf(question, "reply-template", handlers.cmd_question_reply_template)
+    reply_template.description = "Print a blank reply with the current revision, timestamp and a new id."
+    reply_template.add_argument("name")
     restore = leaf(question, "restore", handlers.cmd_question_restore)
     restore.add_argument("--input", required=True)
     restore.add_argument("--source", required=True)
@@ -140,28 +143,42 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     leaf(document, "hide", handlers.cmd_document_hide).add_argument("paths", nargs="+")
     leaf(document, "list", handlers.cmd_document_list).add_argument("--json", action="store_true")
 
+    plan = sub.add_parser("plan").add_subparsers(dest="action", required=True)
+    for action, handler in (("template", handlers.cmd_plan_template), ("show", handlers.cmd_plan_show),
+                            ("save", handlers.cmd_plan_save)):
+        command = leaf(plan, action, handler)
+        command.add_argument("id")
+        if action == "template":
+            command.add_argument("--grade")
+        elif action == "save":
+            command.add_argument("--input", required=True, help="plan JSON file or stdin (-)")
+            command.add_argument("--expect-sha256")
+
     verify = leaf(sub, "verify", handlers.cmd_verify)
     verify.add_argument("id")
-    verify.add_argument("--plan", required=True)
+    verify.add_argument("--plan", required=not unified, help="defaults to the registered unit plan in chef")
     verify.add_argument("--force", action="store_true")
     verify.add_argument("--coordinator", action="store_true", help="명시적으로 허용된 순수 검사만 코디네이터에서 실행")
     preflight = leaf(sub, "preflight", handlers.cmd_preflight)
     preflight.add_argument("id")
-    preflight.add_argument("--plan", required=True)
+    preflight.add_argument("--plan", required=not unified, help="defaults to the registered unit plan in chef")
     worker = leaf(sub, "_review-worker", handlers.cmd_review_worker)
     worker.add_argument("--input", required=True)
     review_run = leaf(sub, "review-run", handlers.cmd_review_run)
     review_run.add_argument("id")
-    for field in ("plan", "snapshot", "purpose", "scope", "findings"):
+    review_run.add_argument("--plan", required=not unified, help="defaults to the registered unit plan in chef")
+    for field in ("snapshot", "purpose", "scope", "findings"):
         review_run.add_argument(f"--{field}", required=True)
     review_run.add_argument("--timeout-seconds", type=int, default=600)
     review_run.add_argument("argv", nargs="+")
-    review = leaf(sub, "review", handlers.cmd_review)
+    review = leaf(sub, "review", handlers.cmd_review, allow_abbrev=False)
     review.add_argument("id")
+    review.add_argument("--job", help="record a bound structured worker result by job key")
+    review.add_argument("--session", help="current coordinator session ID for --job")
     for field in ("receipt", "evidence", "reviewer"):
-        review.add_argument(f"--{field}", required=True)
-    review.add_argument("--kind", required=True, choices=("poc", "unit", "integration"))
-    review.add_argument("--status", required=True, choices=("clean", "findings", "closed-low"))
+        review.add_argument(f"--{field}")
+    review.add_argument("--kind", choices=("poc", "unit", "integration"))
+    review.add_argument("--status", choices=("clean", "findings", "closed-low"))
     review.add_argument("--findings-count", type=int, default=-1, help="남은 지적 수. 생략하면 미기록")
     review.add_argument("--fixed-count", type=int, default=-1, help="직전 지적 중 이번에 해소를 확인한 수")
     review.add_argument(
@@ -171,10 +188,10 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     leaf(sub, "review-open", handlers.cmd_review_open).add_argument("id")
     start = leaf(sub, "review-start", handlers.cmd_review_start)
     start.add_argument("id")
-    start.add_argument("--plan", required=True)
+    start.add_argument("--plan", required=not unified, help="defaults to the registered unit plan in chef")
     scope = leaf(sub, "review-scope", handlers.cmd_review_scope)
     scope.add_argument("id")
-    scope.add_argument("--plan", required=True)
+    scope.add_argument("--plan", required=not unified, help="defaults to the registered unit plan in chef")
     complete = leaf(sub, "complete", handlers.cmd_complete)
     complete.add_argument("id")
     for field in ("receipt", "review", "done-evidence"):
@@ -213,7 +230,7 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     record.add_argument("--grade", required=True)
     record.add_argument("--evidence", default="")
     record.add_argument("--files", default="")
-    record.add_argument("--evidence-input", default="", help="schema 1 file evidence JSON")
+    record.add_argument("--evidence-input", default="", help="schema 1 evidence JSON file or standard input (-)")
     audit = leaf(ledger, "audit", handlers.cmd_ledger_audit)
     audit.add_argument("--unit", default="")
     audit.add_argument("--limit", type=int, default=20)

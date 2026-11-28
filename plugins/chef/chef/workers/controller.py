@@ -19,7 +19,8 @@ from chef.locations import PLUGIN_ROOT
 from chef.mission import unit_contracts
 from chef.mission.contracts import StateError, UNIT_HEADER, UNITS_FILE
 from chef.mission.storage import read_table, require_unit
-from chef.workers import backends, policy
+from chef.verification.contracts import VerificationError
+from chef.workers import backends, policy, review_results
 from chef.workers.routing import role_name
 from chef.workers.store import Store, request_identity
 from chef.verification.execution import process_owner_alive, process_start
@@ -227,8 +228,11 @@ def prepare(value):
         brief = owner.pop("brief")
         content = "\n".join(f"{field}: {value}" for field, value in brief.items())
         request["prompt"] = f"Approved unit {request['unit']}:\n{content}"
-        if prompt.strip():
-            request["prompt"] += f"\n\nRole-specific instructions:\n{prompt}"
+    else:
+        request["prompt"] = ""
+    extra = review_results.prepare(request, owner, adapter.get("verify") or {}, prompt)
+    if extra.strip():
+        request["prompt"] = (request["prompt"] + "\n\nRole-specific instructions:\n" if reuse else "") + extra
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
         raise ValueError("workers must be an object")
@@ -464,6 +468,8 @@ def supervise(key, token, *, store=None):
         if snapshot(request["project"], request["files"]) != request["beforeFiles"]:
             raise ValueError("worker output files changed before launch")
         owner.update(files=request["files"], inputPaths=request["inputPaths"], verification=request.get("verification"))
+        if request.get("reviewBinding"):
+            owner["structuredReview"] = True
         owner["cancelPath"] = str(directory / "cancel.json")
         if request.get("resumeSession"):
             previous = require_record(store, request["previous"])
@@ -528,6 +534,11 @@ def supervise(key, token, *, store=None):
                     return {**record, "native": True, "actualRole": request["actualRole"], "brief": request["prompt"]}
         ownership(request)
         result = collect_snapshots(request, result)
+        if request.get("reviewBinding") and result.get("ok") is True:
+            try:
+                result["review"] = review_results.payload(result)
+            except VerificationError as error:
+                result.update(ok=False, errorCode="invalid_review_result", error=str(error))
         if request["role"].removeprefix("chef:") in READ_ONLY and result["after"] != request["before"]:
             result.update(ok=False, error="read-only worker inputs changed during execution")
         state = "cancelled" if (directory / "cancel.json").exists() else None
@@ -578,10 +589,14 @@ def native_result(key, token, result, *, store=None):
     directory = attempt_directory(store, record)
     if not (directory / "native.json").exists():
         raise ValueError("job is not a native host dispatch")
+    if request.get("reviewBinding") and isinstance(result, dict) and "ok" not in result and "schema" in result:
+        result = {"ok": True, "review": result}
     if not isinstance(result, dict) or type(result.get("ok")) is not bool:
         raise ValueError("native result requires an explicit boolean ok")
+    if request.get("reviewBinding") and result["ok"]:
+        result = {**result, "review": review_results.payload(result)}
     evidence = project_paths(request["project"], result.get("evidence", []), "evidence")
-    if result["ok"] and not evidence:
+    if result["ok"] and not evidence and not request.get("reviewBinding"):
         raise ValueError("successful native result requires evidence files")
     pointers = snapshot(request["project"], evidence)
     if any(value is None for value in pointers.values()):

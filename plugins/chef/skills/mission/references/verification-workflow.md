@@ -2,7 +2,7 @@
 
 실행에는 [현재 번들의 Chef CLI](cli.md)를 사용한다.
 
-코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `preflight <단위> --plan <계획.json>`으로 정적 검사한다.
+코디네이터는 `plan template <단위>`에 승인된 타깃의 실행 명령·환경·결과 조건을 채워 `plan save <단위> --input <JSON|->`로 등록하고 `preflight <단위>`로 검사한다. 이후 통합 CLI는 같은 단위의 등록 계획을 사용한다. 계획 파일을 직접 넘길 때는 `--plan <계획.json>`을 지정한다.
 `executionPolicy`가 coordinator 경로를 명시적으로 허용한 계획은 코디네이터가 `verify --coordinator`로 실행할 수 있고,
 그 밖의 계획은 `roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
 기본 역할·모델·effort와 어댑터 `rolePolicy.model`의 적용은 현재 런타임 진입점의 실행 계약을 따른다.
@@ -173,17 +173,17 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 
 ## 한 단위의 흐름
 
-1. `preflight M1 --plan <계획.json>` 통과 뒤 `verify M1 --plan <계획.json>`: 입력·계획·환경·로그·결과가 그대로면 통과 기록 재사용, 아니면 실제 실행.
+1. `preflight M1` 통과 뒤 `verify M1`을 실행한다. 입력·계획·환경·로그·결과가 그대로면 통과 기록을 재사용하며 바뀐 경우 실행한다.
    실패는 종료 코드 1과 로그·기록 경로를 반환한다. 상태를 알아내려고 같은 검증을 재요청하지 않는다.
    어댑터가 정한 lint·규약 검사 명령은 계획 `commands[]`에 넣어 여기서 돌린다. 통과 전에는 리뷰를 띄우지 않고 그 출력을 리뷰어에게 준다.
    수정 뒤에는 같은 전체 계획으로 `verify`한다. 단계별 `inputs`를 선언한 `reusable` 단계는 바뀐 입력에 닿을 때만 실제로 돈다. 그 receipt로 통과 리뷰(clean·closed-low)를 기록한 뒤 `complete`한다. 좁은 계획으로 재검증하면 `review-scope`의 비교 기준이 끊긴다.
-2. 독립 리뷰: 파견 직전에 `review-start M1 --plan <계획.json>`으로 입력 snapshot을 기록하고 리뷰가 돌아올 때까지 그 범위를 고치지 않는다.
+2. 독립 리뷰는 단위 기반 파견으로 최신 통과 receipt와 직전 리뷰에 묶는다. 코디네이터가 `review M1 --job <키> --session <현재 세션 ID>`로 명시적으로 기록한다. 기록 전 입력·receipt·계획·직전 리뷰가 바뀌면 새 상태로 파견한다. 수동 파견 경로는 직전에 `review-start M1`으로 입력 snapshot을 남긴다.
    `review-start`는 그 시점 snapshot과 텍스트 파일 사본(`verification/<단위>.copies/`, 파일명은 내용 sha256)을 남기며 같은 단위의 다음 `review` 한 번에만 연결된다. 이 계획의 `inputs`가 `review`에 쓰는 receipt의 plan `inputs`와 다르면 `review`가 거부한다.
    리뷰 중 파일이 바뀌면 `verify`를 다시 돌려 새 receipt로 `review`를 기록한다(`review`는 현재 입력이 receipt와 같아야 한다). 이 리뷰에는 `inputChangedDuringReview`가 남고 이 리뷰로는 `complete`가 거부된다.
    바뀐 파일은 다음 라운드 `review-scope` 범위로 재리뷰한 뒤 완료한다.
    첫 라운드는 단위 전체이며 같은 고정 참조 묶음으로 결함·규칙 위반·계약·호출부를 한 번에 대조한다.
    읽지 못한 경로는 검증 공백으로 적고 코디네이터가 그 공백을 같은 라운드 안에서 보강 지시한다.
-   재리뷰는 같은 묶음과 `review-scope M1 --plan <계획.json>`이 주는 바뀐 파일 목록과 `리뷰 변경 diff: <경로>` 한 줄(최신 리뷰 기록의 사본 기준이며 `review-start`를 썼으면 그 시작 시점 사본이다. 추가는 빈 파일 대비, 삭제는 사본 대비 빈 파일. 바이너리·1 MiB 초과·사본이 없거나 읽을 수 없는 파일은 목록에 남기고 diff 안에 비교 불가 한 줄. 사본은 내용 해시 파일명으로 라운드·`review-start` 사이 같은 내용을 한 번만 저장한다. 기록 한 건이 참조하는 사본 합계는 64 MiB 상한이며 넘는 나머지는 `budget`, 쓰기 실패는 `unwritable`로 건너뛰고 리뷰는 계속한다. 사본 없는 옛 기록이면 목록만. diff 파일 쓰기가 실패하면 목록과 `diff 쓰기 실패: <사유>` 한 줄),
+   재리뷰는 같은 묶음과 `review-scope M1`이 주는 바뀐 파일 목록과 `리뷰 변경 diff: <경로>` 한 줄(최신 리뷰 기록의 사본 기준이며 `review-start`를 썼으면 그 시작 시점 사본이다. 추가는 빈 파일 대비, 삭제는 사본 대비 빈 파일. 바이너리·1 MiB 초과·사본이 없거나 읽을 수 없는 파일은 목록에 남기고 diff 안에 비교 불가 한 줄. 사본은 내용 해시 파일명으로 라운드·`review-start` 사이 같은 내용을 한 번만 저장한다. 기록 한 건이 참조하는 사본 합계는 64 MiB 상한이며 넘는 나머지는 `budget`, 쓰기 실패는 `unwritable`로 건너뛰고 리뷰는 계속한다. 사본 없는 옛 기록이면 목록만. diff 파일 쓰기가 실패하면 목록과 `diff 쓰기 실패: <사유>` 한 줄),
    직전 finding, 그 수정이 영향을 주는 계약과 호출자를 본다. 바뀌지 않은 부분은 실제 결함·규칙·원문 근거가 있는 Medium 이상일 때만 다시 열고 Low는 제안으로 돌린다.
    이전 해소 근거와 미해결·새 지적·회귀를 구분한다. clean 근거는 실제 파일로 받는다.
 3. `review M1 --receipt <검증.json> --evidence <리뷰.md> --reviewer <독립 에이전트> --kind unit --status clean`.

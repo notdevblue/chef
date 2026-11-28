@@ -49,7 +49,7 @@ open·resume 직전에도 같은 입력의 진입 성공이 필요하며, 등록
 
 ## 공통 역할 라우팅
 
-Claude·Codex·Grok 미션은 역할마다 먼저 [공통 워커 계약](../../skills/mission/references/cross-runtime-workers.md)의 `chef worker dispatch`를 호출한다. 저장한 단위 브리프를 재사용하고 이번 역할의 파일 범위와 필요한 도구를 전달한다. 라우터가 선택한 런타임의 역할·모델 지침을 적용한다.
+Claude·Codex·Grok 미션은 역할마다 [공통 워커 계약](../../skills/mission/references/cross-runtime-workers.md)의 `chef worker dispatch <단위> --role <역할>`로 시작한다. 저장된 브리프와 파일 범위를 사용하고 현재 런타임·세션·파견 ID와 해당 역할에 필요한 추가 옵션을 넘긴다. 검증 계획은 단위에 등록하고 구조화된 독립 리뷰는 `review --job`으로 기록한다.
 
 자동 배정은 공통 워커 계약의 `mode`로 제어한다. 사용자가 자동 배정을 끄면 `native`, 특정 서비스만 원하면 `claude`·`codex`·`grok`, 다시 켜면 `auto`를 미션의 이후 모든 역할 요청에 유지한다. 선택을 짧게 보고하고 이어받을 때도 확인한다. 명시적 선택이 없으면 환경변수·프로젝트 설정·전역 `~/.chef/config.json`·기본값 순서를 따르며 요청에 임의로 `auto`를 넣어 설정을 덮지 않는다. 이미 접수한 작업은 기존 모드를 유지한다.
 

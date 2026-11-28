@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -346,16 +345,11 @@ def test_move_and_copy_to_mission_directory_uses_actual_destination_filename(pro
 ])
 def test_documented_cli_and_appended_direct_write(project, action, skill, runtime, tool):
     instructions = (PLUGIN_ROOT / skill).read_text(encoding="utf-8")
-    script_match = re.search(r"`<mission-state>`: `<plugin-root>/([^`]+)`", instructions)
-    runtime_match = re.search(r"`<mission-state-runtime>`: `([^`]+)`", instructions)
-    assert script_match and runtime_match
-    runtime_args = runtime_match[1]
-    assert runtime_args.split()[:2] == ["--runtime", runtime]
-    runtime_args = runtime_args.replace('"<작업 루트>"', f'"{project}"')
-    script = PLUGIN_ROOT / script_match[1]
+    assert 'python "<plugin-root>/chef_cli.py"' in instructions
+    assert f"`--runtime {runtime}`" in instructions
+    script = PLUGIN_ROOT / "chef_cli.py"
     assert script.is_file()
-    project_args = "" if "--project" in runtime_args else f'--project "{project}"'
-    command = f'python "{script}" {runtime_args} {project_args} --mission mission question {action}'
+    command = f'python "{script}" question {action} --runtime {runtime} --project "{project}" --mission mission'
 
     assert not outcome(project, tool, runtime=runtime, command=command).deny
     assert outcome(project, tool, runtime=runtime, command=command + " > state/mission/ask-1.md").deny

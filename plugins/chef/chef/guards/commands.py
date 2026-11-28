@@ -79,3 +79,34 @@ def control_invocation(command, tool="Bash"):
         elif name in ("echo", "write-output") and len(values) > 1 and values[1] in ("han-mission", "chef-mission"):
             result.append((values[1], values[2:]))
     return result
+
+
+def owned_worker_command_denial(payload, command, tool):
+    """Match compact worker/review options to the session reported by the host."""
+    if "--session" not in command and "--job" not in command:
+        return ""
+    for script, argv in control_invocation(command, tool):
+        options = argv[:argv.index("--")] if "--" in argv else argv
+        flags = {value.split("=", 1)[0] for value in options if value.startswith("--")}
+        name = re.split(r"[\\/]", script)[-1].casefold()
+        worker = options if name == "worker.py" else []
+        if name == "chef_cli.py" and options[:1] == ["worker"]:
+            worker = options[1:]
+        if worker[:1] == ["--home"]:
+            worker = worker[2:]
+        elif worker and worker[0].startswith("--home="):
+            worker = worker[1:]
+        if not ((worker[:1] == ["dispatch"] and "--session" in flags)
+                or (name == "chef_cli.py" and options[:1] == ["review"] and "--job" in flags)):
+            continue
+        for flag, expected in (("--session", payload.get("session_id")),
+                               ("--runtime", payload.get("han_runtime", "claude"))):
+            supplied = []
+            for index, value in enumerate(options):
+                if value == flag:
+                    supplied.append(options[index + 1] if index + 1 < len(options) else "")
+                elif value.startswith(flag + "="):
+                    supplied.append(value.split("=", 1)[1])
+            if not expected or supplied != [expected]:
+                return f"Chef worker/review command requires {flag} of this host session"
+    return ""
