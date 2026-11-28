@@ -44,12 +44,6 @@ def schema_columns(columns):
     )
 
 
-def requires_typed_block(block):
-    return block.get("type") == "fields" or (
-        block.get("type") == "table" and schema_columns(block.get("columns", []))
-    )
-
-
 def catalogue(project, source, pinned):
     if not isinstance(source, str) or not source.strip():
         raise QuestionRecordError("schema catalogue path must be a nonempty project-relative path")
@@ -113,6 +107,6 @@ def check_blocks(record, project, adapter, previous=None, *, require_typed=False
         for block in record.get(area, []):
             if block["type"] == SCHEMA_TABLE:
                 checks.append(check_block(block, project, adapter))
-            elif require_typed and requires_typed_block(block) and block not in previous_blocks:
+            elif require_typed and block["type"] in ("fields", "table") and block not in previous_blocks:
                 raise QuestionRecordError(f"{area}/{block['id']}: use a schema-table block for table definitions")
     return checks

@@ -32,7 +32,7 @@ Codex 세션은 사용자가 그 런타임을 지정할 때만 `<plugin-root>/co
 슬롯 Grok 세션에 사용자 답을 넣을 때는 `inject`만 쓴다. `grok -r -p`를 손으로 부르지 않는다.
 
 ```text
-python "<plugin-root>/skills/slots/scripts/slots.py" --runtime grok --project "<메인 프로젝트>" inject <이름> --file <답.txt> [--session <id>] [--wait]
+chef slots --runtime grok --project "<메인 프로젝트>" inject <이름> --file <답.txt> [--session <id>] [--wait]
 ```
 
 - `inject <이름> (--text <답> | --file <파일>) [--session <id>] [--wait [--timeout 초] [--poll 초]] [--dry-run]` — Grok 슬롯 세션에

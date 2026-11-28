@@ -79,7 +79,7 @@ Hermes 연결·현재 세션·역할 워커 검사는 `tests/integration/hermes`
 어댑터의 가드 규칙을 고쳤으면 해당 어댑터도 확인합니다.
 
 ```text
-python plugins/chef/skills/adapter-init/scripts/check_guard.py <어댑터 이름>
+python plugins/chef/chef_cli.py guard-check --runtime codex <어댑터 이름>
 ```
 
 `tools/check_shared.py`는 공통 스킬·런타임 링크·참조 포인터를 검사합니다.

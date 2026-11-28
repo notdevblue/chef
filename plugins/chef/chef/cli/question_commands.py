@@ -9,6 +9,7 @@ from pathlib import Path
 
 from chef.cli.input_json import stdin_object
 from chef.infrastructure import paths as infrastructure_paths
+from chef.locations import PLUGIN_ROOT
 from chef.mission import document_checks, schema_tables
 from chef.mission.contracts import FAILED, QUESTION_FILE, SHARED_DOCUMENTS_FILE, StateError
 from chef.mission.documents import (
@@ -26,8 +27,26 @@ from chef.questions import readability
 from chef.verification import runner as verification
 
 
+def read_input(path):
+    if path != "-":
+        return verification.read_json(path)
+    try:
+        return stdin_object()
+    except ValueError as error:
+        raise StateError(f"invalid JSON on standard input: {error}") from error
+
+
+def cmd_question_template(_ctx, args):
+    kind = "design-confirm" if args.kind == "design" else "question"
+    path = PLUGIN_ROOT / "skills" / "mission" / "references" / "templates" / f"{kind}.json"
+    record = read_input(path)
+    if args.id:
+        record["id"] = args.id
+    return [json.dumps(question_records.validate_document(record), ensure_ascii=False, indent=2)]
+
+
 def cmd_question_preview(ctx, args):
-    record = question_records.validate_document(verification.read_json(args.input))
+    record = question_records.validate_document(read_input(args.input))
     for message in readability.messages(record):
         print(message, file=sys.stderr)
     return [question_records.render_document(record).rstrip("\n")]
@@ -35,9 +54,11 @@ def cmd_question_preview(ctx, args):
 
 def cmd_question_patch(ctx, args):
     """Apply bounded changes to a draft and print JSON; never publish or execute code."""
+    if args.input == args.changes == "-":
+        raise StateError("patch can read only one of --input and --changes from standard input")
     record = question_records.patch_document(
-        verification.read_json(args.input),
-        verification.read_json(args.changes),
+        read_input(args.input),
+        read_input(args.changes),
         editorial=args.editorial,
     )
     for message in readability.messages(record):
@@ -50,22 +71,27 @@ def cmd_question_preflight(ctx, args):
     require_folder(ctx)
     record = question_records.preflight_document(
         ctx.folder,
-        verification.read_json(args.input),
+        read_input(args.input),
         getattr(args, "expect_revision", ""),
         editorial=args.editorial,
     )
     checks = question_schema_checks(ctx, args, record)
-    return [
+    messages = [
         f"질문 발행 검사 통과: {record['id']}.md (revision {record['revision']})",
         *schema_messages(checks),
         *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record)),
         *readability.messages(record),
     ]
+    if getattr(args, "preview", False):
+        for message in messages:
+            print(message, file=sys.stderr)
+        return [question_records.render_document(record).rstrip("\n")]
+    return messages
 
 
 def cmd_question_publish(ctx, args):
     require_folder(ctx)
-    draft = question_records.validate_document(verification.read_json(args.input))
+    draft = question_records.validate_document(read_input(args.input))
     checks = question_schema_checks(ctx, args, draft)
     record = question_records.publish_document(
         ctx.folder,
@@ -111,7 +137,7 @@ def schema_messages(checks):
 
 def cmd_question_answer(ctx, args):
     require_folder(ctx)
-    record = question_records.answer_document(ctx.folder, args.name, verification.read_json(args.input))
+    record = question_records.answer_document(ctx.folder, args.name, read_input(args.input))
     return [f"답변 저장: {record['id']}.md (revision {record['revision']})"]
 
 
@@ -155,18 +181,31 @@ def cmd_question_check(ctx, args):
     return [f"질문 기록 정상: {len(inspected)}개"]
 
 
+def cmd_document_compare(_ctx, args):
+    from chef.questions.check import check
+
+    result = check(args.path, args.source, args.archive)
+    args.exit_code = FAILED if result["issues"] else 0
+    return [json.dumps(result, ensure_ascii=False, indent=2)]
+
+
 def cmd_document_share(ctx, args):
     require_folder(ctx)
     checked = []
+    as_json = getattr(args, "json", False)
 
     def validate(name, path, content):
         result = inspect_content(ctx, name, path, content)
         if result["issues"]:
             raise StateError(f"{name}: {'; '.join(result['issues'])}")
-        checked.extend(result["schemaChecks"])
+        checked.append(result)
 
-    names = share_documents(ctx.folder, args.paths, check_content=validate if getattr(args, "unified", False) else None)
-    return [f"공유함: {', '.join(names)}", *schema_messages(checked)]
+    names = share_documents(ctx.folder, args.paths,
+                            check_content=validate if as_json or getattr(args, "unified", False) else None)
+    if as_json:
+        return [json.dumps({"shared": names, "documents": checked}, ensure_ascii=False)]
+    return [f"공유함: {', '.join(names)}",
+            *(message for item in checked for message in schema_messages(item["schemaChecks"]))]
 
 
 def inspect_content(ctx, name, path, content):
@@ -200,10 +239,7 @@ def cmd_document_create(ctx, args):
     if args.kind == "schema":
         if not args.input or args.title:
             raise StateError("schema creation needs --input and derives its title from the block")
-        try:
-            block = stdin_object() if args.input == "-" else verification.read_json(args.input)
-        except ValueError as error:
-            raise StateError(str(error)) from error
+        block = read_input(args.input)
         text = document_checks.schema_text(block)
         checks = [schema_tables.check_block(block, ctx.project, ctx.adapter)]
     else:
@@ -215,8 +251,11 @@ def cmd_document_create(ctx, args):
     if os.path.normcase(path.relative_to(infrastructure_paths.request_realpath(ctx.folder)).as_posix()) != os.path.normcase(name):
         raise StateError("document creation cannot follow aliases")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8", newline="\n") as stream:
-        stream.write(text)
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+    except FileExistsError as error:
+        raise StateError(f"{name} already exists. Edit it in place or choose a different --name.") from error
     return [f"문서 생성: {name}", *schema_messages(checks)]
 
 

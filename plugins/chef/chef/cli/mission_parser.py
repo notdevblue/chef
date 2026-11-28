@@ -1,6 +1,7 @@
 """cli / mission_parser."""
 
 import argparse
+from pathlib import Path
 
 from chef.mission.contracts import (
     BRIEF_FIELDS,
@@ -85,29 +86,33 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     close_stale.add_argument("--reason", default="")
 
     question = sub.add_parser("question").add_subparsers(dest="action", required=True)
+    template = leaf(question, "template", handlers.cmd_question_template)
+    template.add_argument("--kind", choices=("question", "design"), required=True)
+    template.add_argument("--id", help="replace the sample question id")
     preview = leaf(question, "preview", handlers.cmd_question_preview)
-    preview.add_argument("--input", required=True)
+    preview.add_argument("--input", required=True, help="draft JSON file, or - for standard input")
     patch = leaf(question, "patch", handlers.cmd_question_patch)
     patch.description = "제한된 draft 변경 JSON을 적용해 stdout JSON 출력. 정본·이력·revision 자동 변경 없음."
-    patch.add_argument("--input", required=True, help="유효한 질문 draft JSON")
+    patch.add_argument("--input", required=True, help="draft JSON file, or - for standard input")
     patch.add_argument(
-        "--changes", required=True, help="set/upsert/remove/upsert_entries/remove_entries/reopen_items/request_approval 변경 JSON"
+        "--changes", required=True, help="bounded changes JSON file, or - for standard input"
     )
     patch.add_argument(
         "--editorial", action="store_true", help="기존 답·선택·승인 범위를 보존하는 문체 patch"
     )
     question_preflight = leaf(question, "preflight", handlers.cmd_question_preflight)
     question_preflight.description = "publish와 같은 개정·승인·답 보존·상세 소유 검사를 읽기 전용 실행."
-    question_preflight.add_argument("--input", required=True)
+    question_preflight.add_argument("--input", required=True, help="draft JSON file, or - for standard input")
     question_preflight.add_argument("--expect-revision", type=int, default=argparse.SUPPRESS)
     question_preflight.add_argument("--editorial", action="store_true")
+    question_preflight.add_argument("--preview", action="store_true", help="render the checked draft to stdout")
     publish = leaf(question, "publish", handlers.cmd_question_publish)
-    publish.add_argument("--input", required=True)
+    publish.add_argument("--input", required=True, help="draft JSON file, or - for standard input")
     publish.add_argument("--expect-revision", type=int, default=argparse.SUPPRESS)
     publish.add_argument("--editorial", action="store_true")
     answer = leaf(question, "answer", handlers.cmd_question_answer)
     answer.add_argument("name")
-    answer.add_argument("--input", required=True)
+    answer.add_argument("--input", required=True, help="reply JSON file, or - for standard input")
     restore = leaf(question, "restore", handlers.cmd_question_restore)
     restore.add_argument("--input", required=True)
     restore.add_argument("--source", required=True)
@@ -118,13 +123,20 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     leaf(question, "check", handlers.cmd_question_check)
 
     document = sub.add_parser("document").add_subparsers(dest="action", required=True)
+    compare = leaf(document, "compare", handlers.cmd_document_compare)
+    compare.description = "Compare a draft with its source and archive without opening a mission."
+    compare.add_argument("path", type=Path)
+    compare.add_argument("--source", type=Path)
+    compare.add_argument("--archive", type=Path)
     create_document = leaf(document, "create", handlers.cmd_document_create)
     create_document.add_argument("--kind", choices=("report", "detail", "schema"), required=True)
     create_document.add_argument("--name", default="report")
     create_document.add_argument("--title")
     create_document.add_argument("--input", help="schema-table JSON file or stdin(-)")
     leaf(document, "check", handlers.cmd_document_check).add_argument("paths", nargs="+")
-    leaf(document, "share", handlers.cmd_document_share).add_argument("paths", nargs="+")
+    share = leaf(document, "share", handlers.cmd_document_share)
+    share.add_argument("paths", nargs="+")
+    share.add_argument("--json", action="store_true", help="return the shared byte hashes and check results")
     leaf(document, "hide", handlers.cmd_document_hide).add_argument("paths", nargs="+")
     leaf(document, "list", handlers.cmd_document_list).add_argument("--json", action="store_true")
 
@@ -180,7 +192,7 @@ def build_parser(handlers=None, *, prog="mission_state.py"):
     template.add_argument("--id", action="append", default=[], help="template unit id; repeat for a batch")
     add = leaf(unit, "add", handlers.cmd_unit_add)
     add.add_argument("id", nargs="?")
-    add.add_argument("--input", help="schema 1 units JSON; all rows validate before one atomic write")
+    add.add_argument("--input", help="schema 1 units JSON file or standard input (-); validates the entire batch")
     add.add_argument("--dry-run", action="store_true", help="validate without writing mission state")
     for name in BRIEF_FIELDS:
         add.add_argument(f"--{name}", default="")

@@ -6,7 +6,7 @@
 보고서에는 프롬프트·응답·암호화된 Advisor 본문을 넣지 않는다.
 
 ```text
-python <plugin>/skills/mission/scripts/usage_report.py --project main=D:/Work/Game --project slot1=D:/Work/slots/slot1 --start 2026-10-23T00:00:00+09:00 --end 2026-10-24T00:00:00+09:00 --output usage.json
+chef usage --project main=D:/Work/Game --project slot1=D:/Work/slots/slot1 --start 2026-10-23T00:00:00+09:00 --end 2026-10-24T00:00:00+09:00 --output usage.json
 ```
 
 `--start` 포함·`--end` 제외이며 시간대가 필수다. 기본 설정 디렉터리는 `CLAUDE_CONFIG_DIR` 또는

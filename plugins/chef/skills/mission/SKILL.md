@@ -8,6 +8,7 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 실행 전에 [공통 절차](../../shared/skills/mission.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
 `<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다.
+공통 절차의 `chef …`는 `python "<plugin-root>/chef_cli.py" …`로 실행한다. 프로젝트 명령에는 `--runtime claude`를 붙인다.
 
 공통 CLI 호출에 `--runtime claude`를 쓴다.
 

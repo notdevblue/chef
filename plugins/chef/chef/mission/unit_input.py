@@ -30,6 +30,10 @@ def load(path):
         data = json.loads(source.read_text(encoding="utf-8-sig"))
     except (ValueError, UnicodeError) as error:
         raise StateError("unit input: valid UTF-8 JSON required") from error
+    return units(data)
+
+
+def units(data):
     if (not isinstance(data, dict) or set(data) != {"schema", "units"}
             or type(data.get("schema")) is not int or data["schema"] != 1
             or not isinstance(data["units"], list) or not 1 <= len(data["units"]) <= MAX_UNITS):

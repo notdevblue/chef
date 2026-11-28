@@ -105,22 +105,20 @@ patch는 승인 의미를 추론하지 않는다. 일반 patch에서 기존 문�
 의미가 같은 문체 변경은 `question patch --editorial`로 기존 답을 보존한 draft를 만들고 `preflight`·`publish`에도 `--editorial`을 명시한다. patch 결과에도 기존 발행의 editorial 보호 검사를 적용하므로 옵션·선택·답·상태·이력·승인 상태·table/fields 구조를 바꿀 수 없다.
 실제 질문 정의·옵션 변경이면 일반 patch의 `reopen_items`로 다시 묻는다. 전체 범위 변경에 기존 해결 문항을 유지하면 `request_approval`도 명시한다.
 
-아래 예제에서 `<mission-state>`는 현재 번들의 `skills/mission/scripts/mission_state.py` 절대 경로다.
-Claude·Codex·Grok은 각 미션 스킬에 지정된 `<mission-state-runtime>` 인자를 넣는다.
+아래 예제는 [현재 번들의 Chef CLI](cli.md)를 사용한다. 프로젝트 명령에는 현재 런타임의 `--runtime`을 붙인다.
 
 ```sh
-python "<mission-state>" <mission-state-runtime> question patch --input draft.json --changes changes.json > draft-r2.json
-python "<mission-state>" <mission-state-runtime> question preflight --input draft-r2.json --expect-revision 1
-python "<mission-state>" <mission-state-runtime> question preview --input draft-r2.json > preview.md
-python "<mission-state>" <mission-state-runtime> question publish --input draft-r2.json --expect-revision 1
+chef question patch --input draft.json --changes changes.json > draft-r2.json
+chef question preflight --input draft-r2.json --expect-revision 1 --preview
+chef question publish --input draft-r2.json --expect-revision 1
 ```
 
 문체만 바꾸는 경우는 같은 명령 흐름에 의도를 명시한다.
 
 ```sh
-python "<mission-state>" <mission-state-runtime> question patch --input draft.json --changes wording.json --editorial > draft-r2.json
-python "<mission-state>" <mission-state-runtime> question preflight --input draft-r2.json --expect-revision 1 --editorial
-python "<mission-state>" <mission-state-runtime> question publish --input draft-r2.json --expect-revision 1 --editorial
+chef question patch --input draft.json --changes wording.json --editorial > draft-r2.json
+chef question preflight --input draft-r2.json --expect-revision 1 --editorial
+chef question publish --input draft-r2.json --expect-revision 1 --editorial
 ```
 
 `preflight`는 publish와 같은 revision·답 원문·legacy·승인·옵션·상세 소유·출력 검사를 읽기 전용으로 실행한다.
@@ -131,14 +129,12 @@ python "<mission-state>" <mission-state-runtime> question publish --input draft-
 
 ## 처음 발행하기
 
-필요하면 기존 CLI와 같이 `--project`·`--mission`으로 프로젝트와 미션을 지정한다.
-공통 검사기는 `<plugin-root>/skills/mission/scripts/check_human_doc.py`다. `<plugin-root>`는 실제 플러그인 루트로 치환하며
-Claude에서는 `${CLAUDE_PLUGIN_ROOT}`를 쓸 수 있다. Codex도 이 공통 파일을 호출한다.
+필요하면 `--project`·`--mission`으로 프로젝트와 미션을 지정한다.
 
-1. 작성자는 [정상 초안](templates/question.json)을 정본 밖의 `draft.json`으로 복사해 문서 id·제목·문항·본문을 채운다.
+1. 작성자는 `chef question template --kind question|design --id <id>`의 JSON에서 제목·문항·본문을 채운다.
    상세에는 본문에 없는 기술 세부·실제 확인한 근거를 쓴다. 기존 문서를 고치면 변환 전 원문·정본·생성 이력과 최신 답·승인 범위를 함께 받는다.
-2. 코디네이터가 `question preview`의 출력물을 임시 Markdown으로 받고, 작성자와 별도 검토자가 원문·현재 답·고른 양식·예시에 대조한다.
-   공통 검사기에 JSON 초안을 넣어 최신 승인 대상·legacy 원문·답 이력 보존을 검사한다. `--source`에는 이전 정본 JSON을 넣고
+2. 코디네이터가 `question preflight --preview`로 검사하고, 작성자와 별도 검토자가 미리보기와 원문·현재 답·양식·예시를 대조한다.
+   기존 계약과 이력을 비교해야 하면 `chef document compare`로 검사한다. `--source`에는 이전 정본 JSON을 넣고
    `--archive`에는 검증할 생성 이력을 넣는다. `--source`가 미션의 정본 경로이면 대응 이력도 자동 검증한다.
    이력에 비교 원문 개정이 온전히 보존된 경우에만 이전 표를 현재 본문에서 정리할 수 있다.
    최초 이관이면 `--source`에 원본 Markdown을 넣는다. 새 문서는 `--source`·`--archive`를 생략한다.
@@ -148,13 +144,12 @@ Claude에서는 `${CLAUDE_PLUGIN_ROOT}`를 쓸 수 있다. Codex도 이 공통 �
 아래는 새 문서를 처음 발행하는 예다. 기존 문서 정리는 아래 개정 절차의 원문·이력 비교를 거친다.
 
 ```sh
-python "<mission-state>" <mission-state-runtime> question preview --input draft.json > preview.md
-python "<plugin-root>/skills/mission/scripts/check_human_doc.py" draft.json
-python "<mission-state>" <mission-state-runtime> question publish --input draft.json
-python "<mission-state>" <mission-state-runtime> question check
+chef question preflight --input draft.json --preview
+chef question publish --input draft.json
+chef question check
 ```
 
-`preview`는 초안을 검증해 Markdown을 출력하며 미션 정본·생성본을 쓰지 않는다. `preview.md`는 사람의 독립 검토용 임시 파일이다.
+`preflight --preview`는 검사한 Markdown을 stdout에, 검사 안내를 stderr에 출력한다. 미리보기 파일은 검토에 필요한 경우에만 저장한다. 초안과 답 JSON은 `--input -`로 표준 입력에 전달할 수 있다.
 자동 보존 검사는 JSON 초안과 이전 JSON 또는 최초 이관 Markdown을 비교한다. 과거 표를 정리할 때 생성 이력이 정본·보관 개정과 정확히 일치하는지도 확인한다.
 현재 본문에는 최신 승인 대상의 컬럼·타입·키·제약 또는 요청·응답이 직접 있어야 한다. 이력 보관은 이 표·계약을 변경점만으로 대체할 근거가 아니다.
 원문에 스키마 표가 있는데 현재 문서에 하나도 없으면 이력 보관과 무관하게 검사를 통과하지 못한다. 어떤 표가 최신 한 벌인지와 컬럼·조건의 일치는 작성자·별도 검토자가 의미를 대조한다.
@@ -185,8 +180,8 @@ python "<mission-state>" <mission-state-runtime> question check
 ```
 
 ```sh
-python "<mission-state>" <mission-state-runtime> question answer ask-1.md --input reply.json
-python "<mission-state>" <mission-state-runtime> question check
+chef question answer ask-1.md --input reply.json
+chef question check
 ```
 
 답 입력의 `id`는 문서 id가 아니라 중복 실행을 식별하는 고유 작업 id다. 같은 id·같은 입력의 재시도는 멱등이고,
@@ -207,11 +202,11 @@ python "<mission-state>" <mission-state-runtime> question check
 질문 id·답·상태·승인 범위가 같으면 아래처럼 문체 개정으로 발행한다. 생성 이력이 없거나 원문 개정이 빠져 있으면 보존 검사부터 해결한다.
 
 ```sh
-python "<mission-state>" <mission-state-runtime> question show ask-1.md
-python "<mission-state>" <mission-state-runtime> question render ask-1.md
-python "<plugin-root>/skills/mission/scripts/check_human_doc.py" draft-r2.json --source <미션>/questions/ask-1.json --archive <미션>/details/history/ask-1.md
-python "<mission-state>" <mission-state-runtime> question publish --input draft-r2.json --expect-revision 1 --editorial
-python "<mission-state>" <mission-state-runtime> question check
+chef question show ask-1.md
+chef question render ask-1.md
+chef document compare draft-r2.json --source <미션>/questions/ask-1.json --archive <미션>/details/history/ask-1.md
+chef question publish --input draft-r2.json --expect-revision 1 --editorial
+chef question check
 ```
 
 - `show`·`render`에는 `ask-1.md`처럼 `.md`가 붙은 루트 문서 이름을 준다. `show`는 현재 정본 JSON을 출력한다. 이를 읽고 별도 초안을 작성한다.
@@ -242,9 +237,9 @@ python "<mission-state>" <mission-state-runtime> question check
 `restore`는 그 검토가 끝난 입력에만 쓰는 명시적 기록 수리다. 산문에서 답을 추론하거나 새 승인으로 기록하지 않는다.
 
 ```sh
-python "<mission-state>" <mission-state-runtime> question preview --input reviewed-recovery.json > preview.md
-python "<mission-state>" <mission-state-runtime> question restore --input reviewed-recovery.json --source saved-original.md --expect-revision 3 --expect-sha256 <현재-JSON-바이트의-SHA256>
-python "<mission-state>" <mission-state-runtime> question check
+chef question preview --input reviewed-recovery.json > preview.md
+chef question restore --input reviewed-recovery.json --source saved-original.md --expect-revision 3 --expect-sha256 <현재-JSON-바이트의-SHA256>
+chef question check
 ```
 
 - 기존 JSON과 Markdown이 모두 있어야 한다. 입력의 문서 id와 revision은 현재 정본과 같아야 하며, 과거 답의 `revision`·`at`·`text`는 실제 기록대로 유지한다.
@@ -309,7 +304,7 @@ JSON이 맞고 생성본만 잘못됐으면 `question render`, 새 질문 개정
 
 DB·Proto 정의의 `schema-table` 입력과 정본 대조는 [Chef CLI](cli.md#dbproto-정의)를 따른다.
 
-새 확인 A(`confirm-A`, `confirm-A1` 등)는 schema 2로 발행한다. [설계 초안](templates/design-confirm.json) 또는 [질문 초안](templates/question.json)을 복사하고 `question patch`로 수정한다. schema 1 문서의 읽기·답 기록·복원·기존 개정은 계속 지원한다. 기존 문서를 전환하려면 `set.schema: 2`와 전체 새 blocks를 한 patch에 명시한다. schema 2에서 schema 1로의 개정은 거부한다. 실행 중인 문서를 자동 전환하지 않는다.
+새 확인 A(`confirm-A`, `confirm-A1` 등)는 `question template --kind design`의 schema 2 초안을 사용한다. 일반 질문은 `--kind question`을 사용한다. schema 1 문서의 읽기·답 기록·복원·기존 개정은 계속 지원한다. 기존 문서를 전환하려면 `set.schema: 2`와 전체 새 blocks를 한 patch에 명시한다. schema 2에서 schema 1로의 개정은 거부한다. 실행 중인 문서를 자동 전환하지 않는다.
 
 | 입력 | 제한 |
 | --- | --- |

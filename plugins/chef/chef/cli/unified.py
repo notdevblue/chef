@@ -25,12 +25,15 @@ GROUPS = {
     "worker": "chef.workers.cli",
     "guard-check": "chef.cli.check_guard",
     "grok-state": "chef.runtimes.grok.state",
+    "usage": "chef.mission.usage",
     "metrics": "chef.mission.observatory",
     "queue": "chef.mission.supervisor",
     "recommend": "chef.mission.routing",
 }
 RUNTIME_GROUPS = {"slots", "dashboard", "doctor", "distill", "guard-check"}
-UNSCOPED_STATE_COMMANDS = {("inspect",), ("unit", "template"), ("question", "patch")}
+UNSCOPED_STATE_COMMANDS = {
+    ("inspect",), ("unit", "template"), ("question", "patch"), ("question", "template"), ("document", "compare"),
+}
 
 
 def transition_args(argv):
@@ -85,7 +88,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="chef", allow_abbrev=False)
     parser.add_argument("command", choices=("context", "mission", *GROUPS, *STATE_GROUPS))
     parser.add_argument("args", nargs=argparse.REMAINDER)
-    parser.epilog = "For options use chef <command> --help. Set --runtime for the current host."
+    parser.epilog = "For options use chef <command> --help. Put the runtime after the command: chef context --runtime codex."
     if not argv:
         parser.print_help()
         return 0

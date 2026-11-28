@@ -15,7 +15,7 @@ Python과 어댑터 환경은 다음 명령으로 점검합니다.
 예제의 `python`은 실행 환경에 따라 `python3`으로 바꿀 수 있습니다.
 
 ```text
-python <repo>/plugins/chef/skills/adapter-init/scripts/check_guard.py --doctor
+python <repo>/plugins/chef/chef_cli.py guard-check --runtime codex --doctor
 ```
 
 ## 프로젝트 연결
@@ -218,7 +218,7 @@ Hermes의 Codex 역할 워커는 설치된 Chef 코드와 실행 중인 Hermes�
 
 ```text
 cd <project>
-python <repo>/plugins/chef/skills/doctor/scripts/doctor.py --runtime codex
+python <repo>/plugins/chef/chef_cli.py doctor --runtime codex
 ```
 
 미션을 시작했으면 실행된 전환 명령의 성공과 ACTIVE의 미션·세션·런타임 일치를 확인합니다.

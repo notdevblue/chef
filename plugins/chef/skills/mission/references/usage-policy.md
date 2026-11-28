@@ -54,12 +54,12 @@ clean·findings·closed-low 모두 기록해야 다음 범위 비교가 직전 �
 동일 소유·검증을 공유하는 작은 수정은 묶어 파견한다. 기존 승인 단위를 자동 병합하거나 receipt를 공유하지 않는다.
 문서 기존 답·설계 표 보존은 `check_human_doc.py --source`, JSON 구문·링크·상태 검사는 기존 CLI로 먼저 검사한다.
 코디네이터는 생성 문서의 JSON 정본과 작성 담당 하나를 유지하고, 검토한 초안만 발행한다.
-계획·receipt를 먼저 훑을 때는 `python "<mission-state>" <mission-state-runtime> inspect --plan <계획.json>` 또는 `... inspect --receipt <receipt.json>`을 쓴다. 둘 중 하나만 지정하며 mission·adapter·ACTIVE 없이 읽기 전용으로 요약한다. `source`, `identity`, `counts`, 단계별 `steps`·`statusCounts`, `failedSteps`, `failure.repeatCount`, `executionCounts`, `recorded` 포인터 중 필요한 부분만 확인한다. 원본 JSON·로그 전체를 컨텍스트에 싣지 않는다. `current_validity`는 `not_checked`이며, 이 요약은 현재 입력·정책·환경 검증이나 결과 재사용 판정이 아니다. 그 판정은 기존 `preflight`·`verify`가 맡는다.
+계획·receipt를 먼저 훑을 때는 `chef inspect --plan <계획.json>` 또는 `... inspect --receipt <receipt.json>`을 쓴다. 둘 중 하나만 지정하며 mission·adapter·ACTIVE 없이 읽기 전용으로 요약한다. `source`, `identity`, `counts`, 단계별 `steps`·`statusCounts`, `failedSteps`, `failure.repeatCount`, `executionCounts`, `recorded` 포인터 중 필요한 부분만 확인한다. 원본 JSON·로그 전체를 컨텍스트에 싣지 않는다. `current_validity`는 `not_checked`이며, 이 요약은 현재 입력·정책·환경 검증이나 결과 재사용 판정이 아니다. 그 판정은 기존 `preflight`·`verify`가 맡는다.
 반환 상세와 증거는 파일로 받고 `handoff <단위> --summary <짧은 결과> --detail <상세> --evidence <근거>`로 연결한다.
 상세·증거는 프로젝트 안 기존 파일이며 `--evidence`를 반복할 수 있다. 기본 summary 상한은 1000자다.
 `handoff`는 파일 포인터를 출력할 뿐 상태를 쓰거나 완료·승인을 판정하지 않는다.
 채팅에는 결과·다음 일·미확인만 남긴다.
-여러 단위를 등록할 때는 `unit template`의 UTF-8 JSON을 채우고 `unit add --input <파일> --dry-run`으로 오류를 한 번에 확인한 뒤 등록한다.
+여러 단위를 등록할 때는 `chef unit template`의 JSON을 채우고 `chef unit add --input - --dry-run`으로 검사한다. 재검토에 보관할 입력은 파일로 전달할 수 있다.
 긴 문서와 구조화 데이터는 큰 셸 문자열로 생성하지 않고 파일 편집 또는 기존 `question patch --input` 경로를 쓴다.
 별도 Python 생성 스크립트는 `python -X utf8`과 명시적 UTF-8 파일 인코딩을 쓰고, JSON을 셸 문자열로 보간하지 않는다.
 등록·갱신 응답이 충분하면 같은 상태를 확인하려고 `status`·`unit list`를 연달아 부르지 않는다. 다른 작업자의 변경 가능성이 있으면 필요한 시점에 현재 상태를 다시 확인한다.

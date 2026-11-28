@@ -68,6 +68,8 @@ def check(name, path, content, folder, project, adapter):
         return result
     if not re.search(r"^# [^\s].*", text, re.MULTILINE):
         errors.append("document needs a level-one title")
+    if name == "report.md" and "doc-id=report revision=<rN>" in text and re.search(r"^# <", text, re.MULTILINE):
+        errors.append("replace the report template placeholders before sharing")
     kinds = re.findall(r"^<!-- chef:document (report|detail) -->$", text, re.MULTILINE)
     if KIND_MARKER in text and (len(kinds) != 1 or text.count(KIND_MARKER) != 1):
         errors.append("document needs one valid kind marker")

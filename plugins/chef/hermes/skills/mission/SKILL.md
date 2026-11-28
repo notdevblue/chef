@@ -7,7 +7,7 @@ description: Chef mission for Hermes on macOS and Linux
 
 [공통 절차](../../../shared/skills/mission.md)를 먼저 읽고 따른다.
 
-Chef CLI는 native 문맥의 `Chef CLI Python executable` 절대 경로로 실행한다. 이 값은 실행 중인 Hermes의 Python 3.11+ 인터프리터다.
+공통 절차의 `chef …`는 `"<Chef CLI Python executable>" "<plugin-root>/chef_cli.py" …`로 실행한다. 프로젝트 명령에는 `--runtime hermes`를 붙인다. `<plugin-root>`는 이 스킬의 세 단계 위 폴더다.
 
 현재 Hermes 세션에서 수행한다. `chef_slot`으로 준비된 슬롯을 선택한 뒤 `chef_worker_status`로 이번 작업에 필요한 역할이 지원되는지 확인한다. 지원되지 않는 역할이 필요한 경우 미션을 열기 전에 제한을 알린다. 선택한 슬롯을 모든 작업에 적용하고 미션 시작·재개·종료는 `chef_mission(action="open|resume|close", mission="<id>")`로 실행한다. 상태는 `chef_mission(action="status")`로 조회한다. terminal 미션 마커는 사용하지 않는다. 외부 슬롯은 설정된 진입 확인을 마친 뒤 `chef_mission`의 open 작업으로 예약을 획득하고 미션 초기화와 작업 명령을 실행한다.
 

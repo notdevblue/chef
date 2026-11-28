@@ -4,9 +4,8 @@
 Hermes의 open/resume/close와 상태 조회는 native `chef_mission`을 사용한다.
 
 
-실행 품질을 비교할 때는 [실행 통계·작업 대기열·모델 선택 추천](../../skills/mission/references/autonomous-lab.md)을 따른다. 공통 도구는
-`<plugin-root>/skills/mission/scripts/run_metrics.py`·`task_queue.py`·`model_recommendations.py`이며,
-세 런타임에서 같은 구현을 쓴다. 이 도구의 기록·추천·평가는 아래 A/B/C 승인과 독립 검토를 대체하지 않는다.
+실행 품질을 비교할 때는 [실행 통계·작업 대기열·모델 선택 추천](../../skills/mission/references/autonomous-lab.md)을 따른다.
+`chef metrics`·`queue`·`recommend`의 기록·추천·평가는 아래 A/B/C 승인과 독립 검토를 대체하지 않는다.
 관측되지 않은 토큰·모델 적용·과금·크레딧은 추정하지 않는다.
 
 런타임 진입점은 도구·역할·모델·로그 차이를 정한다. VCS 래퍼와 distill 스킬 경로도 거기서 확인한다.
@@ -430,13 +429,13 @@ PoC 명세와의 일치로 쓴다.
 `D3 (보상 지급 시점)`처럼 뜻을 붙인다. 마일스톤은 `goal`, 확인 A는 설계 스킬의 단계 이름에서 딴다.
 
 1. **문서와 작성자 정하기** — 사람용 출력은 `<stateDir>/<id>/confirm-<A|B|C>.md`(단계별이면 `confirm-A<n>.md`),
-   `ask-<n>.md`(n은 1부터)다. 작성자는 `<plugin-root>/skills/mission/references/templates/question.json`으로 별도 초안을 만들고
+   `ask-<n>.md`(n은 1부터)다. 작성자는 `chef question template --kind question`으로 별도 초안을 만들고
    기술 명세·실행 근거는 `details/<사람용과 같은 파일명>.md`에 쓴다. 보고는 `report.md`·`details/report.md`로 쓴다.
    초안 파일을 정본 위치에 쓰지 않는다.
    - 작성자는 `<plugin-root>/skills/mission/references/human-writing.md`에서 해당 양식과 예시만 읽는다. 기존 Markdown 양식은 본문 문체·순서·승인 범위의 참고로 쓴다.
      파견할 때 원문·최신 답과 상태·문서 id·개정·JSON 초안·출력·상세 위치와 공통 규칙·작성 안내·선택한 양식·예시의 실제 경로를 넘긴다.
      작성자가 전체 본문·상세를 고정 원문·최신 답·승인·규칙·양식·예시에 함께 대조해 명확한 결함을 모두 고친 뒤 반환한다. 대조 경로·결과·남은 판단만 짧게 덧붙인다. 수정도 작성 담당에게 맡기며 코디네이터가 사후 윤문하지 않는다.
-   - 질문마다 작성 담당 하나가 schema 2 정형 JSON 초안과 짧은 근거를 쓴다. 새 확인 A는 `templates/design-confirm.json`의 list/rules/steps/table/fields/literal 입력을 사용하며 자유 본문은 비운다. 기존 schema 1 문서는 자동 전환하지 않는다. 선택지는 구조화하고, 같은 계약·표를 body와 details에 중복하지 않는다. 생성 Markdown은 CLI에 맡긴다. 코디네이터가 검토를 마친 초안을 발행한다.
+   - 질문마다 작성 담당 하나가 정형 초안과 짧은 근거를 쓴다. 새 확인 A는 `chef question template --kind design`으로 시작한다. 데이터 정의는 `schema-table`로 쓰고 비교는 산문이나 목록으로 둔다. 코디네이터가 검토한 초안을 발행한다.
      보고서(`report.md`, `details/report.md`)는 하네스가 서브에이전트의 보고서 `.md` 작성을 거부하므로, 작성자가 완성 본문
      (또는 절별 교체 내용)을 돌려주고 코디네이터가 받은 그대로 반영한다. 검사·검토에서 나온 수정은 작성자에게 다시 맡긴다.
    - 상세 양식은 `<plugin-root>/skills/mission/references/details-template.md`다. 같은 id·개정으로 연결하고, 상세를 루트의 `ask-1-details.md`처럼 두지 않는다.
@@ -460,7 +459,7 @@ PoC 명세와의 일치로 쓴다.
      무엇을 승인했는지 불분명한 부분만 확인한다.
  4. **공유 전 확인** — 질문 정형 원본과 생성 Markdown·상세를 기계 검사하고, 확정된 의미를 유지하는 산문·질문 갱신은 고정 원문·현재 답·승인·관련 규칙·고른 양식·예시와 함께 독립 의미 검토를 1회 받는다.
     질문·보고 문서라는 이유만으로 심층 검토에 넘기지 않는다. 중요한 DB·API·승인·공유 계약 변경, 모순 또는 작은 검토로 판단할 수 없는 부분은 그 범위와 근거만 심층 검토로 반환한다. 정형 원본과 생성 Markdown을 별도 AI 리뷰 대상으로 중복 지정하지 않는다. 지적·제안·검증 공백·후속 범위·해소 확인은 구현 리뷰와 같은 고정 id·원인 계약을 따른다.
-   `question preflight`와 미리보기로 초안을 확인한다. 구형 문서 이관과 원문·보관 개정 대조는 [질문 정본 계약](../../skills/mission/references/question-records.md)을 따른다.
+   `question preflight --preview`로 초안을 검사하고 미리 본다. 구형 문서 이관과 원문·보관 개정 대조는 [질문 정본 계약](../../skills/mission/references/question-records.md)을 따른다.
    작성자는 검토 의견도 원문·현재 답에 대조해 수정한다. 최종 검토 뒤 코디네이터가 발행하고 생성본을 확인한다. 수정이 필요하면 초안으로 돌아간다.
    - 발행 뒤와 공유 직전에 `question check`를 실행한다. 정본 누락·손상·생성본 불일치가 있으면 공유 완료로 알리지 않는다.
      정본 내용이 맞고 생성본만 어긋났으면 `question render <질문.md>`으로 복구한 뒤 다시 검사한다. 질문 내용을 고치려면 초안을 개정한다.
@@ -474,8 +473,8 @@ PoC 명세와의 일치로 쓴다.
      공유 확인 뒤 채팅에는 목적·결정할 것과 사람용 문서 링크를 짧게 보낸다. 이름 있는 Markdown 링크를 지원하는 환경에서는 그 링크,
      Windows Terminal에서 필요하면 슬래시와 공백 인코딩을 적용한 날 `file:///` URL을 쓴다.
    - `report.push`가 켜져 있고 알림 도구가 있으면 위 공유 확인 뒤 결정할 것과 사람용 파일을 알린다. 확인·멈춤 질문을 긴 질문 도구에 넣지 않는다.
-5. **답 기록** — 코디네이터는 답을 받는 즉시 원문·날짜·대상 개정·문항별 갱신을 하나의 reply JSON에 담아
-   `question answer <ask-1.md> --input <답JSON>`을 한 번 실행하고 `question check`로 확인한다.
+5. **답 기록** — 코디네이터는 답을 받는 즉시 원문·날짜·대상 개정·문항별 갱신을 담아
+   `question answer <ask-1.md> --input -`에 전달하고 `question check`로 확인한다.
    부분 답도 바로 보존하고 답하지 않은 문항은 그대로 둔다. 질문·되묻기만 있으면 원문을 보존하되 문항을 해결하거나 승인으로 올리지 않는다.
    - `answered`는 답과 적용 범위, `withdrawn`은 철회 근거를 `answer`에 남긴다. 조건부·별도 승인이 남으면 같은 호출에서
      `approval.status=pending`과 남은 조건을 `approval.reason`에 명시한다. 상태 머리글·미답 문항·전체 이력 링크는 CLI가 생성하고 문서 `body`는 그대로 출력한다. 완료 답은 재출력하지 않는다.

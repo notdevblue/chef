@@ -23,7 +23,7 @@ Bot과 CLI가 같은 티어별 절차를 쓴다. 상태 조회는 `chef-status`,
 
 ```text
 chef grok-state snapshot --project "<작업 루트>"
-python "<plugin-root>/skills/mission/scripts/mission_state.py" --runtime grok --project "<작업 루트>" active
+chef mission active --runtime grok --project "<작업 루트>"
 ```
 
 3. 진행 중인 미션이 있거나 M(여러 파일·검증 게이트)·L(여러 계층·PoC·사람 확인)이면 같은 플러그인의 `chef-mission/SKILL.md`를 읽고 전체 공통 절차를 적용한다.

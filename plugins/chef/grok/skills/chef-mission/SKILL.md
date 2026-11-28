@@ -9,6 +9,7 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 
 `<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
 경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
+공통 절차의 `chef …`는 `python "<plugin-root>/chef_cli.py" …`로 실행한다. 프로젝트 명령에는 `--runtime grok`를 붙인다.
 
 ## Grok 실행 계약
 

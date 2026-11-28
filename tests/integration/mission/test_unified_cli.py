@@ -39,7 +39,7 @@ def project(tmp_path, monkeypatch):
 def run(project, *args, input=None):
     return subprocess.run(
         [sys.executable, "-I", "-B", str(PLUGIN_ROOT / "chef_cli.py"), *args, "--runtime", "codex"],
-        cwd=project, env={**os.environ, "PYTHONUTF8": "1"}, input=json.dumps(input) if input else None,
+        cwd=project, env={**os.environ, "PYTHONUTF8": "1"}, input=json.dumps(input) if input is not None else None,
         capture_output=True, encoding="utf-8", timeout=20,
     )
 
@@ -64,7 +64,9 @@ def test_context_and_document_share_checks_the_registered_bytes(project):
     report.write_text(report.read_text(encoding="utf-8").replace(
         "## 지금", "## 지금\nReady").replace("## 남은 확인", "## 남은 확인\nNone")
         .replace("## 다음 일", "## 다음 일\nPlant the tree"), encoding="utf-8")
-    assert run(root, "document", "share", "report.md").returncode == 0
+    shared = run(root, "document", "share", "report.md", "--json")
+    assert shared.returncode == 0, shared.stderr
+    assert json.loads(shared.stdout)["documents"][0]["sha256"] == hashlib.sha256(report.read_bytes()).hexdigest()
     listed = json.loads(run(root, "document", "list", "--json").stdout)[0]
     assert listed["sharing"] == "shared" and listed["issues"] == [] and listed["approval"] is None
     assert listed["sha256"] == hashlib.sha256(report.read_bytes()).hexdigest()
@@ -84,6 +86,45 @@ def test_edit_during_document_validation_does_not_register_stale_bytes(project):
     with pytest.raises(StateError, match="검사 중 바뀌었습니다"):
         share_documents(folder, ["report.md"], check_content=validate)
     assert not shared_documents(folder)
+
+
+def test_normal_init_yields_one_managed_report_and_a_valid_design_template(project):
+    root, folder = project
+    started = run(root, "mission", "init", "--tier", "M", "--goal", "Review storage")
+    assert started.returncode == 0, started.stderr
+    assert "chef:document report" in (folder / "report.md").read_text(encoding="utf-8")
+    checked = run(root, "document", "share", "report.md")
+    assert checked.returncode == 1 and "empty section" in checked.stderr
+    duplicate = run(root, "document", "create", "--kind", "report", "--title", "Different title")
+    assert duplicate.returncode == 1 and "already exists" in duplicate.stderr
+    template = run(root, "question", "template", "--kind", "design", "--id", "confirm-A2")
+    assert template.returncode == 0, template.stderr
+    draft = json.loads(template.stdout)
+    preflight = run(root, "question", "preflight", "--input", "-", "--preview", input=draft)
+    assert preflight.returncode == 0, preflight.stderr
+    assert preflight.stdout.startswith("# ") and "revision 1" in preflight.stderr
+    assert not (folder / "confirm-A2.md").exists()
+    published = run(root, "question", "publish", "--input", "-", input=draft)
+    assert published.returncode == 0, published.stderr
+    reply = {"schema": 1, "id": "first", "revision": 1, "at": "2026-01-01T00:00:00Z", "text": "Blue",
+             "updates": [{"id": "color", "status": "answered", "answer": "Blue", "selected": "blue"}]}
+    answered = run(root, "question", "answer", "confirm-A2.md", "--input", "-", input=reply)
+    assert answered.returncode == 0, answered.stderr
+    assert run(root, "question", "check").returncode == 0
+    checked = run(root, "document", "compare", str(folder / "questions/confirm-A2.json"))
+    assert checked.returncode == 0 and json.loads(checked.stdout)["issues"] == [], checked.stderr
+
+
+def test_unit_batch_admits_stdin_without_a_temporary_payload_file(project):
+    root, folder = project
+    started = run(root, "mission", "init", "--tier", "M", "--goal", "Plant")
+    assert started.returncode == 0, started.stderr
+    record = {"schema": 1, "units": [{"id": "M1", "goal": "Plant", "files": "garden.txt", "done": "Planted",
+                                    "verify": "Inspect the garden", "timebox": 15, "forbid": "No outside edits"}]}
+    result = run(root, "unit", "add", "--input", "-", input=record)
+    assert result.returncode == 0, result.stderr
+    assert (folder / "units.tsv").is_file()
+    assert list(root.glob("*.json")) == [root / "schema.json"]
 
 
 def test_typed_schema_is_checked_and_tampering_cannot_be_shared(project):
@@ -109,7 +150,8 @@ def test_new_confirm_rejects_generic_schema_tables_before_publication(project, a
     record["blocks"] = [tree_block()]
     improper = {"id": "mixed", "type": untyped, "title": "Mixed definitions"}
     if untyped == "table":
-        improper.update(columns=["Column", "Type"], rows=[["Id", "int"], ["Key", "str"]])
+        improper.update(columns=["Store", "Attribute", "Format"],
+                        rows=[["Orchard DB", "Id", "int"], ["Catalog Proto", "Key", "str"]])
     else:
         improper["fields"] = [{"name": "Id", "type": "int"}, {"name": "Key", "type": "str"}]
     record.setdefault(area, []).append(improper)

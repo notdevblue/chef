@@ -21,13 +21,13 @@ python "<plugin-root>/chef_cli.py" context --runtime <claude|codex|grok|hermes> 
 
 ## 문서
 
-- `document create --kind report|detail --title <제목> [--name <이름>]`으로 초안을 만든다. 같은 경로는 덮어쓰지 않는다.
-- `document check <경로...>`는 체크 결과와 현재 공유·승인 상태를 JSON으로 반환한다. `document share <경로...>`는 같은 파일 내용으로 검사하고 해시를 등록한다. 바뀐 파일은 다시 검토하고 공유한다.
-- 질문은 `question preflight → preview → publish`로 만든다. 답·승인은 `question answer`로 기록한다. 정본·생성본·이력이 일치하는지는 `question check`로 확인한다. 구형 원문 복구·변환은 [질문 정본 계약](question-records.md)을 따른다.
+- `mission init`이 기본 보고서 `report.md`의 초안을 만든다. 추가 보고나 상세는 `document create --kind report|detail --name <이름> --title <제목>`으로 만든다.
+- `document check <경로...>`는 검사·공유·승인 상태를 반환한다. `document share <경로...> --json`은 검사와 등록을 한 뒤 결과와 바이트 해시를 반환한다. 바뀐 파일은 다시 검토하고 공유한다.
+- 질문은 `question template --kind question|design`에서 시작해 `question preflight --preview`로 검사·미리보기한 뒤 발행한다. `preview`, `preflight`, `publish`, `answer`의 `--input -`는 표준 입력 JSON을 받는다. 기존 정본·생성본·이력은 `question check`, 원문과 초안의 보존 대조는 `document compare`로 확인한다. 복구는 [질문 정본 계약](question-records.md)을 따른다.
 
 ### DB·Proto 정의
 
-스키마 표 하나에는 대상 하나만 둔다. 새 확인 A의 본문·상세에서 컬럼 정의에는 `schema-table`을 쓴다. DB↔Proto 관계와 비교는 별도 설명에 둔다. 일반 보고서에서는 스키마 정의를 아래 블록으로 만든 문서에 연결한다. `document create --kind schema --name book --input <JSON>`은 한 블록을 `details/book.md`로 생성한다.
+스키마 표 하나에는 대상 하나만 둔다. 새 확인 A의 본문·상세에는 새 일반 `table`·`fields` 블록을 쓰지 않는다. 데이터 정의는 `schema-table`, DB↔Proto 관계와 비교는 산문이나 목록으로 쓴다. 일반 보고서에서는 스키마 정의를 아래 블록으로 만든 문서에 연결한다. `document create --kind schema --name book --input <JSON>`은 한 블록을 `details/book.md`로 생성한다.
 
 ```json
 {

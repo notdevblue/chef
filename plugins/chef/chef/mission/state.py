@@ -12,6 +12,7 @@ from datetime import datetime
 from chef.cli.mission_parser import OneLineParser, build_parser
 from chef.cli.question_commands import (
     cmd_document_check,
+    cmd_document_compare,
     cmd_document_create,
     cmd_document_hide,
     cmd_document_list,
@@ -25,12 +26,14 @@ from chef.cli.question_commands import (
     cmd_question_render,
     cmd_question_restore,
     cmd_question_show,
+    cmd_question_template,
 )
 from chef.guards import mission as mission_guard
 from chef.infrastructure import configuration as infrastructure_configuration
 from chef.infrastructure import errors as infrastructure_errors
 from chef.infrastructure import locking as infrastructure_locking
 from chef.infrastructure import paths as infrastructure_paths
+from chef.mission import document_checks
 from chef.mission.contracts import (
     ANSWER_DATE,
     APPROVED,
@@ -159,6 +162,8 @@ def cmd_init(ctx, args):
             kept.append(name)
             continue
         text = read_text(os.path.join(TEMPLATES_DIR, name))
+        if name == "report.md" and getattr(args, "unified", False):
+            text = document_checks.draft("report", ctx.mission_id)
         if name in ID_TEMPLATES:
             text = text.replace(ID_PLACEHOLDER, ctx.mission_id)
         if name == "mission.md":
@@ -231,7 +236,15 @@ def cmd_unit_add(ctx, args):
     if getattr(args, "input", None):
         if args.id or any(getattr(args, name) for name in BRIEF_FIELDS) or args.human != NONE_CELL or args.after != NONE_CELL:
             raise StateError("--input cannot be combined with unit id or brief flags")
-        items = unit_input.load(args.input)
+        if args.input == "-":
+            from chef.cli.input_json import stdin_object
+
+            try:
+                items = unit_input.units(stdin_object())
+            except ValueError as error:
+                raise StateError(f"invalid unit JSON on standard input: {error}") from error
+        else:
+            items = unit_input.load(args.input)
     else:
         items = [{"id": args.id or "", **{name: getattr(args, name) for name in BRIEF_FIELDS},
                   "human": args.human, "after": args.after}]
@@ -980,10 +993,11 @@ def main(argv=None, runtime="claude", *, unified=False):
         except SystemExit:
             return OK
         args.unified = unified
-        if args.handler in (cmd_inspect, cmd_question_patch, cmd_review_worker, cmd_unit_template):
+        if args.handler in (cmd_inspect, cmd_document_compare, cmd_question_patch, cmd_question_template,
+                            cmd_review_worker, cmd_unit_template):
             for line in args.handler({}, args):
                 print(line)
-            return OK
+            return getattr(args, "exit_code", OK)
         runtime = getattr(args, "runtime", None) or runtime
         try:
             located = infrastructure_configuration.locate(args.project, runtime)

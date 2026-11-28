@@ -1,6 +1,6 @@
 # 검증과 완료 처리
 
-`<mission-state>`·`<mission-state-runtime>`은 현재 런타임 mission 진입점이 정한 경로·인자다.
+실행에는 [현재 번들의 Chef CLI](cli.md)를 사용한다.
 
 코디네이터는 승인된 타깃 검증을 계획 파일로 만들고 `preflight <단위> --plan <계획.json>`으로 정적 검사한다.
 `executionPolicy`가 coordinator 경로를 명시적으로 허용한 계획은 코디네이터가 `verify --coordinator`로 실행할 수 있고,
@@ -93,8 +93,8 @@ CLI가 현재 계획의 effective `inputs` snapshot을 계산해 `--snapshot`과
 기존 계획이나 receipt를 빠르게 확인할 때는 공유 CLI의 `inspect`를 쓴다.
 
 ```text
-python "<mission-state>" <mission-state-runtime> inspect --plan <계획.json>
-python "<mission-state>" <mission-state-runtime> inspect --receipt <receipt.json>
+chef inspect --plan <계획.json>
+chef inspect --receipt <receipt.json>
 ```
 
 `--plan`과 `--receipt`는 하나만 지정한다. 출력은 원본을 수정하거나 mission·adapter·ACTIVE를 찾지 않고, `source`·`identity`·`counts`·`steps`·`statusCounts`·`failedSteps`·`failure.repeatCount`·`executionCounts`와 `recorded` 포인터를 요약한다. 목록은 길이를 제한해 표시하고 나머지는 `truncatedFields`로 알린다. 원본 JSON·로그·포인터 대상 파일을 통째로 읽지 않는다. `current_validity`는 항상 `not_checked`이므로 요약만으로 현재 입력·정책·환경의 유효성이나 결과 재사용을 판단하지 않는다. 실제 검증과 재사용 판단은 기존 `preflight`·`verify`가 맡는다.

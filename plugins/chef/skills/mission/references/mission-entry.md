@@ -1,7 +1,7 @@
 # Mission entry event
 
-`mission_entry.py` runs before an adapter is required and before an `open` or `resume` marker.
-Claude, Codex and Grok use the same implementation in `hooks/mission_entry.py`.
+`chef mission enter` runs before an adapter is required and before the `open` or `resume` transition.
+Claude, Codex and Grok use the same entry implementation.
 The event can prepare a discoverable adapter, continue in the current project, request a choice,
 or delegate to an existing registered slot. It does not open or move an ACTIVE mission.
 An existing adapter is inspected to identify slots and preserve ACTIVE. A damaged existing adapter fails closed
@@ -9,18 +9,18 @@ before the callback; missing-adapter bootstrap does not authorize automatic repa
 
 ## CLI
 
+Use the current bundle's [Chef CLI](cli.md).
+
 ```text
-python <plugin-root>/skills/mission/scripts/mission_entry.py --runtime claude --project <cwd> --mode new --session <session-id> --mission <mission-id> --task <goal>
-python <plugin-root>/codex/skills/chef-mission/scripts/mission_entry.py --project <cwd> --mode resume --session <session-id> --mission <mission-id>
-python <plugin-root>/grok/scripts/mission_entry.py --project <cwd> --mode new --session <session-id> --mission <mission-id> --task <goal>
+chef mission enter --runtime <claude|codex|grok> --project <cwd> --mode <new|resume> --session <session-id> --mission <mission-id> --task <goal>
 ```
 
-`--project` is the actual working directory of the following marker, including a subdirectory when applicable.
+`--project` is the actual working directory of the following transition, including a subdirectory when applicable.
 Use the current runtime's real session id. A new mission uses its proposed id; resume uses the existing mission id.
 Exit 0 returns one JSON object on stdout. Exit 3 returns `needs-input` and requires a user choice.
 Other failures use exit 1 and stderr. Slot launch diagnostics go to stderr.
 
-- `continue`: inspect the returned `project` and `adapter`, read the adapter and its project guidance, then run the matching standalone marker.
+- `continue`: inspect the returned `project` and `adapter`, read the adapter and its project guidance, then run the matching standalone transition.
 - `delegate`: `launched: true` confirms that the existing slot launcher accepted the launch. Stop work in the parent; the slot session runs entry again.
 - `needs-input`: show `message` and stop. No receipt is issued.
 

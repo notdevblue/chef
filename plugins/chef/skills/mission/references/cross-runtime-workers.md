@@ -131,25 +131,25 @@ chef worker native-result --key "<key>" --token "<token>" --result -
 `native`가 false면 별도 supervisor가 `dispatch` 종료 뒤에도 작업을 이어간다. 다음 명령은 로컬 상태만 확인하며 모델을 반복 호출하지 않는다. 작업 전 rate limit으로 native 세션에 handoff될 수 있으므로 반환된 레코드의 `native`를 매번 확인한다. true가 되면 `actualRole`·`brief`를 native 도구로 실행하고 결과를 기록한다. 완료된 결과와 근거를 확인한 뒤 작업에 반영한다.
 
 ```text
-python "<plugin-root>/worker.py" wait --key "<key>" --seconds 30
+chef worker wait --key "<key>" --seconds 30
 ```
 
 `status --key <key>`는 즉시 반환하는 로컬 조회다. 새 소유자 세션으로 미션을 재개했으면 ACTIVE 소유자를 먼저 확인한 뒤 `recover-owner`로 기존 작업 결과의 접근 소유권을 바꾼다. 이 명령은 작업을 다시 실행하지 않는다. 이전 소유자에 연결된 실행 중 워커는 소유권 검사에서 멈춘다.
 
 ```text
-python "<plugin-root>/worker.py" recover-owner --key "<key>" --token "<token>" --runtime "codex" --session "resumed-session-id"
+chef worker recover-owner --key "<key>" --token "<token>" --runtime "codex" --session "resumed-session-id"
 ```
 
 취소가 필요할 때 반환된 시도 token으로 요청한다. 워커가 멈춘 뒤 부분 변경을 확인한다. native 작업은 역할 도구를 취소하고 결과를 수집한 뒤 취소 결과를 기록한다.
 
 ```text
-python "<plugin-root>/worker.py" cancel --key "<key>" --token "<token>"
+chef worker cancel --key "<key>" --token "<token>"
 ```
 
 중단된 워커가 프로세스나 부분 수정을 남길 수 있다. 추적 중인 프로세스가 모두 끝나고 출력 변경을 확인할 때까지 재시도하거나 파일 범위를 풀지 않는다. 이전 작업을 정리하려면 프로젝트 상대 근거 경로를 지정한다. `reconcile`은 관찰한 해시와 현재 출력 파일 상태를 기록하고 기존 시도를 실패로 닫지만 수정 내용을 되돌리지는 않는다. 후속 시도는 새 `requestId`를 쓴다.
 
 ```text
-python "<plugin-root>/worker.py" reconcile --key "<key>" --token "<token>" --evidence "reports/inspection.md"
+chef worker reconcile --key "<key>" --token "<token>" --evidence "reports/inspection.md"
 ```
 
 상태 저장소 기본 경로는 `~/.chef/workers`다. `CHEF_WORKERS_HOME` 또는 명령 앞에 쓰는 전역 `--home` 옵션으로 바꿀 수 있다. 이 저장소는 같은 컴퓨터의 Chef 세션을 조정하는 로컬 기록소이며 원격 큐가 아니다. 자체 프로세스는 POSIX process group 또는 Windows Job Object로 관리한다. POSIX에서 해당 그룹을 벗어난 프로세스는 종료 보장에 포함되지 않는다. 도구·파일 범위 검사는 협력형 가드이며 일반 OS 파일시스템 sandbox가 아니다. 결과를 수용하기 전에 diff와 근거를 확인한다. `needs-inspection`은 부분 변경을 reconcile한 뒤에만 재시도한다. 라우터는 계정 할당량·잔여 크레딧·과금을 추산하지 않는다. 외부 워커는 각 런타임의 로그인이 필요하며 서비스 가용성이나 계정 정책에 따라 실패할 수 있다.

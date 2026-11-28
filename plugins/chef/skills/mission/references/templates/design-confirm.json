@@ -39,8 +39,9 @@
     },
     {
       "id": "palette",
-      "type": "fields",
+      "type": "schema-table",
       "title": "팔레트 필드",
+      "target": {"kind": "db", "name": "Palette", "state": "proposed"},
       "fields": [
         {
           "name": "Id",
@@ -57,21 +58,11 @@
     },
     {
       "id": "preview",
-      "type": "table",
+      "type": "list",
       "title": "표시 예",
-      "columns": [
-        "팔레트",
-        "표시"
-      ],
-      "rows": [
-        [
-          "Blue",
-          "차분함"
-        ],
-        [
-          "Amber",
-          "강조"
-        ]
+      "items": [
+        {"id": "blue", "label": "Blue", "text": "차분함"},
+        {"id": "amber", "label": "Amber", "text": "강조"}
       ]
     },
     {
