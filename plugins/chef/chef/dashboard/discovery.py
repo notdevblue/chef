@@ -4,7 +4,7 @@ import os
 import re
 import stat
 import threading
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,6 +86,7 @@ class Workspace:
     stale_hours: float
     row: dict = field(default_factory=dict)
     key: str = ""
+    requires_mission: bool = False
 
 
 def canonical(path):
@@ -109,16 +110,23 @@ def mission_metadata_allowed(state_dir, mission_id):
     ) and os.path.isfile(metadata)
 
 
-def mission_ids(state_dir):
-    found = []
-    watch(state_dir)
+def iter_mission_ids(state_dir):
     with os.scandir(state_dir) as entries:
         for entry in entries:
-            if entry.is_dir():
-                watch(os.path.join(entry.path, "mission.md"), identity=True)
-                if mission_metadata_allowed(state_dir, entry.name):
-                    found.append(entry.name)
-    return found
+            if entry.is_dir() and mission_metadata_allowed(state_dir, entry.name):
+                yield entry.name
+
+
+def mission_ids(state_dir):
+    return list(iter_mission_ids(state_dir))
+
+
+def has_mission(state_dir):
+    try:
+        with closing(iter_mission_ids(state_dir)) as missions:
+            return next(missions, None) is not None
+    except OSError:
+        return False
 
 
 def expand_root(root, problems):
@@ -159,7 +167,7 @@ def expand_root(root, problems):
     return candidates
 
 
-def workspace_config(root, runtime, problems, fallback=""):
+def locate_workspace(root, runtime):
     if getattr(DISCOVERY_INPUTS, "current", None) is not None:
         for ancestor in adapter_guard.ancestors(root):
             for relative in adapter_guard.adapter_relatives(runtime):
@@ -172,27 +180,23 @@ def workspace_config(root, runtime, problems, fallback=""):
     with LOCATE_LOCK:
         saved = os.environ.pop("CLAUDE_PROJECT_DIR", None)
         try:
-            located = mission_guard.locate_adapter({"cwd": os.path.abspath(root), "han_runtime": runtime})
-        except mission_guard.GuardOff as error:
-            if not fallback:
-                raise
-            problems.append(f"레지스트리: {error}")
-            located = None
+            return mission_guard.locate_adapter({"cwd": os.path.abspath(root), "han_runtime": runtime})
         finally:
             if saved is not None:
                 os.environ["CLAUDE_PROJECT_DIR"] = saved
-    adapter_path = fallback
-    if located:
-        adapter_path = located.adapter_path
+
+
+def workspace_config(root, runtime, adapter_path, adapters):
     if not adapter_path:
         raise infrastructure_errors.UsageError(f"어댑터를 찾지 못함: {root}")
-    watch_adapter(adapter_path)
-    adapter = infrastructure_configuration.read_adapter(adapter_path, runtime)
-    return Config(mission_guard.Located(root, adapter_path), adapter, runtime)
+    if adapter_path not in adapters:
+        watch_adapter(adapter_path)
+        adapters[adapter_path] = infrastructure_configuration.read_adapter(adapter_path, runtime)
+    return Config(mission_guard.Located(root, adapter_path), adapters[adapter_path], runtime)
 
 
-def selected_workspace(workspace, runtime, problems, fallback):
-    selected = workspace_config(workspace.root, runtime, problems, fallback)
+def selected_workspace(workspace, resolve, fallback):
+    selected = resolve(workspace.root, fallback)
     workspace.state_dir = mission_guard.state_dir_of(workspace.root, selected.adapter)
     workspace.stages = selected.stages
     workspace.stale_hours = selected.stale_hours
@@ -231,6 +235,28 @@ def configured_workspaces(config, problems):
 def discover(config):
     problems = []
     runtime = config.runtime
+    located_roots, resolved, adapters = {}, {}, {}
+    expanded, slot_groups = set(), set()
+
+    def resolve(root, fallback=""):
+        root_key = os.path.normcase(os.path.abspath(root))
+        if root_key not in located_roots:
+            try:
+                located_roots[root_key] = locate_workspace(root, runtime)
+            except mission_guard.GuardOff as error:
+                located_roots[root_key] = error
+        located = located_roots[root_key]
+        error = located if isinstance(located, mission_guard.GuardOff) else None
+        if error and not fallback:
+            raise error
+        adapter_path = located.adapter_path if located is not None and error is None else fallback
+        key = (root_key, adapter_path)
+        if key not in resolved:
+            if error:
+                problems.append(f"레지스트리: {error}")
+            resolved[key] = workspace_config(root, runtime, adapter_path, adapters)
+        return resolved[key]
+
     current = config
     if hasattr(config, "located"):
         watch_adapter(config.located.adapter_path)
@@ -239,13 +265,14 @@ def discover(config):
             infrastructure_configuration.read_adapter(config.located.adapter_path, runtime),
             runtime,
         )
+        slot_groups.add((current.located.adapter_path, current.main))
     candidates = configured_workspaces(current, problems)
     if hasattr(current, "located"):
         selected = []
         for workspace in candidates:
             try:
                 selected.append(
-                    selected_workspace(workspace, runtime, problems, current.located.adapter_path)
+                    selected_workspace(workspace, resolve, current.located.adapter_path)
                 )
             except (
                 infrastructure_errors.UsageError,
@@ -285,7 +312,8 @@ def discover(config):
                 adapter_path = os.path.join(registry.path, entry["adapter"], "adapter.json")
                 watch_adapter(adapter_path)
                 try:
-                    infrastructure_configuration.read_adapter(adapter_path, runtime)
+                    if adapter_path not in adapters:
+                        adapters[adapter_path] = infrastructure_configuration.read_adapter(adapter_path, runtime)
                 except (
                     infrastructure_errors.UsageError,
                     mission_guard.GuardOff,
@@ -305,9 +333,17 @@ def discover(config):
                         if not roots:
                             problems.append(f"등록 경로 없음: {pattern}")
                         for root in roots:
+                            key = os.path.normcase(os.path.abspath(root))
+                            if key in expanded:
+                                continue
+                            expanded.add(key)
                             try:
-                                project = workspace_config(root, runtime, problems)
-                                additional = configured_workspaces(project, problems)
+                                project = resolve(root)
+                                group = (project.located.adapter_path, project.main)
+                                additional = []
+                                if group not in slot_groups:
+                                    slot_groups.add(group)
+                                    additional = configured_workspaces(project, problems)
                                 additional.append(
                                     Workspace(
                                         os.path.basename(root),
@@ -321,7 +357,7 @@ def discover(config):
                                     try:
                                         candidates.append(
                                             selected_workspace(
-                                                workspace, runtime, problems, project.located.adapter_path
+                                                workspace, resolve, project.located.adapter_path
                                             )
                                         )
                                     except (
@@ -358,15 +394,7 @@ def discover(config):
         identity = (canonical(workspace.root), canonical(workspace.state_dir))
         if identity in identities:
             continue
-        if index >= trusted_count:
-            try:
-                if not mission_ids(workspace.state_dir):
-                    continue
-            except FileNotFoundError:
-                continue
-            except OSError as error:
-                problems.append(f"미션 폴더 읽기 실패: {workspace.state_dir}: {error}")
-                continue
+        workspace.requires_mission = index >= trusted_count
         identities.add(identity)
         key = workspace.label
         if index >= legacy_count or key in keys or not slots_contracts.NAME_PATTERN.fullmatch(key):

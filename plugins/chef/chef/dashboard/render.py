@@ -6,7 +6,6 @@ import time
 from datetime import datetime
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from chef.dashboard import discovery as dashboard_discovery
 from chef.dashboard.assets import (
     DOCUMENT_VIEWER,
     DOCUMENT_VIEWER_SCRIPT,
@@ -38,7 +37,7 @@ from chef.dashboard.data import (
     collect,
     inspect_question,
     load_mission,
-    locations,
+    mission_location,
     request_scoped,
 )
 from chef.dashboard.documents import document_visible, read_shared_text
@@ -759,7 +758,7 @@ def message(status, text):
 
 @request_scoped
 def overview_page(config):
-    found = collect(config)
+    found = collect(config, overview=True)
     waiting = [
         (mission, name)
         for location in found
@@ -864,10 +863,9 @@ def mission_page(config, slot, mission_id):
         slot == MAIN_LABEL or slots_contracts.NAME_PATTERN.fullmatch(slot)
     ) or not mission_guard.valid_mission_id(mission_id):
         return message(400, "slot·id 형식 오류")
-    matching = [item for item in locations(config) if (item.key or item.label) == slot]
-    if not matching or not dashboard_discovery.mission_metadata_allowed(matching[0].state_dir, mission_id):
+    location = mission_location(config, slot, mission_id)
+    if not location:
         return message(404, f"미션 없음: {slot}/{mission_id}")
-    location = matching[0]
     mission = load_mission(location, mission_id)
     folder = mission.folder
     shared = attempt(

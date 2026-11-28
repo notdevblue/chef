@@ -14,12 +14,14 @@
   if (top) window.scrollTo(0, top);
   write(sessionStorage, SCROLL, "0");
   write(sessionStorage, OPEN, "");
+  let reloadPending = false;
   setInterval(() => {
     const viewer = document.getElementById("document-viewer");
     if (viewer && viewer.open) return;
-    if (!toggle.checked) return;
+    if (!toggle.checked || reloadPending) return;
     write(sessionStorage, SCROLL, String(window.scrollY));
     write(sessionStorage, OPEN, details.filter((d) => d.open).map((d) => d.dataset.key).join("|"));
+    reloadPending = true;
     location.reload();
   }, __REFRESH_MS__);
 })();

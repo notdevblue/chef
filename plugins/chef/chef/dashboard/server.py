@@ -209,23 +209,47 @@ def mission_folders(allowed, raw, real):
     return found
 
 
-def read_allowed(config, raw, allowed=None):
+def document_scope(config, raw):
     try:
-        real = ""
-        if raw and os.path.isabs(raw):
-            real = infrastructure_paths.request_realpath(raw)
+        if not raw or not os.path.isabs(raw):
+            return "", ()
+        absolute = os.path.abspath(raw)
+        real = infrastructure_paths.request_realpath(raw)
     except ValueError:
-        real = ""
-    if allowed is None:
-        allowed = document_access.workspaces(config)
+        return "", ()
+    allowed = []
+    for item in document_access.workspaces(config):
+        state = infrastructure_paths.request_realpath(item.state_dir)
+        root = infrastructure_paths.request_realpath(item.root)
+        if not (
+            infrastructure_paths.inside_root(root, real)
+            or infrastructure_paths.inside_root(state, real)
+            or infrastructure_paths.inside_root(item.state_dir, absolute)
+        ):
+            continue
+        if item.requires_mission:
+            mission_id = (
+                os.path.relpath(real, state).split(os.sep)[0]
+                if infrastructure_paths.inside_root(state, real)
+                else ""
+            )
+            if not (
+                mission_id and dashboard_discovery.mission_metadata_allowed(item.state_dir, mission_id)
+            ) and not dashboard_discovery.has_mission(item.state_dir):
+                continue
+        allowed.append(item)
+    return real, allowed
+
+
+def read_allowed(raw, real, allowed):
     if not real or not any(
         infrastructure_paths.inside_root(infrastructure_paths.request_realpath(root), real)
         for location in allowed
         for root in (location.root, location.state_dir)
     ):
-        return real, b"", message(403, "허용된 작업 공간·미션 경로 밖 경로")
+        return b"", message(403, "허용된 작업 공간·미션 경로 밖 경로")
     if not os.path.isfile(real):
-        return real, b"", message(404, "파일 없음")
+        return b"", message(404, "파일 없음")
     try:
         folders = mission_folders(allowed, raw, real)
         if any(
@@ -235,7 +259,7 @@ def read_allowed(config, raw, allowed=None):
             )
             for folder in folders
         ):
-            return real, b"", message(404, "공유되지 않은 문서")
+            return b"", message(404, "공유되지 않은 문서")
         with open(real, "rb") as f:
             data = f.read()
         if any(
@@ -247,12 +271,12 @@ def read_allowed(config, raw, allowed=None):
             and not shared_bytes_match(folder, real, data)
             for folder in folders
         ):
-            return real, b"", message(404, "공유되지 않은 문서")
-        return real, data, ()
+            return b"", message(404, "공유되지 않은 문서")
+        return data, ()
     except (ValueError, mission_state.StateError):
-        return real, b"", message(404, "공유되지 않은 문서")
+        return b"", message(404, "공유되지 않은 문서")
     except OSError as e:
-        return real, b"", message(500, f"읽기 실패: {e.strerror or e}")
+        return b"", message(500, f"읽기 실패: {e.strerror or e}")
 
 
 def raw_type(real):
@@ -273,14 +297,15 @@ def raw_type(real):
 
 @request_scoped
 def raw_response(config, raw):
-    real, data, failure = read_allowed(config, raw)
+    real, allowed = document_scope(config, raw)
+    data, failure = read_allowed(raw, real, allowed)
     return failure or (200, raw_type(real), data)
 
 
 @request_scoped
 def view_response(config, raw, embedded=False):
-    allowed = document_access.workspaces(config)
-    real, data, failure = read_allowed(config, raw, allowed)
+    real, allowed = document_scope(config, raw)
+    data, failure = read_allowed(raw, real, allowed)
     if failure:
         return failure
     ext = os.path.splitext(real)[1].lower()

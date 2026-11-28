@@ -711,6 +711,30 @@ def test_grok_lifecycle_fallback_tracks_running_child_without_transcript(tmp_pat
     assert not mission.background and mission.waiting_input and mission.last_activity == 1792452624
 
 
+def test_grok_dashboard_reuses_lifecycle_for_ordinary_appends(tmp_path, monkeypatch):
+    transcript = tmp_path / "updates.jsonl"
+    identity = {"subagent_id": "child", "child_session_id": "child-session", "attempt_id": "a1"}
+    spawn = grok_update("subagent_spawned", 1792452623000, **identity)
+    write_lines(transcript, [spawn])
+    parse_children = dashboard_data.grok_transcript.subagent_records
+    calls = []
+
+    def count_parse(path):
+        calls.append(path)
+        return parse_children(path)
+
+    monkeypatch.setattr(dashboard_data.grok_transcript, "subagent_records", count_parse)
+    assert dashboard_data.grok_children(str(transcript))[0]["status"] == "running"
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(grok_update("agent_message_chunk", 1792452623500)) + "\n")
+    assert dashboard_data.grok_children(str(transcript))[0]["status"] == "running"
+    assert len(calls) == 1
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(grok_update("subagent_finished", 1792452624000, status="completed", **identity)) + "\n")
+    assert dashboard_data.grok_children(str(transcript))[0]["status"] == "completed"
+    assert len(calls) == 2
+
+
 def test_transcript_of_finds_grok_native_session(world, tmp_path, monkeypatch):
     session = "11111111-2222-4333-8444-555555555555"
     grok_home = tmp_path / "native-grok"
@@ -1675,6 +1699,8 @@ content.fire('keydown', {key: 'Escape', preventDefault() {}});
 assert.equal(viewer.open, false);
 assert.equal(question.focused.preventScroll, true);
 assert.equal(window.scrollY, 420);
+tick();
+assert.equal(reloads, 1);
 tick();
 assert.equal(reloads, 1);
 ids.auto.checked = false;

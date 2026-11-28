@@ -215,6 +215,50 @@ def test_cached_glob_boundaries_follow_new_roots_and_mission_eligibility(setup, 
     assert dashboard.route(cfg, dashboard.raw_url(other))[0] == 403
 
 
+def test_dashboard_routes_reuse_catalog_and_only_read_requested_mission(setup, tmp_path, monkeypatch):
+    root, registry, _ = setup
+    external = tmp_path / "external"
+    target = mission(external, "target")
+    register(registry, "external", [external])
+    cfg = config(root)
+    location, item = missions(cfg)[0]
+    detail = dashboard.mission_url(item)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Whole workspace or mission discovery was called")
+
+    monkeypatch.setattr(dashboard_discovery, "discover", unexpected)
+    assert dashboard.route(cfg, "/")[0] == 200
+    monkeypatch.setattr(dashboard_discovery, "iter_mission_ids", unexpected)
+    read_active = mission_guard.read_active
+
+    def read_requested_active(state_dir):
+        assert Path(state_dir) == Path(location.state_dir)
+        return read_active(state_dir)
+
+    monkeypatch.setattr(mission_guard, "read_active", read_requested_active)
+    assert dashboard.route(cfg, detail)[0] == 200
+    assert dashboard.route(cfg, dashboard.view_url(target / "mission.md"))[0] == 200
+    assert dashboard.route(cfg, dashboard.raw_url(target / "mission.md"))[0] == 200
+
+
+def test_first_mission_in_known_external_workspace_does_not_rebuild_catalog(setup, tmp_path, monkeypatch):
+    root, registry, _ = setup
+    external = tmp_path / "external"
+    external.mkdir()
+    register(registry, "external", [external])
+    cfg = config(root)
+    assert dashboard.route(cfg, "/")[0] == 200
+    target = mission(external, "first")
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("A new mission must not rebuild the workspace catalog")
+
+    monkeypatch.setattr(dashboard_discovery, "discover", unexpected)
+    assert dashboard.route(cfg, dashboard.raw_url(target / "mission.md"))[0] == 200
+    assert b"first" in dashboard.route(cfg, "/")[2]
+
+
 def test_cached_boundaries_preserve_live_sharing_and_check_only_requested_bytes(setup, monkeypatch):
     root, _, _ = setup
     folder = mission(root)
@@ -296,6 +340,8 @@ def test_each_project_uses_its_own_stages_and_stale_limit(setup, tmp_path, monke
     mission(external, "external", active=True)
     register(registry, "external", [external], adapter(stages=[{"id": "build", "label": "External stage"}], mission={"staleHours": 7}))
     limits = []
+    for state in (root / "missions", external / "missions"):
+        os.utime(state / "ACTIVE", (1, 1))
 
     def staleness(state_dir, active, limit):
         limits.append((state_dir, limit))

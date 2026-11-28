@@ -6,8 +6,11 @@ import json
 import os
 import threading
 import time
+from contextvars import ContextVar
+from pathlib import Path
 
 from chef.dashboard import discovery as dashboard_discovery
+from chef.dashboard import access as workspace_access
 from chef.dashboard.contracts import (
     ACTIVITY_TYPES,
     CODEX_ROLLOUT,
@@ -18,6 +21,7 @@ from chef.dashboard.contracts import (
     NO_INSPECTION,
     QUESTION_RECORD_HEADER,
     READ_ERRORS,
+    RUNNING,
     SKELETON_HEADING,
     SUBAGENT_FILE,
     SUBAGENT_STALE_SECONDS,
@@ -48,13 +52,22 @@ INSPECTIONS = {}
 
 
 INSPECTIONS_LOCK = threading.Lock()
+CODEX_CHILDREN = ContextVar("dashboard_codex_children", default=None)
+GROK_CHILDREN = {}
+GROK_CHILDREN_LOCK = threading.Lock()
+GROK_LIFECYCLE_MARKERS = (b"subagent_spawned", b"subagent_finished")
 
 
 def request_scoped(function):
     @functools.wraps(function)
     def scoped(*args, **kwargs):
-        with infrastructure_paths.request_realpaths():
-            return function(*args, **kwargs)
+        token = CODEX_CHILDREN.set({}) if CODEX_CHILDREN.get() is None else None
+        try:
+            with infrastructure_paths.request_realpaths():
+                return function(*args, **kwargs)
+        finally:
+            if token is not None:
+                CODEX_CHILDREN.reset(token)
 
     return scoped
 
@@ -84,7 +97,13 @@ def transcript_of(location, mission, sessions):
     found = next((path for path in reversed(recorded) if path and os.path.isfile(path)), "")
     if found or not mission_state.SESSION_ID.fullmatch(session):
         return found
-    home = os.path.expanduser("~")
+    found = fallback_transcript(session, os.path.expanduser("~"), int(time.monotonic() // 30))
+    return found if found and os.path.isfile(found) else ""
+
+
+@functools.lru_cache(maxsize=128)
+def fallback_transcript(session, home, _window):
+    # Only sessions without a usable recorded path need the account-wide lookup.
     return (
         mission_state.search_claude(session, home)
         or mission_state.search_codex(session, home)
@@ -149,16 +168,26 @@ def recent_subagents(transcript):
         time.strftime("%Y/%m/%d", time.localtime(time.time() - back)) for back in (0, SUBAGENT_STALE_SECONDS)
     }
     children = []
+    folders = CODEX_CHILDREN.get()
+    if folders is None:
+        folders = {}
     for folder in (os.path.join(root, day) for day in days):
-        names = os.listdir(folder) if os.path.isdir(folder) else []
-        for child, path in ((CODEX_ROLLOUT.fullmatch(name), os.path.join(folder, name)) for name in names):
-            if (
-                child
-                and child.group(1) != parent.group(1)
-                and fresh(path)
-                and codex_parent_of(path) == parent.group(1)
-            ):
-                children.append((child.group(1), path))
+        if folder not in folders:
+            by_parent = {}
+            names = os.listdir(folder) if os.path.isdir(folder) else []
+            for name in names:
+                child = CODEX_ROLLOUT.fullmatch(name)
+                if not child:
+                    continue
+                path = os.path.join(folder, name)
+                try:
+                    parent_id = codex_parent_of(path) if fresh(path) else ""
+                except OSError:
+                    continue
+                if parent_id and parent_id != child.group(1):
+                    by_parent.setdefault(parent_id, []).append((child.group(1), path))
+            folders[folder] = by_parent
+        children.extend(folders[folder].get(parent.group(1), ()))
     return children
 
 
@@ -172,16 +201,61 @@ def codex_parent_of(path):
     return str(meta.get("parent_thread_id") or "") if isinstance(meta, dict) else ""
 
 
+def grok_children(path):
+    # Normal transcript appends do not change the child lifecycle. The saved
+    # tail also detects truncation, rotation, and rewritten append boundaries.
+    metadata = []
+    for item in sorted(Path(path).parent.glob("subagents/*/meta.json")):
+        try:
+            info = item.stat()
+        except OSError:
+            continue
+        metadata.append((item, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+    key = (os.path.abspath(path), grok_transcript.grok_home())
+    with open(path, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        identity = (info.st_dev, info.st_ino)
+        size = info.st_size
+        written = (info.st_mtime_ns, info.st_ctime_ns)
+        stream.seek(max(0, size - 128))
+        tail = stream.read(min(size, 128))
+        previous = GROK_CHILDREN.get(key)
+        children = None
+        if previous:
+            old_identity, old_size, old_written, old_tail, old_metadata, old_children = previous
+            if identity == old_identity and metadata == old_metadata:
+                if (size, written) == (old_size, old_written):
+                    children = old_children
+                elif size > old_size and old_tail.endswith(b"\n"):
+                    stream.seek(old_size - len(old_tail))
+                    if stream.read(len(old_tail)) == old_tail and not any(
+                        marker in line
+                        for line in iter(stream.readline, b"")
+                        for marker in GROK_LIFECYCLE_MARKERS
+                    ):
+                        children = old_children
+    if children is None:
+        children = grok_transcript.subagent_records(path)
+    with GROK_CHILDREN_LOCK:
+        if len(GROK_CHILDREN) >= 128:
+            GROK_CHILDREN.clear()
+        GROK_CHILDREN[key] = (identity, size, written, tail, metadata, children)
+    return children
+
+
 def read_session(mission, transcript):
     if not transcript:
         return
     mission.last_activity, mission.waiting_input, stopped = read_turn(transcript)
     if grok_transcript.is_transcript(transcript):
-        children = grok_transcript.subagent_records(transcript)
+        children = grok_children(transcript)
         mission.background = any(child["status"] == "running" for child in children)
         for child in children:
             last = max(parse_time(child["started_at"]), parse_time(child["completed_at"]))
             path = child["transcript"]
+            if child["status"] == "running" and (not path or not os.path.isfile(path)):
+                # Child recording can start after the parent lifecycle event.
+                path = grok_transcript.find_transcript(child["child_session_id"])
             if path and os.path.isfile(path):
                 activity = grok_transcript.activity(path)
                 last = max(last, parse_time(activity["last_timestamp"]))
@@ -198,7 +272,7 @@ def mission_folder_allowed(location, mission_id):
     return dashboard_discovery.mission_folder_allowed(location.state_dir, mission_id)
 
 
-def load_mission(location, mission_id):
+def load_mission(location, mission_id, *, overview=False):
     folder = os.path.join(location.state_dir, mission_id)
     active = not location.active.corrupt and location.active.id == mission_id
     mission = Mission(location.label, mission_id, folder, active)
@@ -221,23 +295,25 @@ def load_mission(location, mission_id):
     mission.fields = mission_state.header_fields(lines)
     mission.title = next((line[2:].strip() for line in lines if line.startswith("# ")), mission_id)
     mission.goal = section_text(lines, "목표")
-    shared = attempt(
-        errors, mission_state.SHARED_DOCUMENTS_FILE, folder, mission_state.shared_documents, set()
-    )
+    historical_summary = overview and mission.state in ("중단", "닫힘") and not mission.active
     automatic = attempt(errors, "질문 문서", folder, mission_state.auto_question_documents, set())
     try:
         automatic |= set(question_records.document_names(folder))
     except (OSError, ValueError) as error:
         mission.question_issues["questions/"] = str(error)
     report = []
-    if "report.md" in shared:
-        report = attempt(
-            errors,
-            "공유 문서",
-            os.path.join(folder, "report.md"),
-            lambda p: read_shared_text(folder, p).split("\n"),
-            [],
+    if not historical_summary:
+        shared = attempt(
+            errors, mission_state.SHARED_DOCUMENTS_FILE, folder, mission_state.shared_document_rows, []
         )
+        if any(row["path"] == "report.md" for row in shared):
+            report = attempt(
+                errors,
+                "공유 문서",
+                os.path.join(folder, "report.md"),
+                lambda p: read_shared_text(folder, p).split("\n"),
+                [],
+            )
     mission.now = section_text(report, "지금")
     if mission.now:
         mission.report_updated = modified_at(os.path.join(folder, "report.md"))
@@ -248,23 +324,24 @@ def load_mission(location, mission_id):
         lambda p: mission_state.read_table(p, mission_state.UNIT_HEADER),
         [],
     )
-    sessions = attempt(
-        errors,
-        mission_guard.SESSIONS_FILE,
-        os.path.join(folder, mission_guard.SESSIONS_FILE),
-        lambda p: mission_state.read_table(p, mission_guard.SESSIONS_HEADER),
-        [],
-    )
-    try:
-        read_session(mission, transcript_of(location, mission, sessions))
-    except OSError:
-        errors.append("대화 기록")
+    if not historical_summary and (not overview or (mission.active and mission.state == RUNNING)):
+        sessions = attempt(
+            errors,
+            mission_guard.SESSIONS_FILE,
+            os.path.join(folder, mission_guard.SESSIONS_FILE),
+            lambda p: mission_state.read_table(p, mission_guard.SESSIONS_HEADER),
+            [],
+        )
+        try:
+            read_session(mission, transcript_of(location, mission, sessions))
+        except OSError:
+            errors.append("대화 기록")
     legacy_archive = (
         not mission.active
         and mission.state in ("중단", "닫힘")
         and not os.path.lexists(os.path.join(folder, "questions"))
     )
-    for name in sorted(automatic, key=natural_key):
+    for name in (() if historical_summary else sorted(automatic, key=natural_key)):
         if "/" in name:
             continue
         try:
@@ -298,48 +375,82 @@ def load_mission(location, mission_id):
     return mission
 
 
+def read_location(item):
+    location = Location(
+        item.label,
+        item.state_dir,
+        item.row,
+        mission_guard.read_active(item.state_dir),
+        item.root,
+        key=item.key,
+        stages=item.stages,
+        stale_hours=item.stale_hours,
+    )
+    location.stale = stale_of(location)
+    return location
+
+
 def locations(config):
-    workspaces, problems = dashboard_discovery.discover(config)
+    catalog = workspace_access.catalog(config)
     found = [
-        Location(
-            item.label,
-            item.state_dir,
-            item.row,
-            mission_guard.read_active(item.state_dir),
-            item.root,
-            key=item.key,
-            stages=item.stages,
-            stale_hours=item.stale_hours,
-        )
-        for item in workspaces
+        read_location(item) for item in catalog.workspaces
+        if not item.requires_mission or dashboard_discovery.has_mission(item.state_dir)
     ]
     if found:
-        found[0].problem = "; ".join(problems)
-    for location in found:
-        location.stale = stale_of(location)
+        found[0].problem = "; ".join(catalog.problems)
     return found
+
+
+def mission_location(config, slot, mission_id):
+    item = workspace_access.catalog(config).by_key.get(slot)
+    if item is None or not dashboard_discovery.mission_metadata_allowed(item.state_dir, mission_id):
+        return None
+    return read_location(item)
 
 
 def stale_of(location):
     active = location.active
-    if not active.id or active.corrupt:
+    limit = location.stale_hours
+    if not active.id or active.corrupt or not limit:
+        return ""
+    recorded = max(
+        mission_guard.iso_epoch(active.opened_at),
+        modified_at(mission_guard.active_path_of(location.state_dir)),
+    )
+    if time.time() - recorded < limit * 3600:
         return ""
     try:
-        state = mission_guard.staleness(location.state_dir, active, location.stale_hours)
+        state = mission_guard.staleness(location.state_dir, active, limit)
     except Exception:
         return ""
     return mission_guard.stale_text(state) if state.stale else ""
 
 
-def collect(config):
-    found = locations(config)
-    for location in found:
+def collect(config, *, overview=False):
+    catalog = workspace_access.catalog(config)
+    found, problems = [], list(catalog.problems)
+    for item in catalog.workspaces:
         try:
-            ids = dashboard_discovery.mission_ids(location.state_dir)
+            ids = dashboard_discovery.mission_ids(item.state_dir)
         except FileNotFoundError:
+            if not item.requires_mission:
+                found.append(read_location(item))
             continue
         except OSError:
-            location.problem = "미션 폴더 읽기 실패"
+            if item.requires_mission:
+                problems.append(f"미션 폴더 읽기 실패: {item.state_dir}")
+            else:
+                location = read_location(item)
+                location.problem = "미션 폴더 읽기 실패"
+                found.append(location)
             continue
-        location.missions = [load_mission(location, mission_id) for mission_id in sorted(ids, reverse=True)]
+        if item.requires_mission and not ids:
+            continue
+        location = read_location(item)
+        location.missions = [
+            load_mission(location, mission_id, overview=overview) for mission_id in sorted(ids, reverse=True)
+        ]
+        found.append(location)
+    if found:
+        found[0].problem = "; ".join(filter(None, [*problems, found[0].problem]))
     return found
