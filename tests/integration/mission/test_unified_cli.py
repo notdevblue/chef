@@ -15,6 +15,8 @@ from chef.mission.contracts import StateError
 from chef.mission.documents import share_documents, shared_documents
 from chef.verification.contracts import digest
 from chef.verification.plan import snapshot
+from chef.verification import reviews
+from chef.workers import cli as worker_cli, controller
 from chef.workers.store import Store
 from tests.paths import PLUGIN_ROOT
 
@@ -126,6 +128,30 @@ def test_normal_init_yields_one_managed_report_and_a_valid_design_template(proje
     assert run(root, "question", "check").returncode == 0
     checked = run(root, "document", "compare", str(folder / "questions/confirm-A2.json"))
     assert checked.returncode == 0 and json.loads(checked.stdout)["issues"] == [], checked.stderr
+
+
+def test_direct_question_answer_keeps_exact_text_and_checks_revision_and_retries(project):
+    root, folder = project
+    template = run(root, "question", "template", "--kind", "design", "--id", "confirm-A2")
+    assert template.returncode == 0, template.stderr
+    visible = run(root, "question", "publish", "--input", "-", input=json.loads(template.stdout))
+    assert visible.returncode == 0, visible.stderr
+    path = folder / "questions/confirm-A2.json"
+    original = path.read_bytes()
+    raw = "Choose blue.\nPlease keep the earlier requirement."
+    args = ("question", "answer", "confirm-A2.md", "--text", raw, "--reply-id", "reply-one",
+            "--select", "color", "blue", "Blue")
+    wrong = run(root, *args, "--expect-revision", "2")
+    assert wrong.returncode == 1 and path.read_bytes() == original
+    first = run(root, *args, "--expect-revision", "1")
+    assert first.returncode == 0, first.stderr
+    after = json.loads(path.read_bytes())
+    assert after["answers"][0]["text"] == raw
+    assert after["answers"][0]["updates"][0]["selected"] == "blue"
+    assert "approval" not in after["answers"][0]
+    assert after["approval"] == json.loads(original)["approval"]
+    repeat = run(root, *args, "--expect-revision", "1")
+    assert repeat.returncode == 0 and json.loads(path.read_bytes()) == after, repeat.stderr
 
 
 def test_unit_batch_admits_stdin_without_a_temporary_payload_file(project):
@@ -261,6 +287,28 @@ def test_registered_plan_supplies_review_run_without_an_explicit_path(project):
     assert review["status"] == "completed" and review["result"]["inputsUnchanged"]
 
 
+def test_named_plan_uses_adapter_commands_and_the_unit_files(project):
+    root, folder = project
+    adapter = root / ".claude/orchestrator/adapter.json"
+    config = json.loads(adapter.read_bytes())
+    config["verify"]["planPresets"] = {
+        "garden": {"grade": "pytest-pass", "environment": {"target": "orchard"},
+                   "commands": [{"argv": [sys.executable, "-c", "assert open('garden.txt').read()"]}]},
+    }
+    adapter.write_text(json.dumps(config), encoding="utf-8")
+    init_unit(root, "garden.txt")
+    listed = run(root, "plan", "presets")
+    assert json.loads(listed.stdout)["presets"] == [{"name": "garden", "grade": "pytest-pass"}]
+    assert run(root, "plan", "save", "M1", "--preset", "unknown").returncode == 1
+    result = run(root, "plan", "save", "M1", "--preset", "garden")
+    assert result.returncode == 0, result.stderr
+    source = json.loads(Path(json.loads(result.stdout)["path"]).read_bytes())
+    assert source == {**config["verify"]["planPresets"]["garden"], "inputs": ["garden.txt"]}
+    verification = run(root, "verify", "M1")
+    assert verification.returncode == 0, verification.stderr
+    assert (folder / "verification/M1.latest.json").is_file()
+
+
 def collect_review(root, job, review):
     result = run(root, "worker", "native-result", "--key", job["key"], "--token", job["token"], "--result", "-",
                  input=review, runtime=None)
@@ -270,6 +318,107 @@ def collect_review(root, job, review):
 
 def clean_review():
     return {"schema": 1, "report": "Reviewed the garden.", "findings": [], "resolvedIds": [], "suggestions": []}
+
+
+def test_worker_run_dispatches_collects_records_and_closes_only_confirmed_low(project, monkeypatch, capsys):
+    root, folder = project
+    init_unit(root)
+    registered_plan(root)
+    assert run(root, "verify", "M1").returncode == 0
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(controller.policy.user_config, "read", lambda: {})
+    launched = []
+    review = clean_review()
+    review["findings"] = [{"id": "F1", "kind": "defect", "origin": "new", "severity": "low",
+                           "reason": "Missing label", "evidence": "garden.txt:1"}]
+
+    def candidates(_adapter, _cwd, role, **kwargs):
+        assert kwargs["native"] is None and kwargs["allowed_runtimes"] == ["codex"]
+        return [{"runtime": "codex", "available": True, "roles": [role], "tools": ["Read"]}]
+
+    def backend(runtime, role, prompt, **_kwargs):
+        launched.append(role)
+        assert runtime == "codex"
+        if role == "reviewer-small":
+            assert "Read the exact verified change diff" in prompt
+        return {"ok": True, "result": json.dumps(review)}
+
+    def launch(store, record, _directory):
+        controller.supervise(record["key"], record["token"], store=store)
+
+    monkeypatch.setattr(controller.backends, "candidates", candidates)
+    monkeypatch.setattr(controller.backends, "run", backend)
+    monkeypatch.setattr(controller, "launch_supervisor", launch)
+
+    def managed(role, attempt, *options, expected=0):
+        code = worker_cli.main(["run", "M1", "--role", role, "--request-id", attempt, "--mode", "native",
+                                "--session", "fictional", "--runtime", "codex", "--wait-seconds", "5", *options])
+        assert code == expected
+        return json.loads(capsys.readouterr().out)
+
+    first = managed("code-reviewer", "first", "--record-review")
+    assert first["status"] == "completed" and first["execution"] == "supervised"
+    assert first["reviewRecord"]["status"] == "recorded"
+    proof = json.loads(Path(first["reviewRecord"]["path"]).read_bytes())
+    assert proof["findings"][0]["id"] == "F1" and proof["workerJob"] == first["key"]
+    assert managed("code-reviewer", "first", "--record-review")["key"] == first["key"]
+    directory = Path(first["details"]).parent.parent / "attempts" / first["key"] / first["token"]
+    (directory / "review-record.json").unlink()
+    assert managed("code-reviewer", "first", "--record-review")["reviewRecord"] == first["reviewRecord"]
+    assert "text diff" in managed("reviewer-small", "unchanged", "--close-low", expected=1)["error"]
+    assert launched == ["code-reviewer"]
+
+    (root / "garden.txt").write_text("labeled garden\n", encoding="utf-8")
+    assert run(root, "verify", "M1").returncode == 0
+    with monkeypatch.context() as patch:
+        patch.setattr(reviews, "project_path", lambda *_: root / "schema.json")
+        stale = managed("reviewer-small", "stale-diff", "--close-low", expected=1)
+        assert "complete text diff" in stale["error"]
+    assert launched == ["code-reviewer"]
+    review = clean_review()
+    blocked = managed("reviewer-small", "unresolved", "--close-low", expected=1)
+    assert blocked["status"] == "completed" and blocked["reviewRecord"]["status"] == "blocked"
+    pointer = folder / "verification/M1.review.latest.json"
+    assert json.loads(pointer.read_bytes())["review"] == first["reviewRecord"]["path"]
+    review.update(report="The existing label finding is fixed in garden.txt:1.", resolvedIds=["F1"])
+    closed = managed("reviewer-small", "close", "--close-low")
+    closed_review = json.loads(Path(closed["reviewRecord"]["path"]).read_bytes())
+    assert closed_review["status"] == "closed-low" and closed_review["closedLowIds"] == ["F1"]
+    diff = Path(closed_review["workerDiff"])
+    assert b"+labeled garden" in diff.read_bytes()
+    diff.write_text("changed", encoding="utf-8")
+    assert run(root, "review-open", "M1").returncode == 1
+
+
+def test_worker_run_waits_for_a_detached_supervisor_to_record_review(project, tmp_path, monkeypatch, capsys):
+    root, folder = project
+    init_unit(root)
+    registered_plan(root)
+    assert run(root, "verify", "M1").returncode == 0
+    bootstrap = tmp_path / "supervisor fixture"
+    bootstrap.mkdir()
+    (bootstrap / "worker.py").write_text(
+        "import os, sys\n"
+        f"sys.path.insert(0, {str(PLUGIN_ROOT)!r})\n"
+        "from chef.workers import backends, cli\n"
+        f"backends.run = lambda *args, **kwargs: {{'ok': True, 'review': {clean_review()!r}, 'fixturePid': os.getpid()}}\n"
+        "raise SystemExit(cli.main())\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(controller, "PLUGIN_ROOT", bootstrap)
+    monkeypatch.setattr(controller.policy.user_config, "read", lambda: {})
+    monkeypatch.setattr(controller.backends, "candidates", lambda *_args, **_kwargs: [
+        {"runtime": "codex", "available": True, "roles": ["code-reviewer"], "tools": ["Read"]},
+    ])
+    code = worker_cli.main(["run", "M1", "--role", "code-reviewer", "--request-id", "detached-review",
+                            "--mode", "codex", "--session", "fictional", "--runtime", "codex",
+                            "--record-review", "--wait-seconds", "20"])
+    result = json.loads(capsys.readouterr().out)
+    assert code == 0 and result["reviewRecord"]["status"] == "recorded", result
+    assert Store().get(result["key"])["result"]["fixturePid"] != os.getpid()
+    pointer = json.loads((folder / "verification/M1.review.latest.json").read_bytes())
+    assert pointer["review"] == result["reviewRecord"]["path"]
 
 
 def test_review_job_records_first_findings_and_manual_diff_closes_same_id(project):
@@ -333,7 +482,8 @@ def test_review_job_rejects_superseded_receipt_and_unstructured_result(project):
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "grok"])
-@pytest.mark.parametrize("action", ["worker dispatch M1 --role code-reviewer", "review M1 --job candidate"])
+@pytest.mark.parametrize("action", ["worker dispatch M1 --role code-reviewer", "worker run M1 --role code-reviewer",
+                                    "review M1 --job candidate"])
 def test_host_guard_checks_new_commands_against_actual_host_identity(project, runtime, action):
     root, folder = project
     mission.write_active(str(folder.parent), mission.Active("orchard", "actual-session", "original", runtime=runtime))

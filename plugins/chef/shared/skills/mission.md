@@ -49,13 +49,13 @@ open·resume 직전에도 같은 입력의 진입 성공이 필요하며, 등록
 
 ## 공통 역할 라우팅
 
-Claude·Codex·Grok 미션은 역할마다 [공통 워커 계약](../../skills/mission/references/cross-runtime-workers.md)의 `chef worker dispatch <단위> --role <역할>`로 시작한다. 저장된 브리프와 파일 범위를 사용하고 현재 런타임·세션·파견 ID와 해당 역할에 필요한 추가 옵션을 넘긴다. 검증 계획은 단위에 등록하고 구조화된 독립 리뷰는 `review --job`으로 기록한다.
+Claude·Codex·Grok 미션은 [공통 워커 계약](../../skills/mission/references/cross-runtime-workers.md)의 `chef worker run <단위> --role <역할>`로 파견과 결과 수집을 연결한다. 저장된 브리프와 파일 범위를 사용하고 현재 런타임·세션·파견 ID와 해당 역할에 필요한 추가 옵션을 넘긴다. 검증 계획은 단위에 등록하고, 독립 리뷰의 결과를 기록할 때는 `--record-review`를 지정한다.
 
 자동 배정은 공통 워커 계약의 `mode`로 제어한다. 사용자가 자동 배정을 끄면 `native`, 특정 서비스만 원하면 `claude`·`codex`·`grok`, 다시 켜면 `auto`를 미션의 이후 모든 역할 요청에 유지한다. 선택을 짧게 보고하고 이어받을 때도 확인한다. 명시적 선택이 없으면 환경변수·프로젝트 설정·전역 `~/.chef/config.json`·기본값 순서를 따르며 요청에 임의로 `auto`를 넣어 설정을 덮지 않는다. 이미 접수한 작업은 기존 모드를 유지한다.
 
 허용 서비스 `workers.runtimes`와 역할별 고정 `workers.roleRouting`도 공통 워커 계약을 따른다. “Grok 제외”, “리뷰는 Claude 고정” 같은 선택은 미션의 이후 요청에 해당 필드를 유지한다. 첫 리뷰와 재리뷰는 각각 `code-reviewer`·`reviewer-small` 규칙을 확인한다. 명시적 선택이 없으면 요청에 허용 목록·규칙의 기본값을 임의로 넣지 않는다. 고정 리뷰가 실행되지 않으면 다른 서비스로 바꾸지 않고 이유를 보고한다. 잘못된 설정·허용 목록·모드·역할 고정의 충돌은 파견 전에 수정하며 독립 리뷰의 새 맥락을 유지한다.
 
-라우터가 현재 런타임을 선택하면 응답의 `native: true`와 `actualRole`을 사용해 실제 등록된 native 역할 도구로 파견하고, 도구가 끝나면 `native-result`로 결과와 증거를 기록한다. 다른 런타임을 고르면 별도 워커가 실행되므로 현재 세션의 같은 역할을 추가로 띄우지 않는다. `wait`는 로컬 상태를 대기하고 외부 모델을 반복 호출하지 않는다. wait 결과에 `native: true`가 오면 작업 전 rate limit 후 현재 native 세션으로 handoff된 것이므로 `actualRole`·`brief`를 실행하고 결과를 기록한다. 각 단위의 기존 ACTIVE 소유권·승인·검증·완료 절차는 그대로 적용하며, 결과 기록만으로 단위를 완료하지 않는다. 실행·오류·취소·`needs-inspection`은 공통 워커 계약의 복구 절차를 따른다. 동시 작업 수를 별도 제한하지 않는다.
+현재 세션에만 등록된 역할이나 도구가 필요하면 `worker dispatch`를 쓴다. `native: true`이면 반환된 `actualRole`과 `brief`로 native 역할 도구를 호출하고 `native-result`로 수집한다. `worker wait`는 지정된 작업의 로컬 상태를 기다린다. 작업 완료·리뷰 기록·미션 단위 완료는 각 결과에서 확인하고 오류·취소·`needs-inspection`은 공통 워커 계약의 복구 절차를 따른다.
 
 ## 0. 어댑터 읽기
 

@@ -11,7 +11,8 @@ from pathlib import Path
 from chef.guards import mission
 from chef.infrastructure import configuration, paths
 from chef.infrastructure.fingerprints import execution_digest as implementation_digest
-from chef.infrastructure.locking import FileLock
+from chef.infrastructure.errors import UsageError
+from chef.infrastructure.locking import FileLock, LockBusy
 from chef.infrastructure.process import child_env
 from chef.infrastructure.python import python_environment
 from chef.infrastructure.storage import atomic_write_json, make_private_directory
@@ -201,6 +202,13 @@ def prepare(value):
     if not isinstance(value, dict):
         raise ValueError("worker request must be an object")
     request = dict(value)
+    for flag in ("managedExecution", "recordReview", "closeLow"):
+        if type(request.get(flag, False)) is not bool:
+            raise ValueError(f"{flag} must be a boolean")
+    if request.get("recordReview") and not (request.get("managedExecution") and request.get("reviewKind")):
+        raise ValueError("automatic review recording requires a supervised bound review")
+    if request.get("closeLow") and not request.get("recordReview"):
+        raise ValueError("closeLow requires automatic review recording")
     for key in ("requestId", "unit", "role", "ownerSession", "mission"):
         text(request.get(key), key)
     reuse = request.pop("useStoredBrief", False)
@@ -273,6 +281,9 @@ def prepare(value):
         raise ValueError("write workers require an explicit files scope")
     for key in ("requiredTools", "hostTools", "hostRoles"):
         request[key] = string_list(request.get(key, []), key)
+    if (request.get("managedExecution") and request["verification"]
+            and not {"Bash", "PowerShell"}.intersection(request["requiredTools"])):
+        request["requiredTools"].append("Bash")
     for name in request["files"]:
         target = Path(project, name)
         if paths.same_path(target, owner["state"]) or paths.inside_real_root(owner["state"], target):
@@ -300,15 +311,16 @@ def effective_roles(adapter, request):
 
 def available_candidates(adapter, request, owner):
     allowed = request.get("allowedRuntimes", list(RUNTIMES))
+    native_runtime = None if request.get("managedExecution") else owner["runtime"]
     candidates = backends.candidates({**adapter, "roles": effective_roles(adapter, request)},
                                     request["project"], request["role"],
-                                    native=owner["runtime"], host_tools=request["hostTools"],
+                                    native=native_runtime, host_tools=request["hostTools"],
                                     allowed_runtimes=allowed)
     candidates = [candidate for candidate in candidates if candidate["runtime"] in allowed]
     for candidate in candidates:
         candidate.setdefault("roles", [request["role"]])
         candidate.setdefault("tools", candidate.get("capabilities", []))
-        if candidate["runtime"] == owner["runtime"]:
+        if candidate["runtime"] == native_runtime:
             if request["actualRole"] not in request["hostRoles"]:
                 candidate.update(available=False, error="native role is not observed in the host role registry")
             elif not candidate.get("available") and request["actualRole"] not in {"chef:" + name for name in ROLE_KEYS}:
@@ -356,11 +368,12 @@ def check_conflicts(store, request):
             raise ValueError("worker file scope conflicts with an existing job; inspect or finish it first")
 
 
-def existing_submission(store, request, submission):
+def existing_submission(store, request, submission, *, source_intent=None):
     if not submission.exists():
         return None
     saved = read_json(submission)
-    if saved.get("intent") != request["submissionIntent"]:
+    identity, intent = ("sourceIntent", source_intent) if source_intent else ("intent", request["submissionIntent"])
+    if saved.get(identity) != intent:
         raise ValueError("requestId was already submitted with different intent; use a new requestId")
     record = require_record(store, saved["key"])
     if any(record["request"].get(name) != request[name] for name in ("ownerRuntime", "ownerSession")):
@@ -370,16 +383,31 @@ def existing_submission(store, request, submission):
             "brief": record["request"]["prompt"] if native else None}
 
 
-def dispatch(value, *, store=None, launch=None):
-    store = store or Store()
-    request, adapter, owner = prepare(value)
+def submission_paths(store, request):
     workspace = os.stat(request["project"])
     identity = digest({"workspace": [workspace.st_dev, workspace.st_ino],
                        "mission": request["mission"], "requestId": request["requestId"]})
-    submission = Path(store.root) / "submissions" / (identity + ".json")
-    gate = str(Path(store.root) / "admission" / (digest([workspace.st_dev, workspace.st_ino]) + ".lock"))
+    return (Path(store.root) / "submissions" / (identity + ".json"),
+            str(Path(store.root) / "admission" / (digest([workspace.st_dev, workspace.st_ino]) + ".lock")))
+
+
+def dispatch(value, *, store=None, launch=None):
+    store = store or Store()
+    source_intent = None
+    if isinstance(value, dict) and value.get("managedExecution") is True:
+        text(value.get("requestId"), "requestId")
+        text(value.get("unit"), "unit")
+        ownership(value)
+        source_intent = digest(value)
+        submission, gate = submission_paths(store, value)
+        with FileLock(gate, "worker admission", timeout=10):
+            existing = existing_submission(store, value, submission, source_intent=source_intent)
+            if existing is not None:
+                return existing
+    request, adapter, owner = prepare(value)
+    submission, gate = submission_paths(store, request)
     with FileLock(gate, "worker admission", timeout=10):
-        existing = existing_submission(store, request, submission)
+        existing = existing_submission(store, request, submission, source_intent=source_intent)
         if existing is not None:
             return existing
     # Authentication may involve slow local credential helpers. Keep these
@@ -395,11 +423,14 @@ def dispatch(value, *, store=None, launch=None):
         runtime = prior["route"]["runtime"]
         candidate = next((item for item in candidates if item["runtime"] == runtime and item.get("available")), None)
         session = prior.get("result", {}).get("session_id")
-        if candidate and prior["route"].get("policy", "") == candidate.get("policy", "") and session:
+        prior_is_native = (attempt_directory(store, prior) / "native.json").is_file()
+        now_native = not request.get("managedExecution") and runtime == owner["runtime"]
+        if (candidate and prior_is_native == now_native
+                and prior["route"].get("policy", "") == candidate.get("policy", "") and session):
             request["resumeSession"] = text(session, "previous session")
             previous = {"runtime": runtime}
     with FileLock(gate, "worker admission", timeout=10):
-        existing = existing_submission(store, request, submission)
+        existing = existing_submission(store, request, submission, source_intent=source_intent)
         if existing is not None:
             return existing
         current_adapter, _ = ownership(request)
@@ -412,12 +443,15 @@ def dispatch(value, *, store=None, launch=None):
         record = store.reserve(request, candidates, previous=previous,
                                independent=bool(request.get("independent", False)))
         directory = attempt_directory(store, record)
-        native = record["route"]["runtime"] == owner["runtime"]
+        native = not request.get("managedExecution") and record["route"]["runtime"] == owner["runtime"]
         if record.get("created"):
             atomic_write_json(directory / "request.json", request)
             if native:
                 atomic_write_json(directory / "native.json", {"mode": "native", "owner": owner})
-            atomic_write_json(submission, {"key": record["key"], "intent": request["submissionIntent"]}, create_parents=True)
+            saved = {"key": record["key"], "intent": request["submissionIntent"]}
+            if source_intent:
+                saved["sourceIntent"] = source_intent
+            atomic_write_json(submission, saved, create_parents=True)
             if not native:
                 try:
                     (launch or launch_supervisor)(store, record, directory)
@@ -447,6 +481,30 @@ def require_record(store, key, token=None):
     if not record or token is not None and record.get("token") != token:
         raise ValueError("worker job or attempt token does not match")
     return record
+
+
+def review_record_state(directory, record):
+    if not record["request"].get("recordReview") or record["status"] != "completed":
+        return record
+    marker = directory / "review-record.json"
+    if marker.is_file():
+        return {**record, "reviewRecord": read_json(marker)}
+    launch = directory / "launch.json"
+    if launch.is_file() and process_owner_alive(read_json(launch)):
+        review = {"status": "pending"}
+    else:
+        review = {"status": "interrupted", "error": "supervisor stopped before confirming the review record"}
+    return {**record, "reviewRecord": review}
+
+
+def finalize_review(store, record):
+    try:
+        path = review_results.record_owned(record["request"], record["key"], store)
+        recorded = {"status": "recorded", "path": path}
+    except (VerificationError, StateError, UsageError, LockBusy, ValueError, OSError) as error:
+        recorded = {"status": "blocked", "error": str(error)}
+    atomic_write_json(attempt_directory(store, record) / "review-record.json", recorded, durable=True)
+    return {**record, "reviewRecord": recorded}
 
 
 def supervise(key, token, *, store=None):
@@ -528,7 +586,7 @@ def supervise(key, token, *, store=None):
                     return store.finish(key, token, {"ok": False, "errorCode": "rate_limited",
                                                     "error": str(unavailable), "lastFailure": error.evidence})
                 owner.pop("resumeSession", None)
-                if record["route"]["runtime"] == owner["runtime"]:
+                if not request.get("managedExecution") and record["route"]["runtime"] == owner["runtime"]:
                     atomic_write_json(directory / "native.json", {"mode": "native", "owner": owner,
                                                                   "handoff": "rate-limit fallback"})
                     return {**record, "native": True, "actualRole": request["actualRole"], "brief": request["prompt"]}
@@ -545,10 +603,13 @@ def supervise(key, token, *, store=None):
         if result.get("ok") is not True and (result["files"] != request["beforeFiles"]
                                               or result.get("errorCode") == "path_snapshot_failed"):
             state = "needs-inspection"
-        return store.finish(key, token, result, status=state)
+        finished = store.finish(key, token, result, status=state)
     except BaseException as error:
         store.finish(key, token, {"ok": False, "error": str(error)}, status="needs-inspection")
         raise
+    if finished["status"] == "completed" and request.get("recordReview"):
+        return finalize_review(store, finished)
+    return finished
 
 
 def status(key, *, store=None):
@@ -564,7 +625,7 @@ def status(key, *, store=None):
             return store.finish(key, record["token"], {"ok": False, "error": "supervisor ended before claiming work"}, status="needs-inspection")
     elif record["status"] == "reserved" and not process_owner_alive(record):
         return store.finish(key, record["token"], {"ok": False, "error": "dispatch ended before recording supervisor ownership"}, status="needs-inspection")
-    return store.get(key)
+    return review_record_state(directory, store.get(key))
 
 
 def cancel(key, token, *, store=None):
@@ -637,7 +698,9 @@ def wait(key, *, seconds=30, store=None):
     deadline = time.monotonic() + seconds
     while True:
         record = status(key, store=store)
-        if record.get("native") or record["status"] not in ("reserved", "running") or time.monotonic() >= deadline:
+        pending_review = record.get("reviewRecord", {}).get("status") == "pending"
+        if (record.get("native") or (record["status"] not in ("reserved", "running") and not pending_review)
+                or time.monotonic() >= deadline):
             return record
         time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 

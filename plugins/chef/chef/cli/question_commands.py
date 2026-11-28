@@ -139,17 +139,44 @@ def schema_messages(checks):
 
 def cmd_question_answer(ctx, args):
     require_folder(ctx)
-    record = question_records.answer_document(ctx.folder, args.name, read_input(args.input))
+    direct = (args.expect_revision, args.reply_id, args.decision, args.select, args.approval)
+    if args.input is not None:
+        if any(value is not None for value in direct):
+            raise StateError("--input cannot be combined with direct reply options")
+        payload = read_input(args.input)
+    else:
+        if args.expect_revision is None:
+            raise StateError("--text requires --expect-revision")
+        current = question_records.read_document(ctx.folder, args.name)
+        payload = reply_payload(args.expect_revision)
+        if args.reply_id is not None:
+            payload["id"] = args.reply_id
+            prior = next((entry for entry in current["answers"] if entry["id"] == args.reply_id), None)
+            if prior:
+                payload["at"] = prior["at"]
+        payload["text"] = args.text
+        payload["updates"] = [
+            {"id": item, "status": status, "answer": answer} for item, status, answer in args.decision or []
+        ] + [
+            {"id": item, "status": "answered", "answer": answer, "selected": option}
+            for item, option, answer in args.select or []
+        ]
+        if args.approval is not None:
+            status, reason = args.approval
+            payload["approval"] = {"status": status, "reason": reason}
+    record = question_records.answer_document(ctx.folder, args.name, payload)
     return [f"답변 저장: {record['id']}.md (revision {record['revision']})"]
+
+
+def reply_payload(revision):
+    return {"schema": 1, "id": uuid.uuid4().hex, "revision": revision,
+            "at": datetime.now(timezone.utc).isoformat(), "text": "", "updates": []}
 
 
 def cmd_question_reply_template(ctx, args):
     require_folder(ctx)
     record = question_records.read_document(ctx.folder, args.name)
-    return [json.dumps({
-        "schema": 1, "id": uuid.uuid4().hex, "revision": record["revision"],
-        "at": datetime.now(timezone.utc).isoformat(), "text": "", "updates": [],
-    }, ensure_ascii=False, indent=2)]
+    return [json.dumps(reply_payload(record["revision"]), ensure_ascii=False, indent=2)]
 
 
 def cmd_question_restore(ctx, args):

@@ -53,6 +53,26 @@ def template(project, row, grades, grade):
             "commands": [], "environment": {}, "results": []}
 
 
+def presets(settings):
+    value = settings.get("planPresets", {})
+    if not isinstance(value, dict) or any(
+        not isinstance(name, str) or not name.strip() or not isinstance(plan, dict)
+        for name, plan in value.items()
+    ):
+        raise VerificationError("verify.planPresets must name JSON plans", "plan_invalid")
+    return value
+
+
+def from_preset(project, row, settings, name):
+    known = presets(settings)
+    if name not in known:
+        raise VerificationError("unknown verification preset: use chef plan presets", "plan_invalid")
+    plan = dict(known[name])
+    if "inputs" not in plan:
+        plan["inputs"] = unit_scope.files(project, row["files"])
+    return plan
+
+
 def save(project, folder, row, plan, grades, expected):
     if {"unitBrief", "unitContract"} & plan.keys():
         raise VerificationError("unitBrief·unitContract 는 Chef가 저장된 단위에서 가져옴", "plan_invalid")

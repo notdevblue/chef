@@ -583,10 +583,19 @@ def cmd_plan_show(ctx, args):
     return [json.dumps(managed_plans.show(ctx.folder, verification_row(ctx, args.id)), ensure_ascii=False)]
 
 
+def cmd_plan_presets(ctx, _args):
+    presets = managed_plans.presets(ctx.adapter.get("verify") or {})
+    return [json.dumps({"presets": [{"name": name, "grade": plan.get("grade")}
+                                    for name, plan in sorted(presets.items())]}, ensure_ascii=False)]
+
+
 def cmd_plan_save(ctx, args):
     row = verification_row(ctx, args.id)
     try:
-        plan = stdin_object() if args.input == "-" else verification.read_json(args.input)
+        if args.preset is not None:
+            plan = managed_plans.from_preset(ctx.project, row, ctx.adapter.get("verify") or {}, args.preset)
+        else:
+            plan = stdin_object() if args.input == "-" else verification.read_json(args.input)
         with execution.unit_execution_lock(ctx.folder, args.id):
             result = managed_plans.save(ctx.project, ctx.folder, row, plan, verification_grades(ctx), args.expect_sha256)
     except ValueError as error:
@@ -1066,6 +1075,7 @@ def main(argv=None, runtime="claude", *, unified=False):
         standalone = args.handler in (
             cmd_active,
             cmd_schema,
+            cmd_plan_presets,
             cmd_reference_snapshot,
             cmd_reference_show,
             cmd_reference_check,
@@ -1097,6 +1107,7 @@ def main(argv=None, runtime="claude", *, unified=False):
             cmd_document_check,
             cmd_plan_template,
             cmd_plan_show,
+            cmd_plan_presets,
             cmd_active,
             cmd_question_preview,
             cmd_question_reply_template,

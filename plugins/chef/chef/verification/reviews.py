@@ -49,6 +49,9 @@ def review_history(folder, unit):
         start = review.get("reviewStart")
         if start and (not Path(start).is_file() or file_hash(start) != review.get("reviewStartHash")):
             raise VerificationError("이전 리뷰 시작 기록이 없거나 바뀜")
+        diff = review.get("workerDiff")
+        if diff and (not Path(diff).is_file() or file_hash(diff) != review.get("workerDiffHash")):
+            raise VerificationError("이전 워커의 수정 diff가 없거나 바뀜")
         history.append((name, review))
         previous = review.get("previousReview", "")
         if not previous:
@@ -200,6 +203,7 @@ def record_review(
     *,
     require_structured=False,
     worker_job="",
+    worker_diff=None,
 ):
     if findings_count < -1 or fixed_count < -1:
         raise VerificationError("지적·해소 수는 0 이상 또는 미기록(-1)이어야 함")
@@ -244,6 +248,8 @@ def record_review(
     }
     if worker_job:
         review["workerJob"] = worker_job
+    if worker_diff:
+        review.update(workerDiff=worker_diff["path"], workerDiffHash=worker_diff["sha256"])
     if history:
         review["previousReview"] = history[0][0]
         review["previousReviewHash"] = file_hash(history[0][0])
@@ -466,9 +472,17 @@ def read_copy(copies, expected):
     if not re.fullmatch(r"[0-9a-f]{64}", str(expected)):
         raise VerificationError("리뷰 시점 사본 해시가 올바르지 않음")
     path = Path(copies["dir"]) / expected
-    if not path.is_file() or file_hash(path) != expected:
-        raise VerificationError("리뷰 시점 사본이 없거나 바뀜")
-    return path.read_bytes()
+    try:
+        return read_snapshot_bytes(path, expected)
+    except (OSError, VerificationError) as error:
+        raise VerificationError("리뷰 시점 사본이 없거나 바뀜") from error
+
+
+def read_snapshot_bytes(path, expected):
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise VerificationError("검증 입력 해시가 바뀜")
+    return data
 
 
 def scope_side(read):
@@ -481,7 +495,7 @@ def scope_side(read):
     return text, ""
 
 
-def write_scope_diff(project, folder, unit, prior, current, copies, changed):
+def scope_diff_lines(project, prior, current, copies, changed):
     lines = []
     for key in changed:
         old_name, new_name = f"a/{key}", f"b/{key}"
@@ -495,7 +509,7 @@ def write_scope_diff(project, folder, unit, prior, current, copies, changed):
         if current.get(key, "missing") == "missing":
             new_name = "/dev/null"
         else:
-            new, new_reason = scope_side(lambda: project_path(project, key).read_bytes())
+            new, new_reason = scope_side(lambda: read_snapshot_bytes(project_path(project, key), current[key]))
         if old is None or new is None:
             lines.append(f"# 비교 불가({old_reason or new_reason}): {key}\n")
             continue
@@ -509,6 +523,11 @@ def write_scope_diff(project, folder, unit, prior, current, copies, changed):
                 lines.append(line)
             else:
                 lines.append(line + "\n\\ No newline at end of file\n")
+    return lines
+
+
+def write_scope_diff(project, folder, unit, prior, current, copies, changed):
+    lines = scope_diff_lines(project, prior, current, copies, changed)
     path = Path(folder) / "verification" / f"{unit}-reviewdiff-{uuid.uuid4().hex}.diff"
     try:
         path.write_bytes("".join(lines).encode("utf-8"))

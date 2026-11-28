@@ -426,6 +426,29 @@ def test_supervisor_executes_reserved_request_and_persists_result(project, monke
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("runtime", controller.RUNTIMES)
+def test_supervised_same_service_needs_no_host_role_and_cannot_use_host_only_tools(project, monkeypatch, runtime):
+    calls = choose(monkeypatch, runtime)
+    request = {**project.request(runtime), "mode": "native", "managedExecution": True, "hostRoles": []}
+    with pytest.raises(ValueError, match="no available worker"):
+        controller.dispatch({**request, "requestId": "host only", "requiredTools": ["host-only-tool"]},
+                            store=project.store, launch=lambda *args: pytest.fail("host-only work was launched"))
+    launches = []
+    pending = controller.dispatch(request, store=project.store, launch=lambda *args: launches.append(args))
+    assert not pending["native"] and pending["route"]["runtime"] == runtime
+    assert len(launches) == 1 and calls[0]["native"] is None and calls[0]["allowed_runtimes"] == [runtime]
+
+
+def test_supervised_verifier_requests_a_shell_for_its_bound_plan(project):
+    plan = project.state / "sample-mission" / "verification.json"
+    plan.write_text('{"commands":[{"argv":["check"]}]}', encoding="utf-8")
+    request = {**project.request(role="verifier"), "managedExecution": True, "verificationPlan": str(plan)}
+    prepared, _, _ = controller.prepare(request)
+    assert prepared["requiredTools"] == ["Bash"]
+    prepared, _, _ = controller.prepare({**request, "requiredTools": ["PowerShell"]})
+    assert prepared["requiredTools"] == ["PowerShell"]
+
+
 def test_changed_output_before_launch_never_starts_backend(project, monkeypatch):
     choose(monkeypatch, "grok")
     request = project.request()

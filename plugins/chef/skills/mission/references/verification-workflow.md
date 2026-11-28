@@ -2,7 +2,7 @@
 
 실행에는 [현재 번들의 Chef CLI](cli.md)를 사용한다.
 
-코디네이터는 `plan template <단위>`에 승인된 타깃의 실행 명령·환경·결과 조건을 채워 `plan save <단위> --input <JSON|->`로 등록하고 `preflight <단위>`로 검사한다. 이후 통합 CLI는 같은 단위의 등록 계획을 사용한다. 계획 파일을 직접 넘길 때는 `--plan <계획.json>`을 지정한다.
+어댑터가 계획을 정의한 경우 `plan save <단위> --preset <이름>`으로 등록하고 `preflight <단위>`로 검사한다. 새 계획은 `plan template <단위>`에 승인된 실행 명령·환경·결과 조건을 채워 `plan save <단위> --input <JSON|->`로 등록한다. 이후 통합 CLI는 같은 단위의 등록 계획을 사용한다. 계획 파일을 직접 넘길 때는 `--plan <계획.json>`을 지정한다.
 `executionPolicy`가 coordinator 경로를 명시적으로 허용한 계획은 코디네이터가 `verify --coordinator`로 실행할 수 있고,
 그 밖의 계획은 `roles.verify` 하나에 상태 CLI의 `verify` 실행을 맡긴다.
 기본 역할·모델·effort와 어댑터 `rolePolicy.model`의 적용은 현재 런타임 진입점의 실행 계약을 따른다.
@@ -177,7 +177,7 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
    실패는 종료 코드 1과 로그·기록 경로를 반환한다. 상태를 알아내려고 같은 검증을 재요청하지 않는다.
    어댑터가 정한 lint·규약 검사 명령은 계획 `commands[]`에 넣어 여기서 돌린다. 통과 전에는 리뷰를 띄우지 않고 그 출력을 리뷰어에게 준다.
    수정 뒤에는 같은 전체 계획으로 `verify`한다. 단계별 `inputs`를 선언한 `reusable` 단계는 바뀐 입력에 닿을 때만 실제로 돈다. 그 receipt로 통과 리뷰(clean·closed-low)를 기록한 뒤 `complete`한다. 좁은 계획으로 재검증하면 `review-scope`의 비교 기준이 끊긴다.
-2. 독립 리뷰는 단위 기반 파견으로 최신 통과 receipt와 직전 리뷰에 묶는다. 코디네이터가 `review M1 --job <키> --session <현재 세션 ID>`로 명시적으로 기록한다. 기록 전 입력·receipt·계획·직전 리뷰가 바뀌면 새 상태로 파견한다. 수동 파견 경로는 직전에 `review-start M1`으로 입력 snapshot을 남긴다.
+2. 독립 리뷰는 최신 통과 receipt와 직전 리뷰에 묶는다. `worker run --record-review`로 파견하면 Chef가 기록하고, 직접 수집한 작업은 `review M1 --job <키> --session <현재 세션 ID>`로 기록한다. 최신 입력·receipt·계획·직전 리뷰가 바뀌면 새 상태로 파견한다. 수동 파견 경로는 직전에 `review-start M1`으로 입력 snapshot을 남긴다.
    `review-start`는 그 시점 snapshot과 텍스트 파일 사본(`verification/<단위>.copies/`, 파일명은 내용 sha256)을 남기며 같은 단위의 다음 `review` 한 번에만 연결된다. 이 계획의 `inputs`가 `review`에 쓰는 receipt의 plan `inputs`와 다르면 `review`가 거부한다.
    리뷰 중 파일이 바뀌면 `verify`를 다시 돌려 새 receipt로 `review`를 기록한다(`review`는 현재 입력이 receipt와 같아야 한다). 이 리뷰에는 `inputChangedDuringReview`가 남고 이 리뷰로는 `complete`가 거부된다.
    바뀐 파일은 다음 라운드 `review-scope` 범위로 재리뷰한 뒤 완료한다.
@@ -205,6 +205,8 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 원본 이력을 지우지 않고 `context`가 최신 단위·결정과 원본 위치만 반환한다.
 
 ## 리뷰 지적의 연결
+
+`worker run --role reviewer-small --close-low`는 같은 검증 계획의 최신 통과 결과와 직전 리뷰 사이에 해시로 고정한 전체 수정 diff를 사용한다. 직전 지적이 모두 비회귀 Low일 때 실행하며, 응답이 모든 기존 ID를 해소했을 때 `closed-low`가 된다. 지적을 반환한 경우 열린 지적 기록 규칙을 적용한다. 비교할 수 없는 변경이나 다시 확인할 근거가 생기면 별도의 독립 리뷰를 실행한다.
 
 `chef review --status findings --findings-input <JSON|->`은 첫 리뷰부터 열린 지적·제안·해소 확인을 기록한다. 통합 CLI의 각 열린 지적에는 심각도와 `evidence` 경로·위치도 필수다. 표준 입력은 Chef가 근거로 보관한다. `review-open`으로 직전 ID를 읽고 `closed-low`에는 `--resolved-id`를 반복해서 줄 수도 있다.
 

@@ -1,15 +1,17 @@
 """Bind a structured review result to the verified inputs and review history."""
 
 import json
+import hashlib
 import re
 from pathlib import Path
 
 from chef.infrastructure.paths import inside_real_root, same_path
+from chef.infrastructure.locking import FileLock
 from chef.mission import managed_plans, unit_contracts
 from chef.mission.contracts import EDITABLE_FIELDS, UNIT_HEADER, UNITS_FILE
 from chef.mission.storage import read_table, require_unit, write_text
-from chef.verification import receipts, references, reviews
-from chef.verification.contracts import VerificationError, file_hash, read_json
+from chef.verification import execution, receipts, references, reviews
+from chef.verification.contracts import VerificationError, digest, file_hash, read_json
 
 REVIEW_ROLES = {"code-reviewer", "reviewer-small"}
 KINDS = ("poc", "unit", "integration")
@@ -52,7 +54,7 @@ def bind(project, folder, row, settings, kind, path=None):
             raise VerificationError("verify the currently registered plan before dispatching a review")
     return {"kind": kind, "receipt": str(path), "receiptHash": before,
             "previousReview": previous, "previousReviewHash": file_hash(previous) if previous else "",
-            "planHash": selected["sha256"] if selected else ""}, plan["inputs"]
+            "planHash": selected["sha256"] if selected else ""}, value, history
 
 
 def prepare(request, owner, settings, prompt):
@@ -68,10 +70,42 @@ def prepare(request, owner, settings, prompt):
         raise VerificationError("a bound review must be independent and cannot have write files")
     folder = Path(owner["state"]) / owner["mission"]
     row = require_unit(read_table(folder / UNITS_FILE, UNIT_HEADER), request["unit"])
-    binding, inputs = bind(request["project"], folder, row, settings, kind, path)
-    request.update(independent=True, reviewBinding=binding, inputPaths=[*request.get("inputPaths", []), *inputs])
+    binding, receipt, history = bind(request["project"], folder, row, settings, kind, path)
+    instructions = ""
+    if request.get("closeLow"):
+        if request["role"] != "reviewer-small":
+            raise VerificationError("--close-low requires reviewer-small")
+        binding["closeLowDiff"] = close_low_diff(request["project"], folder, row["id"], kind, receipt, history)
+        instructions = (
+            f"\nRead the exact verified change diff: {binding['closeLowDiff']['path']}. "
+            "Use resolvedIds only for fixes confirmed by this diff and the verification receipt. "
+            "Name the fix location for each resolution in the report."
+        )
+    request.update(independent=True, reviewBinding=binding,
+                   inputPaths=[*request.get("inputPaths", []), *receipt["plan"]["inputs"]])
     return (f"{prompt}\n\n{OUTPUT}\nVerified receipt: {binding['receipt']}\n"
-            f"Previous review: {binding['previousReview'] or 'none'}")
+            f"Previous review: {binding['previousReview'] or 'none'}{instructions}")
+
+
+def close_low_diff(project, folder, unit, kind, receipt, history):
+    prior = history[0][1] if history else {}
+    opened = {finding["id"]: finding for finding in prior.get("findings", [])}
+    reviews.require_closed_low(history, opened, [], list(opened))
+    if prior["kind"] != kind or prior["planHash"] != digest(receipt["plan"]):
+        raise VerificationError("Low closure requires the same review kind and verification plan")
+    before, after = prior["snapshot"], receipt["snapshot"]
+    changed = reviews.changed_files(before, after)
+    lines = reviews.scope_diff_lines(project, before, after, prior.get("copies", {}), changed)
+    if not lines or any(line.startswith("# 비교 불가(") for line in lines):
+        raise VerificationError("Low closure requires a complete text diff since the prior review")
+    text = "".join(lines)
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    path = references.resolve_path(folder, f"verification/{unit}-low-{sha}.diff")
+    if not path.exists():
+        write_text(path, text)
+    if file_hash(path) != sha:
+        raise VerificationError("Low closure diff changed")
+    return {"path": str(path), "sha256": sha}
 
 
 def payload(result):
@@ -111,15 +145,17 @@ def record(project, folder, row, settings, runtime, session, key, store):
         raise VerificationError("a successful bound read-only review job is required")
     if controller.input_snapshot(project, request["inputPaths"]) != request["before"]:
         raise VerificationError("review job inputs changed since dispatch")
-    current, _ = bind(project, folder, row, settings, binding["kind"], binding["receipt"])
-    history = reviews.review_history(folder, row["id"])
+    current, _, history = bind(project, folder, row, settings, binding["kind"], binding["receipt"])
     if history and history[0][1].get("workerJob") == key and history[0][1].get("receiptHash") == current["receiptHash"]:
         return history[0][0]
-    if current != binding:
+    diff = binding.get("closeLowDiff")
+    if current != {name: value for name, value in binding.items() if name != "closeLowDiff"}:
         raise VerificationError("review job receipt, registered plan, or prior review changed since dispatch")
+    if diff and (not Path(diff["path"]).is_file() or file_hash(diff["path"]) != diff["sha256"]):
+        raise VerificationError("Low closure diff changed since dispatch")
     value = payload(result)
     report = value.pop("report")
-    status = "findings" if value["findings"] else "clean"
+    status = "findings" if value["findings"] else ("closed-low" if diff else "clean")
     reviews.structured_findings(value, history, status, -1, -1, require_structured=True)
     proof = references.resolve_path(folder, f"verification/{row['id']}-worker-{controller.digest(report)}.md")
     if not proof.exists():
@@ -128,4 +164,19 @@ def record(project, folder, row, settings, runtime, session, key, store):
         raise VerificationError("stored worker report changed")
     return reviews.record_review(project, folder, row["id"], binding["receipt"], proof,
                                  f"{job['route']['runtime']}/{request['actualRole']}", binding["kind"], status,
-                                 findings_input=value, settings=settings, require_structured=True, worker_job=key)
+                                 findings_input=value, settings=settings, require_structured=True, worker_job=key,
+                                 worker_diff=diff)
+
+
+def record_owned(request, key, store):
+    from chef.workers import controller
+
+    adapter, owner = controller.ownership(request)
+    state = Path(owner["state"])
+    folder = state / owner["mission"]
+    unit = request["unit"]
+    lock = state / ".locks" / f"{owner['mission']}.lock"
+    with FileLock(str(lock), "mission review", timeout=10), execution.unit_execution_lock(folder, unit):
+        row = require_unit(read_table(folder / UNITS_FILE, UNIT_HEADER), unit)
+        return record(request["project"], folder, row, adapter.get("verify") or {},
+                      owner["runtime"], owner["session"], key, store)

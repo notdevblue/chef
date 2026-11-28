@@ -96,7 +96,7 @@ def owned_worker_command_denial(payload, command, tool):
             worker = worker[2:]
         elif worker and worker[0].startswith("--home="):
             worker = worker[1:]
-        if not ((worker[:1] == ["dispatch"] and "--session" in flags)
+        if not ((worker[:1] in (["dispatch"], ["run"]) and "--session" in flags)
                 or (name == "chef_cli.py" and options[:1] == ["review"] and "--job" in flags)):
             continue
         for flag, expected in (("--session", payload.get("session_id")),

@@ -15,19 +15,21 @@ python "<plugin-root>/chef_cli.py" context --runtime <claude|codex|grok|hermes> 
 
 ## 워커·리뷰
 
-`worker dispatch <단위> --role <역할> --session <현재 세션 ID> --request-id <작업 ID>`는 현재 ACTIVE와 저장된 브리프를 사용한다. 동일한 파견을 재시도할 때는 같은 작업 ID를 쓴다. 범위를 좁히는 `--file`, 추가 읽기 입력 `--input-path`, 관찰한 호스트 역할·도구와 추가 지시는 필요할 때 지정한다. 예외 범위나 파견 설정은 [파견 계약](cross-runtime-workers.md)의 `--request - --stored-brief`에서 명시할 수 있다.
+`worker run <단위> --role <역할> --session <현재 세션 ID> --request-id <작업 ID>`로 실행하면 Chef가 현재 ACTIVE와 저장된 브리프를 사용해 워커를 실행하고 결과를 수집한다. 선택된 서비스가 현재 세션과 같아도 별도 CLI 프로세스로 실행한다. `--wait-seconds <초>`로 결과를 기다리거나 작업 키로 `worker wait`을 호출한다. 동일한 파견을 재시도할 때는 같은 작업 ID를 쓴다.
 
-단위 기반 리뷰 파견은 그 단위의 최신 통과 검증에 묶인다. 외부 리뷰 결과는 워커 저장소에 들어오며 native 도구의 반환 JSON은 `worker native-result --key … --token … --result -`에 그대로 전달한다. 코디네이터가 `review <단위> --job <키> --session <현재 세션 ID>`로 기록하면 보고서와 지적 JSON을 Chef가 보관한다. `review-open <단위>`는 직전 열린 지적을 보여 준다. 코디네이터가 Low 해소를 직접 닫는 경우 diff와 재검증 근거를 확인하고 `review --status closed-low --resolved-id <id>`를 사용한다. 수동 리뷰 입력과 지적 형식은 [검증 계약](verification-workflow.md)을 따른다.
+단위 기반 리뷰 파견은 그 단위의 최신 통과 검증에 묶인다. `worker run --record-review`는 독립 리뷰의 보고서와 지적 JSON까지 Chef가 기록한다. 좁은 확인의 `--role reviewer-small --close-low`는 검증된 수정 diff와 직전 Low 지적을 워커에 전달하고, 모든 지적이 정확한 기존 ID로 해소됐을 때 닫는다. `review-open <단위>`로 열린 지적을 확인한다. 수동 리뷰 입력과 지적 형식은 [검증 계약](verification-workflow.md)을 따른다.
+
+현재 세션에만 등록된 역할이나 도구가 필요하면 `worker dispatch`와 `native-result`를 사용한다. `--file`, `--input-path`, 추가 지시는 필요한 경우에 지정하고 예외 범위는 [파견 계약](cross-runtime-workers.md)의 `--request - --stored-brief`에서 명시한다.
 
 ## 검증 계획
 
-`plan template <단위>`는 승인된 파일과 선택 가능한 검증 등급으로 초안을 만든다. 검증 명령·환경·필요한 결과 조건을 채워 `plan save <단위> --input -`로 등록한다. `preflight`, `verify`, `review-start`, `review-scope`, `review-run`에서 `--plan`을 생략하면 그 단위의 등록 계획을 사용한다. 교체할 때는 `plan show <단위>`가 반환한 `sha256`을 `--expect-sha256`에 지정한다. 기존 계획을 직접 쓸 때는 `--plan <경로>`를 붙인다. 파일 증거는 `ledger record ... --evidence-input -`로 입력한다.
+`plan presets`로 어댑터에 정의된 검증 계획을 찾고 `plan save <단위> --preset <이름>`으로 등록한다. 새 계획은 `plan template <단위>`를 생성해 실제 명령·환경·결과 조건을 채우고 `plan save <단위> --input -`로 등록한다. `preflight`, `verify`, `review-start`, `review-scope`, `review-run`에서 `--plan`을 생략하면 그 단위의 등록 계획을 사용한다. 교체할 때는 `plan show <단위>`가 반환한 `sha256`을 `--expect-sha256`에 지정한다. 기존 계획을 직접 쓸 때는 `--plan <경로>`를 붙인다. 파일 증거는 `ledger record ... --evidence-input -`로 입력한다.
 
 ## 문서
 
 - `mission init`이 기본 보고서 `report.md`의 초안을 만든다. 추가 보고나 상세는 `document create --kind report|detail --name <이름> --title <제목>`으로 만든다.
 - `document check <경로...>`는 검사·공유·승인 상태를 반환한다. `document share <경로...> --json`은 검사와 등록을 한 뒤 결과와 바이트 해시를 반환한다. 바뀐 파일은 다시 검토하고 공유한다.
-- 질문은 `question template --kind question|design`에서 시작해 `question preflight --preview`로 검사한 뒤 발행한다. 답변은 `question reply-template <문서.md>`로 기록 ID·현재 개정·시각을 가져와 원문과 명시된 결정만 채우고 `question answer <문서.md> --input -`로 저장한다. `preview`, `preflight`, `publish`도 `--input -`를 받는다. 정본·생성본·이력은 `question check`, 원문과 초안 대조는 `document compare`로 확인한다. 복구는 [질문 정본 계약](question-records.md)을 따른다.
+- 질문은 `question template --kind question|design`에서 시작해 `question preflight --preview`로 검사한 뒤 발행한다. 확인받은 개정에 `question answer <문서.md> --expect-revision <개정> --text <사용자 원문>`을 기록한다. 명시된 선택은 `--select <문항> <선택지> <답>`, 문항 결정은 `--decision <문항> <상태> <답>`, 별도 승인은 `--approval <상태> <근거>`로 전달한다. 안정적인 재시도 ID가 필요하면 `--reply-id`를 지정한다. JSON 입력은 `question reply-template`과 `question answer --input -`를 쓴다. 정본·생성본·이력은 `question check`, 원문과 초안 대조는 `document compare`로 확인한다. [질문 정본 계약](question-records.md)
 
 ### DB·Proto 정의
 

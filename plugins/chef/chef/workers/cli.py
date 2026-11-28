@@ -16,9 +16,12 @@ from chef.infrastructure.storage import atomic_write_json
 
 def summary(value, store):
     """Keep polling output small while preserving complete local evidence."""
-    fields = ("key", "token", "status", "native", "actualRole", "route", "created", "cancellationRequested", "cancelNative", "instruction")
+    fields = ("key", "token", "status", "native", "actualRole", "route", "created", "cancellationRequested",
+              "cancelNative", "instruction", "reviewRecord")
     output = {name: value[name] for name in fields if name in value}
     output["mode"] = value["request"].get("mode", "auto")
+    if value["request"].get("managedExecution"):
+        output["execution"] = "supervised"
     output["allowedRuntimes"] = value["request"].get("allowedRuntimes", list(controller.RUNTIMES))
     directory = controller.attempt_directory(store, value)
     output["details"] = str(directory)
@@ -50,6 +53,22 @@ def summary(value, store):
     return output
 
 
+def unit_options(parser):
+    parser.add_argument("--role")
+    parser.add_argument("--runtime", choices=controller.RUNTIMES)
+    parser.add_argument("--session", help="current coordinator session ID")
+    parser.add_argument("--request-id", help="stable ID for retrying this same dispatch")
+    parser.add_argument("--project")
+    parser.add_argument("--file", action="append", help="select an approved implementation file")
+    parser.add_argument("--input-path", action="append", help="additional read-only input to fingerprint")
+    parser.add_argument("--required-tool", action="append")
+    parser.add_argument("--previous", help="prior job key for same-role follow-up work")
+    parser.add_argument("--prompt", help="extra instructions specific to this worker")
+    parser.add_argument("--review-kind", choices=("poc", "unit", "integration"))
+    parser.add_argument("--receipt", help="review receipt, defaults to the latest successful verification")
+    parser.add_argument("--mode", choices=controller.MODES, help="choose the eligible worker service")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", help="private shared worker state directory")
@@ -58,22 +77,16 @@ def main(argv=None):
     dispatch.add_argument("unit", nargs="?", help="dispatch from the saved unit brief and ACTIVE mission")
     dispatch.add_argument("--request", help="explicit request JSON file, or - for standard input")
     dispatch.add_argument("--stored-brief", action="store_true", help="reuse the approved unit brief")
-    dispatch.add_argument("--role")
-    dispatch.add_argument("--runtime", choices=controller.RUNTIMES)
-    dispatch.add_argument("--session", help="current coordinator session ID")
-    dispatch.add_argument("--request-id", help="stable ID for retrying this same dispatch")
-    dispatch.add_argument("--project")
-    dispatch.add_argument("--file", action="append", help="select an approved implementation file")
-    dispatch.add_argument("--input-path", action="append", help="additional read-only input to fingerprint")
+    unit_options(dispatch)
     dispatch.add_argument("--host-role", action="append")
     dispatch.add_argument("--host-tool", action="append")
-    dispatch.add_argument("--required-tool", action="append")
-    dispatch.add_argument("--previous", help="prior job key for same-role follow-up work")
-    dispatch.add_argument("--prompt", help="extra instructions specific to this worker")
-    dispatch.add_argument("--review-kind", choices=("poc", "unit", "integration"))
-    dispatch.add_argument("--receipt", help="review receipt, defaults to the latest successful verification")
-    dispatch.add_argument("--mode", choices=controller.MODES,
-                          help="override request, environment, project and global worker routing mode")
+    run = sub.add_parser("run", allow_abbrev=False, help="dispatch and collect a supervised worker")
+    run.add_argument("unit")
+    unit_options(run)
+    run.set_defaults(host_role=None, host_tool=None, stored_brief=False)
+    run.add_argument("--record-review", action="store_true", help="record the completed bound review automatically")
+    run.add_argument("--close-low", action="store_true", help="have reviewer-small check and close the current Low IDs")
+    run.add_argument("--wait-seconds", type=int, default=0, help="wait for the result, 0 returns the dispatched key")
     for name in ("status", "wait", "cancel", "native-result", "recover-owner", "reconcile", "supervise"):
         command = sub.add_parser(name)
         command.add_argument("--key", required=True)
@@ -92,7 +105,30 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         store = Store(args.home)
-        if args.command == "dispatch":
+        exit_code = 0
+        if args.command == "run":
+            from chef.workers.unit_requests import build
+
+            if not 0 <= args.wait_seconds <= 3600:
+                raise ValueError("--wait-seconds must be 0..3600")
+            request = build(args)
+            request["managedExecution"] = True
+            if args.record_review or args.close_low:
+                request["recordReview"] = True
+            if args.close_low:
+                request["closeLow"] = True
+            if args.mode is not None:
+                request["mode"] = args.mode
+            value = controller.dispatch(request, store=store)
+            value = (controller.wait(value["key"], seconds=args.wait_seconds, store=store)
+                     if args.wait_seconds else controller.status(value["key"], store=store))
+            if value.get("reviewRecord", {}).get("status") == "interrupted":
+                value = controller.finalize_review(store, value)
+            if value["status"] in ("failed", "cancelled", "needs-inspection") or value.get(
+                "reviewRecord", {}
+            ).get("status") in ("blocked", "interrupted"):
+                exit_code = 1
+        elif args.command == "dispatch":
             if bool(args.unit) == bool(args.request):
                 raise ValueError("supply a unit or --request, exactly one")
             if args.unit:
@@ -127,7 +163,7 @@ def main(argv=None):
         else:
             value = controller.supervise(args.key, args.token, store=store)
         print(json.dumps(value if getattr(args, "details", False) else summary(value, store), ensure_ascii=False))
-        return 0
+        return exit_code
     except (OSError, ValueError, RuntimeError, GuardOff, UsageError, StateError, VerificationError) as error:
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
         return 1

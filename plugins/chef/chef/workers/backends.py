@@ -160,7 +160,10 @@ def candidates(adapter, cwd, role, *, native=None, host_tools=(), allowed_runtim
                 item["capabilities"] = list(host_tools)
             else:
                 auth(runtime, cwd, settings)
-                if runtime == "grok":
+                if runtime == "claude":
+                    item["tools"] = [tool for tool in item["tools"] if tool not in ("PowerShell", "apply_patch")]
+                    item["capabilities"] = list(item["tools"])
+                elif runtime == "grok":
                     item["tools"] = [tool for tool in item["tools"] if tool not in ("Bash", "PowerShell", "apply_patch")]
                     if role_name(role) in ("dev-small", "dev-medium"):
                         item["tools"].append("Delete")

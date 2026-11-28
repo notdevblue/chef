@@ -112,7 +112,14 @@ def build_parser(handlers=None, *, prog="mission_state.py", unified=False):
     publish.add_argument("--editorial", action="store_true")
     answer = leaf(question, "answer", handlers.cmd_question_answer)
     answer.add_argument("name")
-    answer.add_argument("--input", required=True, help="reply JSON file, or - for standard input")
+    reply_source = answer.add_mutually_exclusive_group(required=True)
+    reply_source.add_argument("--input", help="reply JSON file, or - for standard input")
+    reply_source.add_argument("--text", help="original user reply")
+    answer.add_argument("--expect-revision", type=int, help="the revision to which --text responds")
+    answer.add_argument("--reply-id", help="stable ID for retrying a direct reply")
+    answer.add_argument("--decision", action="append", nargs=3, metavar=("ITEM", "STATUS", "ANSWER"))
+    answer.add_argument("--select", action="append", nargs=3, metavar=("ITEM", "OPTION", "ANSWER"))
+    answer.add_argument("--approval", nargs=2, metavar=("STATUS", "REASON"), help="explicit user approval only")
     reply_template = leaf(question, "reply-template", handlers.cmd_question_reply_template)
     reply_template.description = "Print a blank reply with the current revision, timestamp and a new id."
     reply_template.add_argument("name")
@@ -144,6 +151,7 @@ def build_parser(handlers=None, *, prog="mission_state.py", unified=False):
     leaf(document, "list", handlers.cmd_document_list).add_argument("--json", action="store_true")
 
     plan = sub.add_parser("plan").add_subparsers(dest="action", required=True)
+    leaf(plan, "presets", handlers.cmd_plan_presets)
     for action, handler in (("template", handlers.cmd_plan_template), ("show", handlers.cmd_plan_show),
                             ("save", handlers.cmd_plan_save)):
         command = leaf(plan, action, handler)
@@ -151,7 +159,9 @@ def build_parser(handlers=None, *, prog="mission_state.py", unified=False):
         if action == "template":
             command.add_argument("--grade")
         elif action == "save":
-            command.add_argument("--input", required=True, help="plan JSON file or stdin (-)")
+            plan_source = command.add_mutually_exclusive_group(required=True)
+            plan_source.add_argument("--input", help="plan JSON file or stdin (-)")
+            plan_source.add_argument("--preset", help="named verification plan from the project adapter")
             command.add_argument("--expect-sha256")
 
     verify = leaf(sub, "verify", handlers.cmd_verify)
