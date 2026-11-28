@@ -423,19 +423,25 @@ def test_grok_skill_registration_names():
         assert f"name: {name}\n" in text
     run = (skills / "chef-run" / "SKILL.md").read_text(encoding="utf-8")
     assert "CLAUDE.md" in run and ".claude/rules/" in run
-    assert "mission_state.py" in run and "han_state.py" in run and "--runtime grok" in run
+    assert "chef grok-state snapshot" in run and "chef mission active --runtime grok" in run
     assert "~/.grok/rules/" in run and "submit" in run
     mission = (skills / "chef-mission" / "SKILL.md").read_text(encoding="utf-8")
     slot_skill = (skills / "chef-slots" / "SKILL.md").read_text(encoding="utf-8")
     adapter = (skills / "chef-adapter-init" / "SKILL.md").read_text(encoding="utf-8")
     distill = (skills / "chef-distill" / "SKILL.md").read_text(encoding="utf-8")
-    assert "--runtime grok" in mission and "mission_state.py" in mission
+    assert "--runtime grok" in mission and 'python "<plugin-root>/chef_cli.py"' in mission
     assert "../../../shared/skills/mission.md" in mission and "--force-tier" in mission
     assert "사람에게 묻는 법" not in mission and "ACTIVE" in mission
-    assert "--runtime grok" in slot_skill and "slots.py" in slot_skill and "chef-run" in slot_skill
+    assert "chef slots --runtime grok" in slot_skill and "chef-run" in slot_skill
     assert "ready" in slot_skill and "chef-watch" not in slot_skill
-    assert "check_guard.py" in adapter and "adapter-schema.md" in adapter and "pluginConfigs" in adapter
-    assert "distill.py" in distill and "--transcript" in distill and "HAN_TRANSCRIPT" in distill
+    assert "../../../shared/skills/adapter-init.md" in adapter
+    assert "adapter-schema.md" in adapter and "pluginConfigs" in adapter
+    adapter_shared = (plugin / "shared/skills/adapter-init.md").read_text(encoding="utf-8")
+    assert "chef guard-check --runtime" in adapter_shared
+    assert "../../../shared/skills/distill.md" in distill
+    assert "--transcript" in distill and "HAN_TRANSCRIPT" in distill
+    distill_shared = (plugin / "shared/skills/distill.md").read_text(encoding="utf-8")
+    assert "chef distill --runtime <런타임> extract --transcript" in distill_shared
     watch = (skills / "chef-watch" / "SKILL.md").read_text(encoding="utf-8")
     handoff = (skills / "chef-handoff" / "SKILL.md").read_text(encoding="utf-8")
     assert "등록하는 스킬이 아니다" in watch and "chef-status" in watch and "chef-doctor" in watch
