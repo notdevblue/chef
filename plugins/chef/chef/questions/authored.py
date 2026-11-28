@@ -5,13 +5,14 @@ from html import escape
 from urllib.parse import urlsplit
 
 from chef.questions.blocks import QuestionRecordError, table
+from chef.mission import schema_tables
 
 
 TITLE_LIMIT = 80
 LABEL_LIMIT = 40
 PROSE_LIMIT = 160
 ITEM_LIMIT = 320
-BLOCK_TYPES = {"paragraph", "list", "rules", "steps", "table", "fields", "literal"}
+BLOCK_TYPES = {"paragraph", "list", "rules", "steps", "table", "fields", "literal", schema_tables.SCHEMA_TABLE}
 ANCHOR = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 BLOCK_MARKUP = re.compile(
     r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```|~~~|\|)"
@@ -126,7 +127,7 @@ class AuthoringInput:
             return
         kind = block.get("type")
         if not isinstance(kind, str) or kind not in BLOCK_TYPES:
-            self.problem(f"{path}.type", "paragraph/list/rules/steps/table/fields/literal 중 하나를 사용하세요")
+            self.problem(f"{path}.type", "paragraph/list/rules/steps/table/fields/schema-table/literal 중 하나를 사용하세요")
             return
         if kind == "paragraph":
             if self.shape(block, path, ("id", "type", "sentences"), ("title",)):
@@ -146,7 +147,8 @@ class AuthoringInput:
                     if BLOCK_MARKUP.search(paragraph) or re.fullmatch(r"\s*(?:-\s*){3,}|\s*(?:\*\s*){3,}|\s*(?:_\s*){3,}", paragraph):
                         self.problem(f"{path}.sentences", "문단에 블록 Markdown을 사용할 수 없습니다")
             return
-        content = {"table": ("columns", "rows"), "fields": ("fields",), "literal": ("format", "value")}.get(kind, ("items",))
+        content = {"table": ("columns", "rows"), "fields": ("fields",), "literal": ("format", "value"),
+                   schema_tables.SCHEMA_TABLE: ("target", "fields")}.get(kind, ("items",))
         optional = BLOCK_OPTIONAL.get(kind, ())
         if not self.shape(block, path, ("id", "type", "title", *content), optional):
             return
@@ -172,12 +174,20 @@ class AuthoringInput:
                     self.problem(f"{path}.row_ids", "행마다 ID를 하나씩 지정하세요")
                 for index, value in enumerate(ids):
                     self.target(value, f"{path}.row_ids[{index}]", f"{block.get('id', '')}.")
-        elif kind == "fields":
+        elif kind in ("fields", schema_tables.SCHEMA_TABLE):
+            if kind == schema_tables.SCHEMA_TABLE:
+                try:
+                    schema_tables.validate_target(block["target"])
+                except QuestionRecordError as error:
+                    self.problem(f"{path}.target", str(error))
             for index, field in enumerate(self.array(block.get("fields"), f"{path}.fields")):
                 fp = f"{path}.fields[{index}]"
-                if self.shape(field, fp, ("name", "type"), ("key", "ref", "description")):
+                optional = ("key", "ref", "description", "constraint") if kind == schema_tables.SCHEMA_TABLE else (
+                    "key", "ref", "description"
+                )
+                if self.shape(field, fp, ("name", "type"), optional):
                     self.target(field.get("name"), f"{fp}.name", f"{block.get('id', '')}.")
-                    for key in ("type", "key", "description"):
+                    for key in ("type", "key", "description", "constraint"):
                         if key in field or key == "type":
                             self.short(field.get(key), f"{fp}.{key}", required=key == "type")
                     if "ref" in field:
@@ -299,6 +309,9 @@ def render_authored_block(block):
             parts.append("\n".join(rendered))
         else:
             parts.append(table(block["columns"], rows))
+    elif kind == schema_tables.SCHEMA_TABLE:
+        parts.append(schema_tables.render(block))
+        parts.extend(anchor(f"{block['id']}.{field['name']}") for field in block["fields"])
     elif kind == "fields":
         columns = ("name", "type", "key", "ref", "description")
         parts.append(table(columns, [[field.get(key, "") for key in columns] for field in block["fields"]]))

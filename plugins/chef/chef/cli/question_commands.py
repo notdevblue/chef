@@ -1,11 +1,16 @@
 """cli / question_commands."""
 
+import hashlib
 import json
 import os
+import re
 import sys
+from pathlib import Path
 
+from chef.cli.input_json import stdin_object
 from chef.infrastructure import paths as infrastructure_paths
-from chef.mission.contracts import FAILED, SHARED_DOCUMENTS_FILE, StateError
+from chef.mission import document_checks, schema_tables
+from chef.mission.contracts import FAILED, QUESTION_FILE, SHARED_DOCUMENTS_FILE, StateError
 from chef.mission.documents import (
     auto_question_document,
     auto_question_documents,
@@ -49,8 +54,10 @@ def cmd_question_preflight(ctx, args):
         getattr(args, "expect_revision", ""),
         editorial=args.editorial,
     )
+    checks = question_schema_checks(ctx, args, record)
     return [
         f"질문 발행 검사 통과: {record['id']}.md (revision {record['revision']})",
+        *schema_messages(checks),
         *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record)),
         *readability.messages(record),
     ]
@@ -58,17 +65,48 @@ def cmd_question_preflight(ctx, args):
 
 def cmd_question_publish(ctx, args):
     require_folder(ctx)
+    draft = question_records.validate_document(verification.read_json(args.input))
+    checks = question_schema_checks(ctx, args, draft)
     record = question_records.publish_document(
         ctx.folder,
-        verification.read_json(args.input),
+        draft,
         getattr(args, "expect_revision", ""),
         editorial=args.editorial,
     )
     return [
         f"질문 저장: {record['id']}.md (revision {record['revision']})",
+        *schema_messages(checks),
         *(f"답변 부담 확인: {note}" for note in question_records.decision_review_notes(record)),
         *readability.messages(record),
     ]
+
+
+def question_schema_checks(ctx, args, record):
+    name = f"{record['id']}.md"
+    settings = ctx.adapter.get("documents", {})
+    require_typed = bool(isinstance(settings, dict) and settings.get("requireSchemaTables"))
+    require_typed = require_typed or (
+        getattr(args, "unified", False) and bool(re.fullmatch(r"confirm-A[0-9]*", record["id"]))
+    )
+    previous = None
+    if require_typed and question_records.source_path(ctx.folder, name).is_file():
+        previous = question_records.read_document(ctx.folder, name)
+    checks = schema_tables.check_blocks(record, ctx.project, ctx.adapter, previous, require_typed=require_typed)
+    if require_typed and not record.get("detail_blocks"):
+        detail = f"details/{name}"
+        _, path = canonical_document_path(ctx.folder, detail)
+        if os.path.isfile(path):
+            result = document_checks.check(detail, path, Path(path).read_bytes(), ctx.folder, ctx.project, ctx.adapter)
+            if result["issues"]:
+                raise StateError(f"{detail}: {'; '.join(result['issues'])}")
+            checks.extend(result["schemaChecks"])
+    return checks
+
+
+def schema_messages(checks):
+    for item in checks:
+        reason = f" ({item['reason']})" if "reason" in item else ""
+        yield f"Schema {item['kind']} {item['table']}: {item['status']}{reason}"
 
 
 def cmd_question_answer(ctx, args):
@@ -119,8 +157,88 @@ def cmd_question_check(ctx, args):
 
 def cmd_document_share(ctx, args):
     require_folder(ctx)
-    names = share_documents(ctx.folder, args.paths)
-    return [f"공유함: {', '.join(names)}"]
+    checked = []
+
+    def validate(name, path, content):
+        result = inspect_content(ctx, name, path, content)
+        if result["issues"]:
+            raise StateError(f"{name}: {'; '.join(result['issues'])}")
+        checked.extend(result["schemaChecks"])
+
+    names = share_documents(ctx.folder, args.paths, check_content=validate if getattr(args, "unified", False) else None)
+    return [f"공유함: {', '.join(names)}", *schema_messages(checked)]
+
+
+def inspect_content(ctx, name, path, content):
+    parts = name.split("/")
+    if QUESTION_FILE.fullmatch(parts[-1]) and auto_question_document(ctx.folder, name):
+        result = {"path": name, "sha256": hashlib.sha256(content).hexdigest(), "checked": "question",
+                  "issues": [], "schemaChecks": [], "approval": None}
+        try:
+            question = parts[-1]
+            root_text = (content.decode("utf-8-sig") if len(parts) == 1
+                         else (Path(ctx.folder) / question).read_text(encoding="utf-8-sig"))
+            record = question_records.checked_document(ctx.folder, question, root_text)
+            if parts[0] == "details" and len(parts) == 2 and not record.get("detail_blocks"):
+                result = document_checks.check(name, path, content, ctx.folder, ctx.project, ctx.adapter)
+            result["approval"] = record["approval"]["status"]
+            result["pendingItems"] = [item["id"] for item in record["items"] if item["status"] == "pending"]
+            if parts[:2] != ["details", "history"]:
+                result["schemaChecks"].extend(schema_tables.check_blocks(record, ctx.project, ctx.adapter))
+        except (ValueError, OSError) as error:
+            result["issues"].append(str(error))
+        return result
+    return document_checks.check(name, path, content, ctx.folder, ctx.project, ctx.adapter)
+
+
+def cmd_document_create(ctx, args):
+    require_folder(ctx)
+    if not document_checks.SCHEMA_NAME.fullmatch(args.name) or QUESTION_FILE.fullmatch(args.name + ".md"):
+        raise StateError("invalid or reserved document name")
+    prefix = "" if args.kind == "report" else "details/"
+    name, target = canonical_document_path(ctx.folder, prefix + args.name + ".md")
+    if args.kind == "schema":
+        if not args.input or args.title:
+            raise StateError("schema creation needs --input and derives its title from the block")
+        try:
+            block = stdin_object() if args.input == "-" else verification.read_json(args.input)
+        except ValueError as error:
+            raise StateError(str(error)) from error
+        text = document_checks.schema_text(block)
+        checks = [schema_tables.check_block(block, ctx.project, ctx.adapter)]
+    else:
+        if not args.title or args.input:
+            raise StateError("report and detail drafts require a title")
+        text = document_checks.draft(args.kind, args.title)
+        checks = []
+    path = Path(target)
+    if os.path.normcase(path.relative_to(infrastructure_paths.request_realpath(ctx.folder)).as_posix()) != os.path.normcase(name):
+        raise StateError("document creation cannot follow aliases")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+    return [f"문서 생성: {name}", *schema_messages(checks)]
+
+
+def document_results(ctx, paths, shared):
+    results = []
+    for raw in paths:
+        name, path = canonical_document_path(ctx.folder, raw)
+        result = inspect_content(ctx, name, path, Path(path).read_bytes())
+        result["sharing"] = (
+            "automatic" if auto_question_document(ctx.folder, name) else "shared" if name in shared else "unshared"
+        )
+        result.setdefault("approval", None)
+        results.append(result)
+    return results
+
+
+def cmd_document_check(ctx, args):
+    require_folder(ctx)
+    results = document_results(ctx, args.paths, shared_documents(ctx.folder))
+    if any(result["issues"] for result in results):
+        args.exit_code = FAILED
+    return [json.dumps(results, ensure_ascii=False)]
 
 
 def cmd_document_hide(ctx, args):
@@ -154,6 +272,9 @@ def cmd_document_list(ctx, args):
         raise StateError(f"{SHARED_DOCUMENTS_FILE} 경로가 잘못됨: {manifest}")
     try:
         names = sorted(shared_documents(ctx.folder))
+        if args.json:
+            paths = sorted(set(names) | set(automatic))
+            return [json.dumps(document_results(ctx, paths, set(names)), ensure_ascii=False)]
         result.append(f"공유 중: {', '.join(names) or '없음'}")
     except (OSError, UnicodeError, StateError) as error:
         result.append(f"읽기 실패: {SHARED_DOCUMENTS_FILE} ({error})")

@@ -135,12 +135,15 @@ def consume_runtime(argv, runtime):
     return argv[2:], argv[1], None
 
 
-def main(runtime="claude"):
+def main(runtime="claude", argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
-    args, runtime, error = consume_runtime(sys.argv[1:], runtime)
+    args, runtime, error = consume_runtime(sys.argv[1:] if argv is None else argv, runtime)
     if error:
         print(error)
         return 2
+    if args in (["--help"], ["-h"]):
+        print(__doc__)
+        return 0
     if "--doctor" in args:
         return doctor()
     if len(args) not in (1, 2):

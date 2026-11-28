@@ -22,6 +22,7 @@ SHELL_WRITERS = frozenset(("set-content", "add-content", "out-file", "tee-object
 SHELL_COPY = frozenset(("cp", "copy", "copy-item", "move", "mv", "move-item", "ren", "rename-item"))
 SHELL_REMOVE = frozenset(("rm", "del", "erase", "remove-item", "rmdir", "rd", "touch", "mkdir"))
 BUNDLED_CLI = str(PLUGIN_ROOT / "skills/mission/scripts/mission_state.py")
+UNIFIED_CLI = str(PLUGIN_ROOT / "chef_cli.py")
 QUESTION_ACTIONS = frozenset(("publish", "answer", "restore", "render"))
 
 
@@ -606,10 +607,12 @@ def unbundled_question_commands(command, tool_name, cwd, guard):
                 candidates = []
             elif flag in ("-X", "-W") and candidates:
                 candidates.pop(0)
-        if not candidates or re.split(r"[\\/]", candidates[0])[-1].casefold() != "mission_state.py":
+        if not candidates or re.split(r"[\\/]", candidates[0])[-1].casefold() not in (
+            "mission_state.py", "chef_cli.py",
+        ):
             continue
         script = absolute_path(candidates[0], cwd)
-        if canonical_path(script) == canonical_path(BUNDLED_CLI):
+        if canonical_path(script) in (canonical_path(BUNDLED_CLI), canonical_path(UNIFIED_CLI)):
             continue
         if not any(
             tokens[index] == "question" and tokens[index + 1] in QUESTION_ACTIONS

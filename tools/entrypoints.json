@@ -1,4 +1,7 @@
 {
+  "chef_cli.py": {
+    "module": "chef.cli.unified"
+  },
   "worker.py": {
     "module": "chef.workers.cli"
   },

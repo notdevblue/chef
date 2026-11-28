@@ -29,7 +29,7 @@ ACTIVE가 있는 슬롯에는 다른 미션을 겹치지 않는다.
 1. `chef-status`와 같은 조회로 현재 상태를 본다. 어댑터 오류면 `chef-doctor`로 가고 브리프를 만들지 않는다.
 
 ```text
-python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<프로젝트 폴더>"
+chef grok-state snapshot --project "<프로젝트 폴더>"
 ```
 
 2. 메인 ACTIVE나 슬롯 ACTIVE가 있으면 미션 id·단계·목표를 보여주고, 새 미션으로 열지 사용자에게 묻는다.
@@ -39,8 +39,8 @@ python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<프로젝�
 4. `--goal`은 대상과 결과가 보이는 한 줄이다.
 
 ```text
-python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime grok --goal "<한 줄 목표>"
-python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime grok --slot slot2 --goal "<한 줄 목표>"
+chef grok-state brief --project "<프로젝트 폴더>" --runtime grok --goal "<한 줄 목표>"
+chef grok-state brief --project "<프로젝트 폴더>" --runtime grok --slot slot2 --goal "<한 줄 목표>"
 ```
 
 5. `인계:` 아래 `SendToAgent:` 블록을 그 봇에게 보낸다. 슬래시 명령으로 바꾸지 않는다.
@@ -63,8 +63,8 @@ python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 
 기본 인계를 이 문장으로 바꾸지 않는다.
 
 ```text
-python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime claude --goal "<한 줄 목표>"
-python "<plugin-root>/grok/scripts/han_state.py" brief --project "<프로젝트 폴더>" --runtime codex --goal "<한 줄 목표>"
+chef grok-state brief --project "<프로젝트 폴더>" --runtime claude --goal "<한 줄 목표>"
+chef grok-state brief --project "<프로젝트 폴더>" --runtime codex --goal "<한 줄 목표>"
 ```
 
 Claude 문장은 `/chef:mission ...`, Codex 문장은 `$chef:chef-mission ...`이다.

@@ -134,7 +134,7 @@ def auto_question_documents(folder):
     return names
 
 
-def share_documents(folder, names, expected_hashes=()):
+def share_documents(folder, names, expected_hashes=(), *, check_content=None):
     require_question_integrity(folder)
     requested = list(dict.fromkeys(canonical_document_path(folder, name)[0] for name in names))
     contents = {}
@@ -156,6 +156,10 @@ def share_documents(folder, names, expected_hashes=()):
             _, issue = question_records.inspect_document(folder, name, text)
             if issue:
                 raise StateError(f"{name} 기록 확인 필요: {issue}")
+        if check_content is not None or b"<!-- chef:document " in content or b"<!-- chef:schema-table " in content:
+            if check_content is None:
+                raise StateError(f"{name}: a managed document must be shared with the bundled Chef CLI")
+            check_content(name, target, content)
     try:
         expected = dict(expected_hashes)
     except (TypeError, ValueError) as error:
@@ -165,6 +169,12 @@ def share_documents(folder, names, expected_hashes=()):
             raise StateError(f"문서가 바뀌었습니다: {name}")
     path = os.path.join(folder, SHARED_DOCUMENTS_FILE)
     rows = shared_document_rows(folder)
+    if check_content is not None:
+        for name, checked_digest in contents.items():
+            _, target = canonical_document_path(folder, name)
+            with open(target, "rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != checked_digest:
+                    raise StateError(f"문서가 검사 중 바뀌었습니다: {name}")
     by_name = {row["path"]: row for row in rows}
     for name in requested:
         by_name[name] = {"path": name, "sha256": contents[name], "at": mission_guard.now_iso()}

@@ -8,11 +8,10 @@ description: "Grok CLI 세션이나 미션 대화 기록에서 사용자 피드�
 실행 전에 [공통 절차](../../../shared/skills/distill.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
 `<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
-경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
 
 ## 실행 계약
 
-- `<distill-script>`: `<plugin-root>/skills/distill/scripts/distill.py`, `<distill-runtime>`: `--runtime grok`.
 - Grok SessionStart는 `new`·`load` 이벤트의 대화 기록 경로를 컨텍스트에 전달한다. ACP `updates.jsonl`은 추출기가 읽을 수 있지만, `--transcript`에는 컨텍스트나 세션 기록에 명시된 실제 경로를 사용한다. 최신 파일을 선택하거나 경로를 추측하지 않는다.
 Grok은 Claude의 `HAN_TRANSCRIPT`를 자동 경로로 사용하지 않는다. extract에는 명시한 `--transcript`가 필요하다.
 미션이면 `mission_state.py transcripts`가 출력한 경로마다 `--transcript`를 붙인다. 출력에 없는 경로는 넣지 않는다.

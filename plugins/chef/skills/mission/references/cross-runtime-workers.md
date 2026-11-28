@@ -108,23 +108,23 @@ export CHEF_WORKERS_MODE=native
 
 `timeout`은 기본 600초이며 프로젝트 `workers.maxTimeoutSeconds`(기본 7200, 설정 범위 10~86400초) 안에서 정한다. 개별 검증 명령의 시간 제한과 전체 워커 예산은 별도다.
 
-요청을 임시 JSON 파일에 저장한 뒤 실행한다.
+요청은 표준 입력 JSON으로 전달할 수 있다. `--stored-brief`는 저장된 단위 브리프를 사용하고 `prompt`는 역할별 추가 지시로만 붙인다.
 
 ```text
-python "<plugin-root>/worker.py" dispatch --request "<request.json>"
+chef worker dispatch --request - --stored-brief
 ```
 
 요청은 등록된 프로젝트 루트와 `ownerRuntime`·`ownerSession`이 현재 ACTIVE 소유자와 일치하는 초기화된 미션에 결부된다. 미션을 열거나 이어받지 않으며 승인이나 완료 상태도 바꾸지 않는다. `requestId`는 논리적 역할 작업마다 필요한 안정된 고유 ID다. 같은 ID·요청을 재전송하면 기존 작업을 반환하고, 같은 ID로 내용이 달라지면 거부한다. 이전 결과를 확인하고 새 시도를 만들 때는 새 ID를 쓴다. 수정 후속 작업은 이전 job key를 `previous`에 넣는다. 관찰한 세션 ID와 역할 정책이 그대로인 경우에만 워커 세션을 재개한다. 독립 리뷰에는 `independent`를 지정해 새 맥락을 사용한다.
 
 ## 결과 수집
 
-`dispatch`는 job `key`, 시도 `token`, 선택 경로, 상태와 `native` 여부를 반환한다. `native`가 true면 반환된 `actualRole` 이름으로 native 역할 도구를 실행한다. 끝난 뒤 `{"ok":true,"result":"summary","evidence":["reports/review.md"]}`처럼 결과 JSON을 저장해 기록한다.
+`dispatch`는 job `key`, 시도 `token`, 선택 경로, 상태와 `native` 여부를 반환한다. `native`가 true면 반환된 `actualRole` 이름으로 native 역할 도구를 실행한다. 끝난 뒤 `{"ok":true,"result":"summary","evidence":["reports/review.md"]}`처럼 결과를 표준 입력에 전달한다.
 
 ```text
-python "<plugin-root>/worker.py" native-result --key "<key>" --token "<token>" --result "<result.json>"
+chef worker native-result --key "<key>" --token "<token>" --result -
 ```
 
-성공한 native 결과에는 실제 존재하는 프로젝트 상대 근거 파일이 있어야 한다. 결과 기록만으로 미션 단위를 완료하지 않는다. 코디네이터가 기존 절차대로 결과를 검토하고 단위 상태를 갱신한다.
+호스트가 표준 입력을 전달할 수 없으면 파일을 `--request` 또는 `--result`에 지정한다. 성공한 native 결과에는 실제 존재하는 프로젝트 상대 근거 파일이 있어야 한다. 코디네이터가 결과를 검토하고 단위 상태를 갱신한다.
 
 업데이트 전 요청도 저장된 key·token으로 수집한다. 저장소·요청 파일이나 기존 설치 경로를 고쳐 재접수하지 않는다. 접수 뒤 출력이나 입력 경로가 폴더·링크 등으로 바뀌거나 읽을 수 없으면, 결과의 `after`·`files`에 해당 경로의 오류를 남기고 `needs-inspection`으로 보존한다. 정상 파일의 SHA-256과 없는 파일의 `null` 형식은 유지한다. 오류가 있는 결과는 성공으로 수용하지 않으며 예약도 자동 해제하지 않는다. native 역할 도구가 끝난 것을 확인해 `native-result`로 수집한 뒤, 현재 변경과 오류를 확인하고 아래 `reconcile` 절차로 닫는다.
 

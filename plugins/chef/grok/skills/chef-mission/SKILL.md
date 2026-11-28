@@ -8,7 +8,7 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 실행 전에 [공통 절차](../../../shared/skills/mission.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
 `<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
-경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
 
 ## Grok 실행 계약
 
@@ -26,14 +26,10 @@ description: "Grok CLI에서 작업을 단계와 마일스톤으로 나눠 조�
   어댑터의 프로젝트 스킬은 실제 설치 파일과 도구를 읽고 적용한다. 필요한 스킬·Unity 연결이 없으면 해당 단계를 미확인으로 남긴다.
   Claude JSONL 전용 사용량 집계기는 Grok 로그에 적용하지 않는다. 실제 모델·effort 증거와 미확인 한계만 기록한다.
 
-미션 전환은 `<plugin-root>/mission_control.py`를 `--runtime grok`와 실제 세션·작업 루트·새 요청 ID로 호출한다.
-사전 검사 영수증만으로 시작하지 않고 실행 성공과 ACTIVE의 id·session·runtime을 대조한다. 예전 echo 마커는 사용하지 않는다.
+공통 CLI 호출에 `--runtime grok`를 쓴다.
 
 ## 실행 경로
 
-- `<mission-entry>`: `<plugin-root>/grok/scripts/mission_entry.py`, `<mission-entry-runtime>`: 빈 값.
-- `<mission-state-runtime>`: `--runtime grok --project "<작업 루트>"`.
-- `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`.
 - `<p4-wrapper>`: `<plugin-root>/grok/skills/chef-mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/grok/skills/chef-distill/SKILL.md`. 슬롯은 `chef-slots`, 어댑터는 `chef-adapter-init`이다.
 - M·L은 코디네이터이며 프로젝트 파일은 역할에 맡긴다. S는 `chef-run` 직접 처리이며 사용자가 명시적으로 원할 때만 `init --tier S --force-tier`로 미션을 열고 분리를 유지한다.

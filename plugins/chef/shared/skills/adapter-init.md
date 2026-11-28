@@ -1,6 +1,6 @@
 # 어댑터 작성 공통 절차
 
-런타임 진입점의 발견·역할 계약을 읽고 `<check-guard-script>`·`<check-guard-runtime>`을 실제 경로·인자로 치환한다.
+런타임 진입점의 발견·역할 계약을 읽고 [현재 번들의 Chef CLI](../../skills/mission/references/cli.md)를 사용한다.
 
 어댑터는 현재 런타임의 mission 스킬이 프로젝트마다 다른 값을 읽는 유일한 곳이다. 계약은
 `<plugin-root>/skills/mission/references/adapter-schema.md`. 값은 추측하지 않고 프로젝트 문서·도구 `--help`·설정
@@ -48,8 +48,8 @@
 ## 4. 점검
 
 ```
-python "<check-guard-script>" --doctor
-python "<check-guard-script>" <check-guard-runtime> <adapter.json|레지스트리 어댑터 이름> <cases.json>
+chef guard-check --runtime <런타임> --doctor
+chef guard-check --runtime <런타임> <adapter.json|레지스트리 어댑터 이름> <cases.json>
 ```
 
 두 번째 인자를 생략하면 어댑터 옆의 `guard-cases.json`을 쓴다. 어댑터·표본 파일을 못 읽으면 `ERROR` 한 줄과 종료 코드 3이다.

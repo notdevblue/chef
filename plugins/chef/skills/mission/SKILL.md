@@ -7,16 +7,13 @@ description: 작업 하나를 단계(컨텐츠 확인 → PoC → 구현 → 검
 
 실행 전에 [공통 절차](../../shared/skills/mission.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
-`<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+`<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다.
 
-미션 전환은 `<plugin-root>/mission_control.py`를 `--runtime claude`와 실제 세션·작업 루트·새 요청 ID로 호출한다.
-사전 검사 영수증만으로 시작하지 않고 실행 성공과 ACTIVE의 id·session·runtime을 대조한다. 예전 echo 마커는 사용하지 않는다.
+공통 CLI 호출에 `--runtime claude`를 쓴다.
 
 ## 실행 경로와 역할
 
-- `<mission-entry>`: `<plugin-root>/skills/mission/scripts/mission_entry.py`, `<mission-entry-runtime>`: `--runtime claude`.
-- `<mission-state-runtime>`: `--runtime claude`.
-- `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/skills/mission/scripts/p4c.py`.
+- `<p4-wrapper>`: `<plugin-root>/skills/mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/skills/distill/SKILL.md`. 슬롯은 `/chef:slots`, 어댑터는 `/chef:adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Claude 절을 따른다. `${CLAUDE_PLUGIN_ROOT}`를 실제 루트로 쓸 수 있다.
 - 역할을 파견하기 전에 모든 Claude·Codex·Grok 미션과 같이 [공통 워커 계약](references/cross-runtime-workers.md)의 dispatcher를 호출한다. `native: true`일 때만 현재 Claude Agent 도구를 사용하고, 외부 런타임이 선택되면 Claude Agent를 중복 실행하지 않는다. 아래 Claude 전용 모델·역할 설정은 Claude가 선택된 native 파견에만 적용한다.

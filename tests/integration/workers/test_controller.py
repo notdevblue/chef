@@ -1,6 +1,7 @@
 """Synthetic cross-runtime lifecycle checks without live services or credentials."""
 
 import itertools
+import io
 import json
 import os
 import threading
@@ -83,6 +84,25 @@ def test_native_unregistered_role_cannot_create_unusable_dispatch(project, monke
     with pytest.raises(ValueError, match="no available worker"):
         controller.dispatch(request, store=project.store)
     assert project.store.list() == []
+
+
+def test_native_worker_cli_reads_request_and_result_without_files(project, monkeypatch, capsys):
+    choose(monkeypatch, "claude")
+    request = project.request()
+    request.pop("prompt")
+    request["mode"] = "native"
+
+    def feed(value):
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps(value).encode())))
+
+    args = ["--home", str(project.store.root)]
+    feed(request)
+    assert cli.main([*args, "dispatch", "--request", "-", "--stored-brief"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert "Approved unit U1" in result["brief"] and "goal: sample" in result["brief"]
+    feed({"ok": True, "result": "Complete", "evidence": ["source.txt"]})
+    assert cli.main([*args, "native-result", "--key", result["key"], "--token", result["token"], "--result", "-"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
 
 
 @pytest.mark.parametrize("owner", controller.RUNTIMES)

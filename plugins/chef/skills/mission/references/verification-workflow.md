@@ -206,7 +206,7 @@ receipt의 `status`는 `pass|fail`, `recordedAt`·`startedAt`·`finishedAt`은 �
 
 ## 리뷰 지적의 연결
 
-`review`의 선택 인자 `--findings-input <JSON>`은 아래처럼 열린 지적·제안·해소 확인을 함께 기록한다.
+`chef review --status findings --findings-input <JSON|->`은 첫 리뷰부터 열린 지적·제안·해소 확인을 기록한다. 통합 CLI의 각 열린 지적에는 심각도와 `evidence` 경로·위치도 필수다. 표준 입력은 Chef가 근거로 보관한다. `review-open`으로 직전 ID를 읽고 `closed-low`에는 `--resolved-id`를 반복해서 줄 수도 있다.
 
 ```json
 {

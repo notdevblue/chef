@@ -159,7 +159,7 @@ def collect_snapshots(request, result):
     return output
 
 
-def ownership(request):
+def ownership(request, *, brief=False):
     runtime = request.get("ownerRuntime")
     if runtime not in RUNTIMES:
         raise ValueError("ownerRuntime must be claude, codex or grok")
@@ -188,9 +188,12 @@ def ownership(request):
     binding = unit_contracts.identity(row)
     if request.get("unitContract") and request["unitContract"] != binding:
         raise ValueError("worker unit brief changed")
-    return adapter, {"runtime": runtime, "session": active.session,
-                      "mission": active.id, "state": state, "unitContract": binding,
-                      "timeboxSeconds": int(row["timebox"]) * 60 if str(row.get("timebox", "")).isdecimal() else 0}
+    owner = {"runtime": runtime, "session": active.session, "mission": active.id,
+             "state": state, "unitContract": binding,
+             "timeboxSeconds": int(row["timebox"]) * 60 if str(row.get("timebox", "")).isdecimal() else 0}
+    if brief:
+        owner["brief"] = {field: row[field] for field in ("goal", "files", "done", "verify", "forbid", "human")}
+    return adapter, owner
 
 
 def prepare(value):
@@ -199,9 +202,12 @@ def prepare(value):
     request = dict(value)
     for key in ("requestId", "unit", "role", "ownerSession", "mission"):
         text(request.get(key), key)
-    prompt = request.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip() or "\x00" in prompt:
-        raise ValueError("prompt must be nonempty text")
+    reuse = request.pop("useStoredBrief", False)
+    if type(reuse) is not bool:
+        raise ValueError("useStoredBrief must be a boolean")
+    prompt = request.get("prompt", "" if reuse else None)
+    if not isinstance(prompt, str) or (not reuse and not prompt.strip()) or "\x00" in prompt:
+        raise ValueError("prompt must be nonempty text unless using the stored brief")
     timeout = request.get("timeout", 600)
     if type(timeout) is not int or not 10 <= timeout <= 86400:
         raise ValueError("timeout must be 10..86400 seconds")
@@ -216,7 +222,13 @@ def prepare(value):
     request["project"] = os.path.realpath(project)
     requested_role = request["role"].removeprefix("chef:")
     request["role"] = role_name(request["role"])
-    adapter, owner = ownership(request)
+    adapter, owner = ownership(request, brief=True) if reuse else ownership(request)
+    if reuse:
+        brief = owner.pop("brief")
+        content = "\n".join(f"{field}: {value}" for field, value in brief.items())
+        request["prompt"] = f"Approved unit {request['unit']}:\n{content}"
+        if prompt.strip():
+            request["prompt"] += f"\n\nRole-specific instructions:\n{prompt}"
     settings = adapter.get("workers", {})
     if not isinstance(settings, dict):
         raise ValueError("workers must be an object")

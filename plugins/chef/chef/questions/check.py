@@ -132,14 +132,14 @@ def schema_tables(text):
 
 
 def current_field_blocks(record):
-    return [block for block in record.get("blocks", []) if block["type"] == "fields"]
+    return [block for block in record.get("blocks", []) if block["type"] in ("fields", "schema-table")]
 
 
 def protected_hidden_blocks(record, field):
     return [
         {key: value for key, value in block.items() if key != "title"}
         for block in record.get(field, [])
-        if block["type"] in ("table", "fields", "literal")
+        if block["type"] in ("table", "fields", "schema-table", "literal")
     ]
 
 

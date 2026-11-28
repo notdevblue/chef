@@ -1400,6 +1400,34 @@ def test_closed_low_cli_and_schema(mission, capsys):
     assert json.loads(capsys.readouterr().out)["reviewStatuses"] == ["clean", "findings", "closed-low"]
 
 
+def test_unified_review_records_first_findings_and_closes_same_ids(mission, capsys, monkeypatch):
+    import io
+    from chef.cli.unified import main
+
+    root, folder, _ = mission
+    _, receipt = verify(mission)
+    evidence = root / "review.md"
+    evidence.write_text("# Review\n\nTwo Low findings.", encoding="utf-8")
+    args = ["review", "M1", "--receipt", str(receipt), "--evidence", str(evidence),
+            "--reviewer", "reader", "--kind", "unit", "--runtime", "claude"]
+    assert main([*args, "--status", "findings"]) == 1
+    assert "structured --findings-input" in capsys.readouterr().err
+    findings = [{**low(identity), "evidence": f"src/example.py:{line}"}
+                for identity, line in (("F1", 7), ("F2", 11))]
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(json.dumps({
+        "schema": 1, "findings": findings,
+    }).encode())))
+    assert main([*args, "--status", "findings", "--findings-input", "-"]) == 0
+    capsys.readouterr()
+    assert main(["review-open", "M1", "--runtime", "claude"]) == 0
+    assert [item["id"] for item in json.loads(capsys.readouterr().out)["findings"]] == ["F1", "F2"]
+    assert main([*args, "--status", "closed-low", "--resolved-id", "F1"]) == 1
+    assert main([*args, "--status", "closed-low", "--resolved-id", "F1", "--resolved-id", "F2"]) == 0
+    review = receipt_data(Path(json.loads(latest_review_pointer(folder))["review"]))
+    assert review["resolvedIds"] == ["F1", "F2"]
+    assert receipt_data(Path(review["findingsSource"]))["resolvedIds"] == ["F1", "F2"]
+
+
 def test_third_round_diagnostic_points_to_closed_low_or_question(mission):
     _, receipt = verify(mission)
     structured_review(mission, receipt, 1, [low()])

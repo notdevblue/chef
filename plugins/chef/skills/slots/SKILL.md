@@ -7,12 +7,10 @@ description: 미션을 동시에 여러 개 돌리기 위한 슬롯 워크스페
 
 실행 전에 [공통 절차](../../shared/skills/slots.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
-`<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+`<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다.
 
 ## 실행 계약
 
-- `<slots-script>`: `<plugin-root>/skills/slots/scripts/slots.py`, `<slots-runtime>`: 빈 값.
-- `<dashboard-script>`: `<plugin-root>/skills/slots/scripts/dashboard.py`, `<dashboard-runtime>`: 빈 값.
 - 어댑터 검색·병합은 [공통 어댑터 계약](../mission/references/adapter-schema.md)의 Claude 절을 따른다.
 - 실행 CLI는 `claude "/chef:mission <작업>"`, 재개는 `claude "/chef:mission 미션 이어서"`다. `slots.terminal`이 실행할 터미널을 선택한다.
   `run --resume`의 `--new-session`과 런타임 인계는 아래 계약을 따른다.

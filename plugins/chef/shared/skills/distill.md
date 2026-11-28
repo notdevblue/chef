@@ -1,6 +1,6 @@
 # 피드백 정리 공통 절차
 
-런타임 진입점의 대화 기록·로그·메모리 계약을 먼저 확인한다. `<distill-script>`·`<distill-runtime>`은 그 경로·인자로 치환한다.
+런타임 진입점의 대화 기록·로그·메모리 계약을 먼저 확인하고 [현재 번들의 Chef CLI](../../skills/mission/references/cli.md)를 사용한다.
 
 사용자가 작업 중에 준 지적·선호·교정을 다음 작업에서도 쓰이게 옮긴다. 입력은 대화 기록 파일이다.
 에이전트가 "피드백을 받으면 적어 둔다"에 기대지 않는다. 압축 전 메시지도 원본 `.jsonl` 에서 읽는다.
@@ -14,7 +14,7 @@
 기록을 처리할 때는 해당 자료를 둘 권한이 있는 위치만 쓴다.
 
 ```
-python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록 경로>" --out "<임시 폴더>/distill.md"
+chef distill --runtime <런타임> extract --transcript "<대화 기록 경로>" --out "<임시 폴더>/distill.md"
 ```
 
 - 일반 세션의 대화 기록은 런타임 진입점이 정한 훅·세션 id·형식으로 확정한다. 최신 파일이나 작업 폴더만으로 고르지 않는다.
@@ -93,8 +93,8 @@ python "<distill-script>" <distill-runtime> extract --transcript "<대화 기록
 - 항목마다 로그에 남긴다. `--until`은 extract가 출력한 그 세션의 `until` 값이다.
 
 ```
-python "<distill-script>" <distill-runtime> record --session <id> --until <ts> --verdict 반영 --dest guide --summary "<한 줄>"
-python "<distill-script>" <distill-runtime> record --session <id> --until <ts> --verdict 기각 --summary "<한 줄>"
+chef distill --runtime <런타임> record --session <id> --until <ts> --verdict 반영 --dest guide --summary "<한 줄>"
+chef distill --runtime <런타임> record --session <id> --until <ts> --verdict 기각 --summary "<한 줄>"
 ```
 
 남길 것이 없었거나 모두 처리했으면 `--verdict 확인` 한 줄로 워터마크를 올린다.

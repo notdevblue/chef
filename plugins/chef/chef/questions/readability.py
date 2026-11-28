@@ -156,7 +156,7 @@ def record_units(record):
                     values = [entry.get(key, "") for key in ("text", "result", "when", "failure")]
                     values.extend(entry.get("conditions", {}).get("items", []))
                     units.append((path, f"{path}.{entry['id']}", "\n".join(values), True))
-            elif kind == "fields":
+            elif kind in ("fields", "schema-table"):
                 for field in block['fields']:
                     units.append((path, f"{path}.{field['name']}", field.get('description', ''), None))
             elif kind == "table":

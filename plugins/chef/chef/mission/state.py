@@ -11,6 +11,8 @@ from datetime import datetime
 
 from chef.cli.mission_parser import OneLineParser, build_parser
 from chef.cli.question_commands import (
+    cmd_document_check,
+    cmd_document_create,
     cmd_document_hide,
     cmd_document_list,
     cmd_document_share,
@@ -752,6 +754,21 @@ def cmd_review_worker(_ctx, args):
 def cmd_review(ctx, args):
     require_folder(ctx)
     require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    findings = args.findings_input
+    if getattr(args, "resolved_id", []):
+        if findings or args.status != "closed-low":
+            raise StateError("--resolved-id requires closed-low and cannot be combined with --findings-input")
+        findings = {"schema": 1, "findings": [], "resolvedIds": args.resolved_id}
+    if findings == "-":
+        from chef.cli.input_json import stdin_object
+
+        try:
+            findings = stdin_object()
+        except ValueError as error:
+            raise StateError(str(error)) from error
+    unified = getattr(args, "unified", False)
+    if unified and args.status == "findings" and not findings:
+        raise StateError("first and subsequent findings reviews require structured --findings-input")
     path = verification.record_review(
         ctx.project,
         ctx.folder,
@@ -763,11 +780,25 @@ def cmd_review(ctx, args):
         args.status,
         args.findings_count,
         args.fixed_count,
-        args.findings_input,
+        findings,
         settings=ctx.adapter.get("verify") or {},
+        require_structured=unified,
     )
     review = verification.read_json(path)
     return [f"리뷰 {args.id} {args.status} {args.kind} | {path}", *review.get("diagnostics", [])]
+
+
+def cmd_review_open(ctx, args):
+    from chef.verification.reviews import review_history
+
+    require_folder(ctx)
+    require_unit(read_table(ctx.path(UNITS_FILE), UNIT_HEADER), args.id)
+    history = review_history(ctx.folder, args.id)
+    review = history[0][1] if history else {}
+    return [json.dumps({
+        "unit": args.id, "round": review.get("round"), "status": review.get("status"),
+        "structured": "findings" in review, "findings": review.get("findings", []),
+    }, ensure_ascii=False)]
 
 
 def cmd_review_start(ctx, args):
@@ -939,15 +970,16 @@ def cmd_inspect(ctx, args):
     return [json.dumps(summary, ensure_ascii=False)]
 
 
-def main(argv=None, runtime="claude"):
+def main(argv=None, runtime="claude", *, unified=False):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     try:
         try:
-            args = build_parser().parse_args(argv)
+            args = build_parser(prog="chef" if unified else "mission_state.py").parse_args(argv)
         except SystemExit:
             return OK
+        args.unified = unified
         if args.handler in (cmd_inspect, cmd_question_patch, cmd_review_worker, cmd_unit_template):
             for line in args.handler({}, args):
                 print(line)
@@ -989,7 +1021,9 @@ def main(argv=None, runtime="claude"):
             cmd_transcripts,
             cmd_unit_list,
             cmd_review_scope,
+            cmd_review_open,
             cmd_document_list,
+            cmd_document_check,
             cmd_active,
             cmd_question_preview,
             cmd_question_show,

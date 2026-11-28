@@ -1,6 +1,6 @@
 # 슬롯 공통 절차
 
-런타임 진입점을 먼저 읽고 `<slots-script>`·`<slots-runtime>`·`<dashboard-script>`·`<dashboard-runtime>`을 실제 경로·인자로 치환한다.
+런타임 진입점을 먼저 읽고 [현재 번들의 Chef CLI](../../skills/mission/references/cli.md)를 사용한다.
 
 슬롯은 같은 스트림·브랜치를 받는 별도 워크스페이스다. 슬롯 폴더에서 띄운 해당 런타임 세션 하나가 미션 하나를
 맡는다. 세션마다 MCP 연결·에디터·`ACTIVE`가 따로라 미션끼리 서로 막지 않는다.
@@ -23,7 +23,7 @@
 ## 호출
 
 ```
-python "<slots-script>" <slots-runtime> <명령> [인자] [--project <메인 프로젝트 폴더>]
+chef slots --runtime <런타임> <명령> [인자] [--project <메인 프로젝트 폴더>]
 ```
 
 - 어댑터 검색·병합은 공통 어댑터 계약의 해당 런타임 순서를 따른다. 다른 폴더에서 부르면 `--project`로 메인 프로젝트 폴더를 준다. 어댑터를 못 찾으면 출력의 원인을 확인하고 알린다.
@@ -127,7 +127,7 @@ name	path	client	created	synced	state
 문서를 열 때는 해당 문서의 실제 경로·공유 여부·해시를 매번 확인한다.
 
 ```
-python "<dashboard-script>" <dashboard-runtime> [--project <메인 프로젝트 폴더>] [--port 8765] [--open]
+chef dashboard --runtime <런타임> [--project <메인 프로젝트 폴더>] [--port 8765] [--open]
 ```
 
 - 계속 떠 있는 프로세스라 **백그라운드로 실행**한다. `--open`은 브라우저를 함께 연다.

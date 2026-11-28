@@ -1,6 +1,7 @@
 # 미션 공통 절차
 
-Hermes native에서는 아래 절차의 open/resume/close 미션 마커를 `chef_mission(action="open|resume|close", mission="<id>")`로 실행한다. 상태는 `chef_mission(action="status")`로 조회한다. 다른 런타임의 미션 마커 계약은 그대로다.
+이 문서의 `chef …`는 [현재 번들의 Chef CLI](../../skills/mission/references/cli.md)를 뜻한다.
+Hermes의 open/resume/close와 상태 조회는 native `chef_mission`을 사용한다.
 
 
 실행 품질을 비교할 때는 [실행 통계·작업 대기열·모델 선택 추천](../../skills/mission/references/autonomous-lab.md)을 따른다. 공통 도구는
@@ -8,7 +9,7 @@ Hermes native에서는 아래 절차의 open/resume/close 미션 마커를 `chef
 세 런타임에서 같은 구현을 쓴다. 이 도구의 기록·추천·평가는 아래 A/B/C 승인과 독립 검토를 대체하지 않는다.
 관측되지 않은 토큰·모델 적용·과금·크레딧은 추정하지 않는다.
 
-런타임 진입점의 실행 계약과 함께 읽는다. 경로·도구·역할·모델·로그 차이는 진입점이 정하며, 공통 단계·승인 범위·독립성·증거 요구를 바꾸지 않는다. `<mission-entry>`·`<mission-entry-runtime>`·`<mission-state>`·`<mission-state-runtime>`·`<p4-wrapper>`·`<distill-skill>`은 진입점의 실제 경로·인자로 치환한다.
+런타임 진입점은 도구·역할·모델·로그 차이를 정한다. VCS 래퍼와 distill 스킬 경로도 거기서 확인한다.
 
 작업은 어댑터의 `stages` 순서로 흐른다. 기본은 컨텐츠 확인 → PoC → 구현 → 검토다.
 사람 확인은 정해진 지점에서만 받고, 그 사이는 질문 없이 돌고 보고만 한다. 이미 승인된 범위·경로는 재질문하지 않으며, 미승인 설계·범위 변경과 실제 멈춤 조건만 확인한다.
@@ -34,10 +35,10 @@ PoC가 필요 없는 작업이면 A를 건너뛴다. 확인과 멈춤 질문은 
 
 새 미션과 이어서 하기는 어댑터 탐색 전에 공통 진입 CLI를 실행한다.
 현재 세션 id와 새 미션의 후보 id 또는 이어받을 기존 id를 사용한다. 기존 id를 알 수 없으면 임의로 만들지 않는다.
-`--project`에는 다음 마커를 실행할 실제 cwd를 넣는다.
+`--project`에는 미션 전환을 실행할 실제 작업 루트를 넣는다.
 
 ```text
-python "<mission-entry>" <mission-entry-runtime> --project "<cwd>" --mode <new|resume> --session "<현재 세션 id>" --mission "<미션 id>" --task "<작업>"
+chef mission enter --runtime <런타임> --project "<cwd>" --mode <new|resume> --session "<현재 세션 id>" --mission "<미션 id>" --task "<작업>"
 ```
 
 `continue`면 반환한 어댑터를 읽고 아래 절차를 진행한다. `delegate`와 `launched: true`면 부모에서 멈추고 슬롯 세션이 이어받는다.
@@ -49,7 +50,7 @@ open·resume 직전에도 같은 입력의 진입 성공이 필요하며, 등록
 
 ## 공통 역할 라우팅
 
-Claude·Codex·Grok 미션은 역할을 파견할 때마다 먼저 [공통 워커 계약](../../skills/mission/references/cross-runtime-workers.md)의 `worker.py dispatch`를 호출한다. 구현·검증·리뷰 역할을 런타임마다 임의로 고르거나 기존 런타임 전용 파견 절차를 먼저 실행하지 않는다. 승인된 브리프와 파일 경계, 역할에 필요한 도구를 요청에 담고 라우터가 반환한 선택을 따른다. 런타임별 역할·모델 지침은 그 런타임이 선택된 뒤에만 적용한다.
+Claude·Codex·Grok 미션은 역할마다 먼저 [공통 워커 계약](../../skills/mission/references/cross-runtime-workers.md)의 `chef worker dispatch`를 호출한다. 저장한 단위 브리프를 재사용하고 이번 역할의 파일 범위와 필요한 도구를 전달한다. 라우터가 선택한 런타임의 역할·모델 지침을 적용한다.
 
 자동 배정은 공통 워커 계약의 `mode`로 제어한다. 사용자가 자동 배정을 끄면 `native`, 특정 서비스만 원하면 `claude`·`codex`·`grok`, 다시 켜면 `auto`를 미션의 이후 모든 역할 요청에 유지한다. 선택을 짧게 보고하고 이어받을 때도 확인한다. 명시적 선택이 없으면 환경변수·프로젝트 설정·전역 `~/.chef/config.json`·기본값 순서를 따르며 요청에 임의로 `auto`를 넣어 설정을 덮지 않는다. 이미 접수한 작업은 기존 모드를 유지한다.
 
@@ -81,7 +82,7 @@ Claude·Codex·Grok의 open·resume·close는 다음 전용 명령을 현재 작
 이하 `미션 전환(open|resume|close, <id>)`는 이 명령의 action·id를 바꾼 호출이다.
 
 ```text
-python "<plugin-root>/mission_control.py" open <id> --runtime <claude|codex|grok> --session "<현재 세션 UUID>" --project "<현재 작업 루트 절대 경로>" --request "<매번 새 UUID>"
+chef mission open <id> --runtime <claude|codex|grok> --session "<현재 세션 UUID>" --project "<현재 작업 루트 절대 경로>" --request "<매번 새 UUID>"
 ```
 
 런타임·세션은 실제 호출 세션과 같아야 한다. 훅은 검사한 호출의 2분 유효·1회용 준비 영수증만 기록하며
@@ -154,45 +155,13 @@ Hermes는 기존 native `chef_mission` 도구를 유지한다.
 질문 정본과 생성 문서는 `question` CLI로만 쓴다(`<plugin-root>/skills/mission/references/question-records.md`).
 
 ```
-python "<mission-state>" <mission-state-runtime> <명령> [인자]
+chef <명령> --help
 ```
 
-| 명령 | 쓰임 |
-| --- | --- |
-| `init [--tier S|M|L] [--force-tier] [--goal]` | §1 미션 폴더 만들기(S는 `--force-tier` 없이 거부, 티어 없으면 경고) |
-| `mission set [--stage] [--confirm A=승인]… [--state] [--poc <경로>]` | 단계·확인·상태·PoC 진입 파일 바꾸기 |
-| `unit add <id> --goal --files --done --verify --timebox --forbid [--human] [--after]` | §4 마일스톤 추가 |
-| `unit template [--id <id> ...]` | 어댑터 없이 JSON 입력 양식 출력. 빈 설명 칸을 채우고 timebox는 정수 분으로 유지 |
-| `unit add --input <json> [--dry-run]` | schema 1 `units` 배열 전체 검사 후 units.tsv 한 번 쓰기. after는 기존 단위 또는 배열 앞쪽 단위만 참조 |
-| `unit set <id> [--status] [--unit] [칸]` / `unit list` | §5 진행 상태·브리프. done은 complete만 허용. 브리프 계약이 바뀌면 버전을 올리고 재검증 필요를 표시 |
-| `ledger record <unit> --status --grade --evidence [--files] [--evidence-input <json>]` / `ledger audit [--unit <id>] [--limit 1..100]` | §5 판정·파일 증거 기록 / 출력 제한형 읽기 전용 감사(기본 한도 20) |
-| `decision add --what --chosen --why --affects [--fixes Dn]` | `[~]` 결정, 앞 기록 정정 |
-| `status` | 세 줄 요약(마일스톤 수·최근 판정·걸린 것) |
-| `context` | 재개용 요약: 현재 단위·최근 판정·최근 결정·승인 원본 위치 |
-| `schema` | adapter의 허용 열거형·검증 등급·리뷰 상태(clean, findings, closed-low) 조회(ACTIVE 불필요) |
-| `reference snapshot --source <파일>… --output <묶음.json> [--expect-sha256 <해시>] [--freeze]` | 원문 경로·해시 고정. `--freeze`는 검증 가능한 사본을 보관. 출력은 프로젝트 안 상대 경로. 기존 묶음 갱신은 직전 `output.sha256` 필수 |
-| `reference check --input <묶음.json>` / `reference show --input <묶음.json>` | 참조 변경·누락 검사 / 참조 포인터 조회 |
-| `brief <id> [--references <묶음.json>]` | 단위 브리프·승인 원문 위치·검사한 참조 포인터를 읽기 전용으로 출력 |
-| `handoff <id> --summary <결과> --detail <상세> [--evidence <근거>]…` | 기존 상세·증거 파일을 해시와 함께 읽기 전용 반환. 완료·승인 상태는 바꾸지 않음 |
-| `preflight <id> --plan <json>` | 명령 실행 없이 계획·입력·실행 준비·참조 검사. 실행 경로 정책과 경고를 함께 출력 |
-| `verify <id> --plan <json> [--force] [--coordinator]` | 검증 실행·결과 수집, 유효한 같은 입력 결과 재사용. `--coordinator`는 매번 새로 실행하며 어댑터의 명시 허용 계획만 받음 |
-| `review-run <id> --plan <json> --snapshot <sha256> --purpose <text> --scope <배열JSON> --findings <배열JSON> [--timeout-seconds 1..3600] -- <argv…>` | 현재 계획 입력 snapshot에 결부한 idempotent 리뷰 요청(기본 시간 제한 600초). 중복 요청은 재파견하지 않음. 실행 완료는 clean 리뷰 판정이 아님 |
-| `review-scope <id> --plan <json>` | 직전 리뷰 이후 바뀐 입력 파일과 파일별 diff 경로(최신 리뷰 기록의 사본 기준, `review-start`를 썼으면 그 시작 시점 사본 대비, 새 파일 포함) |
-| `review-start <id> --plan <json>` | 리뷰 파견 직전 입력 snapshot 기록. 리뷰 중 바뀐 파일은 다음 `review-scope` 범위로 넘어감 |
-| `review <id> --receipt <json> --evidence <파일> --reviewer <이름> --kind poc\|unit\|integration --status clean\|findings\|closed-low` | 독립 리뷰 근거와 검증 입력 상태 연결. `closed-low`는 Low만 남았을 때 코디네이터가 diff를 확인해 닫는 기록 |
-| `complete <id> --receipt <json> --review <json> --done-evidence <근거>` | 검증·리뷰(clean 또는 closed-low) 유효성 확인 → 판정·done·다음 단위 요약을 한 호출로 처리 |
-| `transcripts` | §6 기록 감사용 대화 기록 경로 |
-| `active [--hours N]` | ACTIVE id·세션·열린 시각·마지막 활동과 끊김 의심 여부(읽기 전용, ACTIVE 없어도 됨) |
-| `close-stale [--force-close-stale] [--hours N] [--keep-state] [--reason]` | 끊김 의심 ACTIVE만 닫음. 플래그 없으면 미리보기(종료 1). 살아 있으면 거부 |
-| `question preview --input <초안JSON>` | 정본을 쓰지 않고 검증한 Markdown 출력 |
-| `question publish --input <초안JSON> [--expect-revision N] [--editorial]` | 검토한 질문 정본 발행·개정과 Markdown 생성 |
-| `question answer <질문.md> --input <답JSON>` | 사용자 원문·문항 상태·승인 대기를 한 번에 기록 |
-| `question restore --input <검토JSON> --source <원본MD> --expect-revision N --expect-sha256 <SHA256>` | Markdown에만 남은 과거 답을 같은 개정에 복원. 원문 대조·독립 검토·원본 백업 필수 |
-| `question show <질문.md>` / `question render <질문.md>` | 정본 읽기 / 정본으로 생성 문서 복구 |
-| `question check` | 미션 전체 질문의 정본 누락·손상·생성본 불일치 검사. 문제 있으면 종료 1 |
-| `document share <미션 상대 경로...>` | 보고·추가 자료를 대시보드에 명시적으로 공유 |
-| `document hide <미션 상대 경로...>` | 명시적 공유 해제. 자동 표시 질문·대응 상세는 계속 표시 |
-| `document list` | 자동 표시 질문·대응 상세와 명시적으로 공유 중인 문서 확인 |
+시작은 `chef mission init`, 재개 요약은 `chef mission context --json`을 쓴다. `chef unit`·`ledger`·`decision`으로 상태를 기록하고
+`brief`·`reference`로 승인 원문과 근거를 연결한다. 끊김 의심 ACTIVE를 닫기 전에는 사용자 확인을 받는다.
+`preflight`·`verify`·`review`·`complete`는 [검증과 완료 처리](../../skills/mission/references/verification-workflow.md)를 따른다.
+질문·보고의 작성과 공유 명령은 [Chef CLI](../../skills/mission/references/cli.md#문서)에 있다.
 
 ### p4 쓰기는 작업 공간 고정 래퍼로
 
@@ -218,10 +187,8 @@ python "<p4-wrapper>" --dry-run sync -q //...  # 실행할 명령줄만
 한 명령에 여러 경로를 나열하면 함께 등록한다.
 
 ```
-python "<mission-state>" <mission-state-runtime> document share details/diagram.png
-python "<mission-state>" <mission-state-runtime> document share report.md details/report.md details/result.png
-python "<mission-state>" <mission-state-runtime> document hide report.md details/report.md details/result.png
-python "<mission-state>" <mission-state-runtime> document list
+chef document share report.md details/report.md details/result.png --runtime <런타임>
+chef document list --json --runtime <런타임>
 ```
 
 경로는 미션 폴더 기준이다. `mission.md`와 상태 TSV는 진행 텔레메트리이므로 공유 대상이 아니다.
@@ -377,7 +344,7 @@ PoC 명세와의 일치로 쓴다.
    열린 지적 0건(미해결 포함)에 제안만 남으면 clean이다. 제안은 루프 안에서 적용하지 않고 보고에 후속 후보로 남겨 사용자 판단에 맡긴다.
    열린 지적이 전부 Low이고 회귀가 아니며 수정이 지적한 줄 범위 안에서 시그니처·계약·공개 동작을 바꾸지 않으면, 같은 구현자가 고친 뒤 코디네이터가 `review-scope`의 diff만 보고 각 id의 해소를 확인해 `review --status closed-low`로 기록하고 닫는다. 새 리뷰어를 띄우지 않는다. 그 밖(Medium 이상, 회귀, 계약 변경, 범위를 넘는 수정)은 런타임 계약에 따른 독립 재리뷰다. closed-low는 연속으로 쓰지 않는다(조건은 `<plugin-root>/skills/mission/references/verification-workflow.md`).
    clean·findings·closed-low 모두 실제 결과 파일을 `review`로 기록한다. clean과 findings는 `--findings-count`(남은 지적 수)와
-   `--fixed-count`(이번 리뷰에서 해소를 확인한 직전 지적 수)를 함께 남기고 closed-low는 `--findings-count`를 0이거나 생략한다. 구조화 지적은 검증 절차의 `--findings-input` 계약을 따른다. 최대 3라운드이며 PoC는 §3의 한 라운드 규칙이 우선한다.
+   첫 리뷰의 정형 지적은 `--findings-input`으로 기록한다. 좁은 해소 확인은 `review-open`에서 직전 ID를 읽고, `closed-low`에는 diff로 확인한 `--resolved-id`를 전달한다. 최대 3라운드이며 PoC는 §3의 한 라운드 규칙이 우선한다.
 5. **체크포인트와 완료** — 완료 조건을 확인하고 어댑터 절차로 shelve(또는 커밋)한 뒤
    `complete <id> --receipt … --review … --done-evidence …`로 판정·done·다음 단위 조회를 묶는다.
    입력이 바뀌었거나 독립 리뷰 근거가 없으면 CLI가 거부한다. 완료를 위해 상태 TSV를 직접 고치지 않는다.
@@ -441,7 +408,7 @@ PoC 명세와의 일치로 쓴다.
 4. **닫기** — 사용자가 확인 C에서 "닫자"나 submit을 요청하면 확인 C에서 확정된 변경을 Wiki와 `details/report.md`의
    `Wiki 인계`에 반영하고, 사람용 `report.md`의 `다음 일`에 인계 가능 상태·남은 일과 상세 링크를 갱신한다.
    닫을 때는 `mission set --state 닫힘`을 실행하고, 그다음 호출에서 `미션 전환(close, <id>)`를
-   단독으로 실행해 가드를 끈다(훅이 `allow-once`도 지운다).
+   단독으로 실행해 가드를 끈다. 전환 명령이 `allow-once`도 지운다.
    - "닫자"만 요청하고 submit은 요청하지 않으면 위 순서로 바로 닫는다.
    - submit을 요청하면 미션을 연 채로 제출하고, 제출이 모두 끝난 뒤에 닫는다. 사용자의 요청을 그 범위(요청한 CL들)의
      명시적 승인으로 보고, 가드가 막는 제출 명령은 "막힌 명령의 1회 허용"으로 하나씩 실행한다.
@@ -493,19 +460,15 @@ PoC 명세와의 일치로 쓴다.
      무엇을 승인했는지 불분명한 부분만 확인한다.
  4. **공유 전 확인** — 질문 정형 원본과 생성 Markdown·상세를 기계 검사하고, 확정된 의미를 유지하는 산문·질문 갱신은 고정 원문·현재 답·승인·관련 규칙·고른 양식·예시와 함께 독립 의미 검토를 1회 받는다.
     질문·보고 문서라는 이유만으로 심층 검토에 넘기지 않는다. 중요한 DB·API·승인·공유 계약 변경, 모순 또는 작은 검토로 판단할 수 없는 부분은 그 범위와 근거만 심층 검토로 반환한다. 정형 원본과 생성 Markdown을 별도 AI 리뷰 대상으로 중복 지정하지 않는다. 지적·제안·검증 공백·후속 범위·해소 확인은 구현 리뷰와 같은 고정 id·원인 계약을 따른다.
-   공통 검사기 `python "<plugin-root>/skills/mission/scripts/check_human_doc.py" <초안JSON> --source <이전JSON> --archive <미션>/details/history/<id>.md`로
-   최신 승인 대상·legacy 원문·답 이력과 보관 개정의 보존을 검사한다. 최초 이관은 `--source <원본MD>`로 원문을 비교한다. `<plugin-root>`는 런타임 진입점이 확정한 실제 플러그인 루트로 치환한다.
-   누적 문서를 처음 정리하면 정본 누락 답·설계를 먼저 복원하고 `question render <질문.md>`로 기존 이력을 생성한다. 정본·보관 개정과 일치하는 이력에 비교 원문 개정이 보존됐을 때만 이전 표를 현재 본문에서 정리한다.
-   `--source`가 정본 경로이면 대응 이력을 자동 검증한다. 새 문서는 `--source`·`--archive`를 생략한다. 미리보기 Markdown은 사람 검토용이며 보존 비교에는 JSON 초안을 넣는다.
+   `question preflight`와 미리보기로 초안을 확인한다. 구형 문서 이관과 원문·보관 개정 대조는 [질문 정본 계약](../../skills/mission/references/question-records.md)을 따른다.
    작성자는 검토 의견도 원문·현재 답에 대조해 수정한다. 최종 검토 뒤 코디네이터가 발행하고 생성본을 확인한다. 수정이 필요하면 초안으로 돌아간다.
    - 발행 뒤와 공유 직전에 `question check`를 실행한다. 정본 누락·손상·생성본 불일치가 있으면 공유 완료로 알리지 않는다.
      정본 내용이 맞고 생성본만 어긋났으면 `question render <질문.md>`으로 복구한 뒤 다시 검사한다. 질문 내용을 고치려면 초안을 개정한다.
    - 미리보기 첫 화면에 지금 답할 결정이 보이고, 각 선택지와 영향이 한 번만 나오는지 확인한다. 답변 부담 안내를 보고 선행 답에 따라 달라질 질문과 표에 든 개별 결정까지 확인한다. 최신 승인 대상 한 벌·승인 범위와 제외 조건, 현재 결과, 상세·전체 이력 링크도 대조한다. 못 본 렌더링·참조 검증은 확인했다고 쓰지 않는다.
    - 생성된 질문과 대응 상세는 대시보드에 자동 표시한다. 본문·상세가 열리는지 확인한 뒤 채팅 첫 줄에 지금 고를 결정이나 결과를 쓰고 문서 링크를 붙인다.
      자동 표시는 검토 완료나 승인 증거가 아니다. `기록 확인 필요`는 코디네이터가 정본·생성본을 대조해 해결한다.
-   - 보고와 그 밖의 연결 자료는 코디네이터가 같은 공통 검사기로 검사한 뒤 상태 CLI의 `document share <문서·자료...>`에 각 경로를
-     나열하고 `document list`에서 모두 공유 중인지 확인한다. 작성자 반환이나 자동 검사 통과는 공유 증거가 아니다.
-   - 문서를 고쳤으면 변경분·직전 지적·영향받는 계약을 독립 재검토한다. 미변경 본문은 실제 결함·규칙·원문 근거가 있는 Medium 이상일 때만 다시 열고 Low는 제안으로 돌린다. 명시적으로 공유하는 문서·자료는 재공유하고 목록에서 다시 확인한다.
+   - 보고와 연결 자료는 코디네이터가 `chef document share <문서·자료...>`로 검사하고 등록한다. 반환된 공유 경로를 확인한다.
+   - 문서를 고쳤으면 변경분·직전 지적·영향받는 계약을 독립 재검토한다. 미변경 본문은 실제 결함·규칙·원문 근거가 있는 Medium 이상일 때만 다시 열고 Low는 제안으로 돌린다. 변경한 공유 문서는 다시 등록한다.
      실패·누락은 공유 완료로 알리지 말고 문제를 보고하며, 무관한 일은 계속한다.
    - 상세 링크는 본문 뒤에 읽을 내용이 드러나는 이름으로 붙인다. 로컬 뷰어 안에서는 허용 루트의 상대 링크를 쓴다.
      공유 확인 뒤 채팅에는 목적·결정할 것과 사람용 문서 링크를 짧게 보낸다. 이름 있는 Markdown 링크를 지원하는 환경에서는 그 링크,
@@ -597,8 +560,8 @@ chef 플러그인(상태 CLI·가드·스킬)이 대상이고, 이때도 스킬 
 승인된 계약·미해결 질문·멈춤 조건은 요약에서 생략됐다고 사라진 것이 아니며 원본을 확인한다.
 `question check`로 정본·생성본을 대조하고 `기록 확인 필요`를 해결한다. 이전 세션의 질문·답 기록 절차는 새 지침으로 다시 읽는다.
 
-- 같은 세션에서 압축만 됐고 `<stateDir>/ACTIVE`의 `session`이 그대로면 가드가 이미 이 세션에 걸려 있으니 마커가
-  필요 없다. 재시작·런타임 세션 재개·다른 창처럼 세션이 바뀌었으면 §0의 사용자 확인을 거친 뒤
+- 같은 세션에서 압축만 됐고 `<stateDir>/ACTIVE`의 소유권이 그대로면 가드를 유지한다.
+  재시작·런타임 세션 재개·다른 창처럼 세션이 바뀌었으면 §0의 사용자 확인을 거친 뒤
   진입 CLI를 `--mode resume`으로 통과한 뒤 `미션 전환(resume, <id>)`로 가드를 이 세션에 다시 건다. 세션이 같은지 알 수 없으면 바뀐 것으로 본다.
   resume 뒤에도 §1의 3처럼 ACTIVE와 안내를 확인한다.
 - 승인된 확인은 다시 받지 않는다. 대기 중이던 확인은 다시 보여 준다.

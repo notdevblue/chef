@@ -221,5 +221,6 @@ cd <project>
 python <repo>/plugins/chef/skills/doctor/scripts/doctor.py --runtime codex
 ```
 
-미션을 시작했으면 셸 마커의 출력뿐 아니라 가드 안내와 ACTIVE의 미션·세션 일치도 확인합니다.
+미션을 시작했으면 실행된 전환 명령의 성공과 ACTIVE의 미션·세션·런타임 일치를 확인합니다.
+공통 명령은 [Chef CLI 안내](../plugins/chef/skills/mission/references/cli.md)에 있습니다.
 진행·재개·승인·공유·검증의 정본 절차는 [공통 미션 안내](../plugins/chef/shared/skills/mission.md)에 있습니다.

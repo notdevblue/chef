@@ -73,7 +73,8 @@ def control_invocation(command, tool="Bash"):
         if not values:
             continue
         name = re.split(r"[\\/]", values[0])[-1].casefold()
-        if name in ("mission_state.py", "mission_entry.py", "mission_control.py", "worker.py") or name in ("han-mission", "chef-mission"):
+        if name in ("mission_state.py", "mission_entry.py", "mission_control.py",
+                    "worker.py", "chef_cli.py", "han-mission", "chef-mission"):
             result.append((values[0], values[1:]))
         elif name in ("echo", "write-output") and len(values) > 1 and values[1] in ("han-mission", "chef-mission"):
             result.append((values[1], values[2:]))

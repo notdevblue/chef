@@ -307,6 +307,8 @@ JSON이 맞고 생성본만 잘못됐으면 `question render`, 새 질문 개정
 
 ## Schema 2 작성 입력
 
+DB·Proto 정의의 `schema-table` 입력과 정본 대조는 [Chef CLI](cli.md#dbproto-정의)를 따른다.
+
 새 확인 A(`confirm-A`, `confirm-A1` 등)는 schema 2로 발행한다. [설계 초안](templates/design-confirm.json) 또는 [질문 초안](templates/question.json)을 복사하고 `question patch`로 수정한다. schema 1 문서의 읽기·답 기록·복원·기존 개정은 계속 지원한다. 기존 문서를 전환하려면 `set.schema: 2`와 전체 새 blocks를 한 patch에 명시한다. schema 2에서 schema 1로의 개정은 거부한다. 실행 중인 문서를 자동 전환하지 않는다.
 
 | 입력 | 제한 |

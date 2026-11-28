@@ -9,12 +9,10 @@ description: "Grok Bot이 chef 어댑터를 못 찾거나 조회 환경이 안 �
 
 `<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
 경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
-별도 스킬 라이브러리를 사용하고 Grok CLI에 접근할 수 없는 Bot은 설정된 `HAN_REPO/plugins/chef`를 사용한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+별도 스킬 라이브러리를 사용하고 Grok CLI에 접근할 수 없는 Bot은 설정된 `HAN_REPO/plugins/chef`를 사용한다.
 
 ## 실행 계약
 
-- `<doctor-script>`: `<plugin-root>/skills/doctor/scripts/doctor.py`, `<doctor-runtime>`: `--runtime grok`.
-- `<check-guard-script>`: `<plugin-root>/skills/adapter-init/scripts/check_guard.py`, `<check-guard-runtime>`: `--runtime grok`.
 
 ## Grok 조회 진단
 
@@ -28,7 +26,7 @@ description: "Grok Bot이 chef 어댑터를 못 찾거나 조회 환경이 안 �
 2. 상태 조회와 같은 명령으로 다시 읽는다.
 
 ```text
-python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<프로젝트 폴더>"
+chef grok-state snapshot --project "<프로젝트 폴더>"
 ```
 
 3. stderr의 `오류:` 한 줄을 그대로 알리고, 아래 중 어디에 걸렸는지 말한다.

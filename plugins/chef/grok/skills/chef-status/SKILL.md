@@ -22,7 +22,7 @@ description: "Grok Bot에서 chef 미션과 슬롯 상태를 읽을 때 쓴다. 
 별도 스킬 라이브러리를 사용하고 Grok CLI에 접근할 수 없는 Bot은 설정된 `HAN_REPO/plugins/chef`를 사용한다.
 
 ```text
-python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<프로젝트 폴더>"
+chef grok-state snapshot --project "<프로젝트 폴더>"
 ```
 
 `--project`가 없으면 현재 작업 폴더에서 찾는다. 종료 코드 0이 성공이고 2는 어댑터를 못 찾거나 사용이 잘못된 것이다.

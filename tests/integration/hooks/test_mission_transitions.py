@@ -56,8 +56,11 @@ def commit(argv):
 
 
 @pytest.mark.parametrize("runtime", ["claude", "codex", "grok"])
-def test_permission_check_does_not_open_until_cli_executes(workspace, runtime):
+@pytest.mark.parametrize("unified", [False, True])
+def test_permission_check_does_not_open_until_cli_executes(workspace, runtime, unified):
     argv = command(workspace, runtime=runtime)
+    if unified:
+        argv[2:3] = [str(PLUGIN_ROOT / "chef_cli.py"), "mission"]
     assert not denied(preflight(workspace, argv, runtime))
     assert not (workspace / "state/ACTIVE").exists()
     assert not (workspace / "state/sample-mission/sessions.tsv").exists()
@@ -66,6 +69,13 @@ def test_permission_check_does_not_open_until_cli_executes(workspace, runtime):
     active = mission.read_active(str(workspace / "state"))
     assert active.runtime == runtime and active.session == "parent"
     assert commit(argv).returncode == 1
+
+
+def test_unified_transition_rejects_a_different_bundle(workspace):
+    argv = command(workspace)
+    argv[2:3] = [str(workspace / "chef_cli.py"), "mission"]
+    assert denied(preflight(workspace, argv))
+    assert not (workspace / "state/.transitions").exists()
 
 
 @pytest.mark.parametrize("previous", ["claude", "codex", "grok", ""])

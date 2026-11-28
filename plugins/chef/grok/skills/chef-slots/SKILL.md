@@ -8,12 +8,10 @@ description: "Grok CLI에서 슬롯 워크스페이스를 조회·생성·갱신
 실행 전에 [공통 절차](../../../shared/skills/slots.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
 `<plugin-root>`는 이 `SKILL.md`가 든 폴더에서 세 단계 위인 플러그인 폴더다. 그곳에 `.grok-plugin/plugin.json`이 있는지 확인한다.
-경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+경로를 모르면 Grok CLI의 `grok inspect --json`에서 활성 `chef`의 `path`를 읽는다.
 
 ## 실행 계약
 
-- `<slots-script>`: `<plugin-root>/skills/slots/scripts/slots.py`, `<slots-runtime>`: `--runtime grok`.
-- `<dashboard-script>`: `<plugin-root>/skills/slots/scripts/dashboard.py`, `<dashboard-runtime>`: `--runtime grok`.
 - 공통 [어댑터 계약](../../../skills/mission/references/adapter-schema.md)의 Grok 검색·병합을 쓴다.
 - `slots.beforeRun`의 Grok 명령은 `runtimes.grok.slots.beforeRun`에 둔다.
 - `create`·`refresh`는 `--dry-run`으로 기준·거부 사유를 보여 주고 사용자가 그 실행을 승인한 뒤 본명령을 돌린다. 로컬 변경 처리 플래그는 해당 처리를 승인받은 뒤에만 쓴다.

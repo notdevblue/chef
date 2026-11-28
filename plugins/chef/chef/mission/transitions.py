@@ -52,29 +52,36 @@ def arguments(argv):
 
 
 def invocation(command, tool):
+    from chef.cli.unified import SCRIPT as UNIFIED_SCRIPT, transition_args
     from chef.guards.commands import control_invocation, readonly, tokens
     from chef.guards.shell import command_fragments
     from chef.infrastructure.paths import same_path
 
-    found = [(script, argv) for script, argv in control_invocation(command, tool)
-             if re.split(r"[\\/]", script)[-1].casefold() == "mission_control.py"]
+    found = []
+    for script, argv in control_invocation(command, tool):
+        name = re.split(r"[\\/]", script)[-1].casefold()
+        if name == SCRIPT.name:
+            found.append((script, argv, argv, SCRIPT))
+        elif name == UNIFIED_SCRIPT.name and (transition := transition_args(argv)) is not None:
+            if transition[1:] not in (["--help"], ["-h"]):
+                found.append((script, argv, transition, UNIFIED_SCRIPT))
     if not found:
         if "mission_control.py" in command.casefold() and not readonly(command, tool):
             raise ValueError("mission_control.py must run as a literal standalone command")
         return None
     if len(found) != 1 or len(command_fragments(command, tool)) != 1:
         raise ValueError("mission_control.py must run alone")
-    script, argv = found[0]
+    script, original_argv, argv, expected_script = found[0]
     values = tokens(command)
     masked = re.sub(r'''"[^"\r\n]*"|'[^'\r\n]*' ''', "", command, flags=re.VERBOSE)
     masked = masked.lstrip().removeprefix("&").lstrip()
     if (any(char in masked for char in ";&|><(){}\n\r") or "$" in command or "`" in command
             or not re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|py)(?:\.exe)?",
                                 re.split(r"[\\/]", values[0])[-1], re.IGNORECASE)
-            or values[1:-len(argv)] not in ([script], ["-B", script])):
+            or values[1:-len(original_argv)] not in ([script], ["-B", script])):
         raise ValueError("use a literal standalone Python mission_control.py command")
-    if not Path(script).is_absolute() or not same_path(script, SCRIPT):
-        raise ValueError("mission_control.py must use this installed plugin's absolute path")
+    if not Path(script).is_absolute() or not same_path(script, expected_script):
+        raise ValueError("mission transition must use this installed plugin's absolute path")
     return arguments(argv)
 
 

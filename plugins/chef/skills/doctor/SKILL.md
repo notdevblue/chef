@@ -7,10 +7,9 @@ description: chef 설치와 어댑터 상태를 읽기 전용으로 점검한다
 
 실행 전에 [공통 절차](../../shared/skills/doctor.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
-`<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+`<plugin-root>`는 이 SKILL.md에서 두 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다.
 
 ## 실행 계약
 
-- Bash로 실행한다. `<doctor-script>`: `<plugin-root>/skills/doctor/scripts/doctor.py`, `<doctor-runtime>`: 빈 값.
-- `<check-guard-script>`: `<plugin-root>/skills/adapter-init/scripts/check_guard.py`, `<check-guard-runtime>`: 빈 값.
+- Claude의 Bash 도구에서 실행한다.
 - 사용자 승인 후 미션 처리는 `/chef:mission`으로 한다.

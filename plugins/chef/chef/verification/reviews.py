@@ -92,8 +92,10 @@ def lowered_severity(previous, current):
     return after not in SEVERITIES or SEVERITIES.index(after) > SEVERITIES.index(before)
 
 
-def structured_findings(path, history, status, findings_count, fixed_count):
-    source = read_json(path)
+def structured_findings(path, history, status, findings_count, fixed_count, *, require_structured=False):
+    source = path if isinstance(path, dict) else read_json(path)
+    if not isinstance(source, dict):
+        raise VerificationError("지적 입력은 JSON 객체여야 함")
     if source.get("schema", 1) != 1:
         raise VerificationError("지적 입력 schema 가 다름")
     findings = source.get("findings")
@@ -132,6 +134,11 @@ def structured_findings(path, history, status, findings_count, fixed_count):
             )
         if "severity" in finding and finding["severity"] not in SEVERITIES:
             raise VerificationError("지적 severity 는 critical·high·medium·low 이어야 함")
+        if require_structured:
+            if finding.get("severity") not in SEVERITIES:
+                raise VerificationError("지적 severity is required")
+            if not isinstance(finding.get("evidence"), str) or not finding["evidence"].strip():
+                raise VerificationError("지적 evidence (path and location) is required")
         if not isinstance(finding.get("reason"), str) or not finding["reason"].strip():
             raise VerificationError("모든 지적에 근거 reason 이 필요함")
         origin = finding.get("origin")
@@ -164,16 +171,17 @@ def structured_findings(path, history, status, findings_count, fixed_count):
         raise VerificationError("findings-count 와 구조화된 지적 수가 다름")
     if fixed_count != -1 and fixed_count != len(resolved):
         raise VerificationError("fixed-count 와 resolvedIds 수가 다름")
-    return {
+    result = {
         "findings": findings,
         "resolvedIds": resolved,
         "suggestions": suggestions,
         "findingsCount": len(findings),
         "fixedCount": len(resolved),
         "newFindingsCount": sum(finding["origin"] == "new" for finding in findings),
-        "findingsSource": str(Path(path).resolve()),
-        "findingsSourceHash": file_hash(path),
     }
+    if not isinstance(path, dict):
+        result.update(findingsSource=str(Path(path).resolve()), findingsSourceHash=file_hash(path))
+    return result
 
 
 def record_review(
@@ -189,6 +197,8 @@ def record_review(
     fixed_count=-1,
     findings_input="",
     settings=None,
+    *,
+    require_structured=False,
 ):
     if findings_count < -1 or fixed_count < -1:
         raise VerificationError("지적·해소 수는 0 이상 또는 미기록(-1)이어야 함")
@@ -235,7 +245,8 @@ def record_review(
         review["previousReview"] = history[0][0]
         review["previousReviewHash"] = file_hash(history[0][0])
     if findings_input:
-        review.update(structured_findings(findings_input, history, status, findings_count, fixed_count))
+        review.update(structured_findings(findings_input, history, status, findings_count, fixed_count,
+                                          require_structured=require_structured))
     if status == "closed-low":
         review["closedLowIds"] = list(review["resolvedIds"])
     if review["round"] >= 3 and status not in PASSING_REVIEW_STATUSES:
@@ -267,6 +278,10 @@ def record_review(
             )
     else:
         review["copies"] = copy_snapshot_files(project, receipt["snapshot"], copy_store(folder, unit))
+    if isinstance(findings_input, dict):
+        source = directory / f"{unit}-findings-{uuid.uuid4().hex}.json"
+        write_json(source, findings_input)
+        review.update(findingsSource=str(source.resolve()), findingsSourceHash=file_hash(source))
     path = directory / f"{name}.json"
     write_json(path, review)
     write_json(directory / f"{unit}.review.latest.json", {"review": str(path)})

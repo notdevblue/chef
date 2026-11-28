@@ -7,7 +7,7 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 
 실행 전에 [공통 절차](../../../shared/skills/mission.md) 전체를 읽는다. 공통 단계·승인 범위·독립성·증거 요구는 그 문서 한곳에서 관리한다. 이 파일은 런타임 실행 차이만 정한다.
 
-`<plugin-root>`는 이 SKILL.md에서 세 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다. 공통 문서의 경로 별칭은 아래 값으로 치환하고, 비어 있는 런타임 인자는 생략한다.
+`<plugin-root>`는 이 SKILL.md에서 세 단계 위인 플러그인 폴더다. 실제 절대 경로를 확인한다.
 
 ## Codex 실행 계약
 
@@ -26,14 +26,11 @@ description: Codex CLI에서 작업을 단계와 마일스톤으로 나눠 조�
 - 프로젝트의 AGENTS.md와 실제 설치된 Codex 스킬을 우선 확인한다. Claude용 도구 이름·스킬이
   그대로 있다고 가정하지 않는다. 필요한 PoC·리뷰·Unity MCP가 없으면 해당 단계를 미확인으로 보고하고 멈춘다.
 
-미션 전환은 `<plugin-root>/mission_control.py`를 `--runtime codex`와 실제 세션·작업 루트·새 요청 ID로 호출한다.
-사전 검사 영수증만으로 시작하지 않고 실행 성공과 ACTIVE의 id·session·runtime을 대조한다. 예전 echo 마커는 사용하지 않는다.
+공통 CLI 호출에 `--runtime codex`를 쓴다.
 
 ## 실행 경로와 검증 범위
 
-- `<mission-entry>`: `<plugin-root>/codex/skills/chef-mission/scripts/mission_entry.py`, `<mission-entry-runtime>`: 빈 값.
-- `<mission-state-runtime>`: `--runtime codex`.
-- `<mission-state>`: `<plugin-root>/skills/mission/scripts/mission_state.py`, `<p4-wrapper>`: `<plugin-root>/codex/skills/chef-mission/scripts/p4c.py`.
+- `<p4-wrapper>`: `<plugin-root>/codex/skills/chef-mission/scripts/p4c.py`.
 - `<distill-skill>`: `<plugin-root>/codex/skills/chef-distill/SKILL.md`. 슬롯은 `$chef:chef-slots`, 어댑터는 `$chef:chef-adapter-init`이다.
 - 어댑터 검색·설정은 [공통 어댑터 계약](references/adapter-schema.md)의 Codex 절을 따른다.
 - 검증 명령은 변경 경로·계약을 실제로 덮어야 한다. 프로젝트 전역 실패를 별도 게이트로 유지하고 약한 타깃 검사로 대체하거나 범위를 우회하지 않는다.

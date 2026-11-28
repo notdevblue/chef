@@ -20,11 +20,11 @@ class OneLineParser(argparse.ArgumentParser):
         raise StateError(f"{self.prog}: {message} (-h 로 사용법 확인)")
 
 
-def build_parser(handlers=None):
+def build_parser(handlers=None, *, prog="mission_state.py"):
     if handlers is None:
         from chef.mission import state as handlers
 
-    parser = OneLineParser(prog="mission_state.py", description="미션 상태 파일 쓰기")
+    parser = OneLineParser(prog=prog, description="미션 상태 파일 쓰기")
     parser.add_argument("--project", help="어댑터를 찾기 시작할 폴더 (기본: 현재 폴더)")
     parser.add_argument("--mission", help="미션 id (기본: <stateDir>/ACTIVE 의 id)")
     parser.add_argument(
@@ -118,9 +118,15 @@ def build_parser(handlers=None):
     leaf(question, "check", handlers.cmd_question_check)
 
     document = sub.add_parser("document").add_subparsers(dest="action", required=True)
+    create_document = leaf(document, "create", handlers.cmd_document_create)
+    create_document.add_argument("--kind", choices=("report", "detail", "schema"), required=True)
+    create_document.add_argument("--name", default="report")
+    create_document.add_argument("--title")
+    create_document.add_argument("--input", help="schema-table JSON file or stdin(-)")
+    leaf(document, "check", handlers.cmd_document_check).add_argument("paths", nargs="+")
     leaf(document, "share", handlers.cmd_document_share).add_argument("paths", nargs="+")
     leaf(document, "hide", handlers.cmd_document_hide).add_argument("paths", nargs="+")
-    leaf(document, "list", handlers.cmd_document_list)
+    leaf(document, "list", handlers.cmd_document_list).add_argument("--json", action="store_true")
 
     verify = leaf(sub, "verify", handlers.cmd_verify)
     verify.add_argument("id")
@@ -147,8 +153,10 @@ def build_parser(handlers=None):
     review.add_argument("--findings-count", type=int, default=-1, help="남은 지적 수. 생략하면 미기록")
     review.add_argument("--fixed-count", type=int, default=-1, help="직전 지적 중 이번에 해소를 확인한 수")
     review.add_argument(
-        "--findings-input", default="", help="지적 id·kind·origin(·severity)·resolvedIds 를 담은 JSON"
+        "--findings-input", default="", help="지적 id·kind·origin(·severity)·resolvedIds JSON 파일 또는 stdin(-)"
     )
+    review.add_argument("--resolved-id", action="append", default=[], help="diff에서 해소를 확인한 id (closed-low)")
+    leaf(sub, "review-open", handlers.cmd_review_open).add_argument("id")
     start = leaf(sub, "review-start", handlers.cmd_review_start)
     start.add_argument("id")
     start.add_argument("--plan", required=True)

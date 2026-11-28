@@ -1131,12 +1131,12 @@ def validate_publication(current, record, editorial):
             before = [
                 {key: value for key, value in block.items() if key != "title"}
                 for block in current.get(field, [])
-                if block["type"] in ("table", "fields", "literal")
+                if block["type"] in ("table", "fields", "schema-table", "literal")
             ]
             after = [
                 {key: value for key, value in block.items() if key != "title"}
                 for block in record.get(field, [])
-                if block["type"] in ("table", "fields", "literal")
+                if block["type"] in ("table", "fields", "schema-table", "literal")
             ]
             if before != after:
                 raise QuestionRecordError(f"editorial 발행은 {field} table/fields 계약을 변경할 수 없음")

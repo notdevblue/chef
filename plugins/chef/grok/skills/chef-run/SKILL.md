@@ -22,7 +22,7 @@ Bot과 CLI가 같은 티어별 절차를 쓴다. 상태 조회는 `chef-status`,
 2. 기존 미션을 먼저 확인한다. 출력에 없는 미션 id·단계·목표를 만들지 않는다.
 
 ```text
-python "<plugin-root>/grok/scripts/han_state.py" snapshot --project "<작업 루트>"
+chef grok-state snapshot --project "<작업 루트>"
 python "<plugin-root>/skills/mission/scripts/mission_state.py" --runtime grok --project "<작업 루트>" active
 ```
 
